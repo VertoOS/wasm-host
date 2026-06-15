@@ -24,7 +24,7 @@ use virtual_fs::{
     NullFile, OpenOptionsConfig, OverlayFileSystem, ReadDir, StaticFile, TmpFileSystem,
     UnionFileSystem, UnionMergeMode, VirtualFile,
 };
-use wasmer::sys::{BaseTunables, EngineBuilder, Features, NativeEngineExt, LLVM};
+use wasmer::sys::{BaseTunables, Cranelift, EngineBuilder, Features, NativeEngineExt};
 use wasmer_package::utils::from_bytes;
 use wasmer_wasix::{
     bin_factory::{spawn_exec, BinaryPackage},
@@ -3284,7 +3284,7 @@ fn sandbox_engine() -> wasmer::Engine {
     let mut features = Features::default();
     features.exceptions(true);
 
-    let mut engine: wasmer::Engine = EngineBuilder::new(LLVM::default())
+    let mut engine: wasmer::Engine = EngineBuilder::new(Cranelift::default())
         .set_features(Some(features))
         .into();
     let tunables = BaseTunables::for_target(engine.target());

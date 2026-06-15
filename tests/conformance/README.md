@@ -34,8 +34,8 @@ The first conformance slice covers:
   host-backed virtual process output chunks before final response
 - virtual process stdout/stderr output limits
 - virtual process wall-time timeout and external cancellation
-- HTTP bridge request/response normalization, clean errors, response limits,
-  and cancellation delivery
+- HTTP bridge request/response normalization, response body chunks, clean
+  errors, response limits, and cancellation delivery
 
 These tests should eventually run against:
 

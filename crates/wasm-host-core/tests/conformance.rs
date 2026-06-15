@@ -513,6 +513,101 @@ fn http_bridge_enforces_response_body_limit() {
 }
 
 #[test]
+fn http_bridge_accumulates_response_body_chunks_before_final_response() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let (chunk_sent_sender, chunk_sent_receiver) = mpsc::channel();
+    let (finish_sender, finish_receiver) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        request
+            .write_body_chunk(b"chunk-".to_vec())
+            .expect("HTTP body chunk should send");
+        chunk_sent_sender
+            .send(())
+            .expect("chunk signal should send");
+        finish_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("finish signal should arrive");
+        request
+            .respond(HttpResponse::new(200, Vec::new(), b"final".to_vec()).expect("valid response"))
+            .expect("HTTP response should send");
+    });
+
+    let runner = thread::spawn(move || {
+        bridge.request_blocking(
+            HttpRequest::new("GET", "https://example.test/api", Vec::new(), Vec::new())
+                .expect("request should normalize"),
+            HttpRequestLimits::default(),
+            CancellationSource::new().token(),
+        )
+    });
+    chunk_sent_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("body chunk should be accepted before final response");
+    assert!(
+        !runner.is_finished(),
+        "HTTP request should remain pending until final response"
+    );
+    finish_sender.send(()).expect("finish signal should send");
+
+    let response = runner
+        .join()
+        .expect("runner thread should finish")
+        .expect("HTTP request should complete");
+    handler.join().expect("handler should finish");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, b"chunk-final");
+}
+
+#[test]
+fn http_bridge_response_body_chunk_limit_cancels_pending_request() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let (chunk_sent_sender, chunk_sent_receiver) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        request
+            .write_body_chunk(b"abcde".to_vec())
+            .expect("HTTP body chunk should send");
+        chunk_sent_sender
+            .send(())
+            .expect("chunk signal should send");
+
+        let started = Instant::now();
+        while !request.cancellation_token().is_cancelled() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "HTTP response body limit should cancel the pending request"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    let error = bridge
+        .request_blocking(
+            HttpRequest::new("GET", "https://example.test/api", Vec::new(), Vec::new())
+                .expect("request should normalize"),
+            HttpRequestLimits {
+                response_body_bytes: 4,
+                wall_time: Some(Duration::from_secs(5)),
+            },
+            CancellationSource::new().token(),
+        )
+        .expect_err("oversized response chunk should fail");
+    chunk_sent_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("body chunk should be sent");
+    handler.join().expect("handler should finish");
+
+    assert_eq!(error.kind, HttpBridgeErrorKind::ResponseTooLarge);
+    assert_eq!(error.message, "HTTP response body exceeded 4 bytes");
+}
+
+#[test]
 fn http_bridge_external_cancellation_cancels_pending_request() {
     let (bridge, mut http_receiver) = HttpBridge::new(4);
     let cancellation = CancellationSource::new();

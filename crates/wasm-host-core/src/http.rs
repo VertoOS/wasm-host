@@ -9,6 +9,8 @@ use std::{
 
 use crate::{CancellationSource, CancellationToken};
 
+const HTTP_RESPONSE_EVENT_QUEUE_SIZE: usize = 1;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HttpHeader {
     pub name: String,
@@ -72,7 +74,13 @@ pub struct HttpBridgeRequest {
     pub id: u64,
     pub request: HttpRequest,
     cancellation: CancellationToken,
-    response_sender: mpsc::Sender<std::result::Result<HttpResponse, HttpBridgeError>>,
+    response_sender: mpsc::SyncSender<HttpBridgeResponseEvent>,
+}
+
+#[derive(Debug)]
+enum HttpBridgeResponseEvent {
+    Body(Vec<u8>),
+    Complete(std::result::Result<HttpResponse, HttpBridgeError>),
 }
 
 impl HttpHeader {
@@ -206,13 +214,19 @@ impl HttpBridgeRequest {
 
     pub fn respond(&self, response: HttpResponse) -> std::result::Result<(), HttpBridgeError> {
         self.response_sender
-            .send(Ok(response))
+            .send(HttpBridgeResponseEvent::Complete(Ok(response)))
             .map_err(|_| HttpBridgeError::transport("HTTP response receiver closed"))
     }
 
     pub fn fail(&self, error: HttpBridgeError) -> std::result::Result<(), HttpBridgeError> {
         self.response_sender
-            .send(Err(error))
+            .send(HttpBridgeResponseEvent::Complete(Err(error)))
+            .map_err(|_| HttpBridgeError::transport("HTTP response receiver closed"))
+    }
+
+    pub fn write_body_chunk(&self, chunk: Vec<u8>) -> std::result::Result<(), HttpBridgeError> {
+        self.response_sender
+            .send(HttpBridgeResponseEvent::Body(chunk))
             .map_err(|_| HttpBridgeError::transport("HTTP response receiver closed"))
     }
 }
@@ -238,7 +252,8 @@ impl HttpBridge {
         cancellation: CancellationToken,
     ) -> std::result::Result<HttpResponse, HttpBridgeError> {
         let id = self.inner.sequence.fetch_add(1, Ordering::AcqRel) + 1;
-        let (response_sender, response_receiver) = mpsc::channel();
+        let (response_sender, response_receiver) =
+            mpsc::sync_channel(HTTP_RESPONSE_EVENT_QUEUE_SIZE);
         let request_cancellation = CancellationSource::new();
         let mut pending = Some(HttpBridgeRequest {
             id,
@@ -275,6 +290,7 @@ impl HttpBridge {
             }
         }
 
+        let mut response_body = Vec::new();
         loop {
             if cancellation.is_cancelled() {
                 request_cancellation.cancel();
@@ -292,17 +308,27 @@ impl HttpBridge {
                     .min(Duration::from_millis(10))
             });
             match response_receiver.recv_timeout(wait_time) {
-                Ok(Ok(response)) => {
-                    request_cancellation.cancel();
-                    if response.body.len() > limits.response_body_bytes {
-                        return Err(HttpBridgeError::response_too_large(format!(
-                            "HTTP response body exceeded {} bytes",
-                            limits.response_body_bytes
-                        )));
+                Ok(HttpBridgeResponseEvent::Body(chunk)) => {
+                    if let Err(error) =
+                        append_response_body(&mut response_body, chunk, limits.response_body_bytes)
+                    {
+                        request_cancellation.cancel();
+                        return Err(error);
                     }
+                }
+                Ok(HttpBridgeResponseEvent::Complete(Ok(mut response))) => {
+                    request_cancellation.cancel();
+                    if let Err(error) = append_response_body(
+                        &mut response_body,
+                        std::mem::take(&mut response.body),
+                        limits.response_body_bytes,
+                    ) {
+                        return Err(error);
+                    }
+                    response.body = response_body;
                     return Ok(response);
                 }
-                Ok(Err(error)) => {
+                Ok(HttpBridgeResponseEvent::Complete(Err(error))) => {
                     request_cancellation.cancel();
                     return Err(error);
                 }
@@ -314,6 +340,26 @@ impl HttpBridge {
             }
         }
     }
+}
+
+fn append_response_body(
+    body: &mut Vec<u8>,
+    chunk: Vec<u8>,
+    limit: usize,
+) -> std::result::Result<(), HttpBridgeError> {
+    let next_len = body
+        .len()
+        .checked_add(chunk.len())
+        .ok_or_else(|| response_too_large_error(limit))?;
+    if next_len > limit {
+        return Err(response_too_large_error(limit));
+    }
+    body.extend_from_slice(&chunk);
+    Ok(())
+}
+
+fn response_too_large_error(limit: usize) -> HttpBridgeError {
+    HttpBridgeError::response_too_large(format!("HTTP response body exceeded {limit} bytes"))
 }
 
 fn normalize_http_method(method: String) -> std::result::Result<String, HttpBridgeError> {

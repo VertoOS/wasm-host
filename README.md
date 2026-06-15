@@ -153,6 +153,16 @@ For Go, the default command comes from the fixture manifest:
 `go run /workspace/go/smoke.go`. A prebuilt Go fixture package can override that
 with `WASM_HOST_GO_COMMAND` and `WASM_HOST_GO_ARGS`.
 
+## Web Adapter Tests
+
+The browser adapter package currently owns direct Fetch transport code and
+deterministic browser-networking tests. Run them with:
+
+```sh
+npm --prefix apps/web run check
+npm --prefix apps/web test
+```
+
 ## Binding Tests
 
 Python and Go bindings wrap the shared C ABI. Run their smoke tests with:

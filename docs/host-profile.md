@@ -185,6 +185,14 @@ consume body chunks with `GatewayHttpRequestBodyReader::read_chunk_async` or
 `read_to_end_async`; the blocking body reader is reserved for native worker
 paths.
 
+The first browser Fetch transport lives in `apps/web/src/http.js`. It uses
+browser `fetch` directly, defaults to `credentials: "same-origin"`, streams
+upload bodies with `ReadableStream` when available, streams response body chunks
+back through the bridge writer, and enforces the bridge response body limit
+while reading. Browser `TypeError` fetch failures are classified as `cors`
+because browsers intentionally collapse CORS, mixed-content, policy, and some
+network failures into opaque Fetch errors.
+
 The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json

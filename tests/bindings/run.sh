@@ -45,6 +45,23 @@ else
   echo "c abi: skipped; cc is not installed"
 fi
 
+echo "python package metadata"
+python3 - "$ROOT/bindings/python/pyproject.toml" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+for expected in [
+    'name = "vertoos-wasm-host"',
+    'version = "0.1.0"',
+    'requires-python = ">=3.9"',
+    'packages = ["wasm_host"]',
+]:
+    if expected not in text:
+        raise AssertionError(f"missing pyproject metadata: {expected}")
+PY
+
 echo "python bindings"
 PYTHONPATH="$ROOT/bindings/python" WASM_HOST_LIBRARY="$LIB" \
   python3 -m unittest discover -s "$ROOT/bindings/python/tests"
@@ -53,6 +70,11 @@ if command -v go >/dev/null 2>&1; then
   echo "go bindings"
   (
     cd "$ROOT/bindings/go"
+    module_path="$(go list -m)"
+    if [[ "$module_path" != "github.com/VertoOS/wasm-host/bindings/go" ]]; then
+      echo "go bindings: unexpected module path: $module_path" >&2
+      exit 1
+    fi
     go test ./...
   )
 else

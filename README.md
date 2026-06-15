@@ -70,6 +70,7 @@ byte counts, exit status, and failure stage; environment values are not emitted.
 apps/
   web/                 # browser UI/runtime app
 bindings/
+  README.md            # binding distribution and split criteria
   c/                   # C ABI header and ownership contract
   go/                  # Go binding surface
   python/              # Python binding/package surface
@@ -131,7 +132,7 @@ tests/bindings/run.sh
 
 The harness builds `wasm-host-c-api`, points Python at the produced dynamic
 library, compiles and runs a C header/link smoke test when `cc` is installed,
-and runs Go tests when Go is installed.
+validates Python package metadata, and runs Go tests when Go is installed.
 
 ## Planning
 

@@ -2,11 +2,15 @@
 
 Go binding work lives here during the monorepo phase.
 
-Before release, this may split into a dedicated Go module repo if import paths
-and version tags need to be independent from the core runtime repo.
+The module path is `github.com/VertoOS/wasm-host/bindings/go`. Before release,
+this may split into a dedicated Go module repo if import paths, version tags,
+or native release artifacts need to be independent from the core runtime repo.
 
-Initial implementation should call the C ABI in `bindings/c` through cgo and
-keep Go types as thin wrappers over the shared host contract.
+The implementation calls the C ABI in `bindings/c` through cgo and keeps Go
+types as thin wrappers over the shared host contract.
+
+See [`../README.md`](../README.md) for binding distribution and future split
+criteria.
 
 ## Usage
 

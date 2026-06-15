@@ -4,7 +4,7 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -87,7 +87,7 @@ pub struct HttpBridge {
 }
 
 pub struct HttpRequestBodyWriter {
-    sender: mpsc::SyncSender<HttpRequestBodyEvent>,
+    sender: tokio::sync::mpsc::Sender<HttpRequestBodyEvent>,
     cancellation: CancellationToken,
     closed: bool,
 }
@@ -104,6 +104,9 @@ pub trait AsyncHttpBridgeTransport {
         cancellation: CancellationToken,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), HttpBridgeError>> + 'a>>;
 }
+
+pub type HttpRequestBodyProducerFuture<'a> =
+    Pin<Box<dyn Future<Output = std::result::Result<(), HttpBridgeError>> + 'a>>;
 
 pub trait GatewayHttpTransport: Send + Sync + 'static {
     fn dispatch(
@@ -277,7 +280,7 @@ enum HttpRequestBodyEvent {
 
 #[derive(Clone)]
 struct HttpRequestBodyStream {
-    receiver: Arc<Mutex<mpsc::Receiver<HttpRequestBodyEvent>>>,
+    receiver: Arc<Mutex<tokio::sync::mpsc::Receiver<HttpRequestBodyEvent>>>,
 }
 
 struct HttpRequestBodyProducer {
@@ -437,9 +440,29 @@ impl GatewayHttpRequestBodyReader {
         request.read_streaming_body_chunk_blocking()
     }
 
+    pub async fn read_chunk_async(
+        &mut self,
+    ) -> std::result::Result<Option<Vec<u8>>, HttpBridgeError> {
+        if let Some(chunk) = self.buffered.take() {
+            return Ok(Some(chunk));
+        }
+        let Some(request) = &self.stream_request else {
+            return Ok(None);
+        };
+        request.read_streaming_body_chunk_async().await
+    }
+
     pub fn read_to_end_blocking(&mut self) -> std::result::Result<Vec<u8>, HttpBridgeError> {
         let mut body = Vec::new();
         while let Some(chunk) = self.read_chunk_blocking()? {
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+
+    pub async fn read_to_end_async(&mut self) -> std::result::Result<Vec<u8>, HttpBridgeError> {
+        let mut body = Vec::new();
+        while let Some(chunk) = self.read_chunk_async().await? {
             body.extend_from_slice(&chunk);
         }
         Ok(body)
@@ -1150,6 +1173,17 @@ impl HttpRequestBodyWriter {
         self.send_event_blocking(HttpRequestBodyEvent::Chunk(chunk))
     }
 
+    pub async fn write_chunk_async(
+        &mut self,
+        chunk: Vec<u8>,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        self.send_event_async(HttpRequestBodyEvent::Chunk(chunk))
+            .await
+    }
+
     pub fn finish(&mut self) -> std::result::Result<(), HttpBridgeError> {
         if self.closed {
             return Ok(());
@@ -1158,12 +1192,33 @@ impl HttpRequestBodyWriter {
         self.send_event_blocking(HttpRequestBodyEvent::Complete(Ok(())))
     }
 
+    pub async fn finish_async(&mut self) -> std::result::Result<(), HttpBridgeError> {
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        self.send_event_async(HttpRequestBodyEvent::Complete(Ok(())))
+            .await
+    }
+
     pub fn fail(&mut self, error: HttpBridgeError) -> std::result::Result<(), HttpBridgeError> {
         if self.closed {
             return Ok(());
         }
         self.closed = true;
         self.send_event_blocking(HttpRequestBodyEvent::Complete(Err(error)))
+    }
+
+    pub async fn fail_async(
+        &mut self,
+        error: HttpBridgeError,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        self.send_event_async(HttpRequestBodyEvent::Complete(Err(error)))
+            .await
     }
 
     fn send_event_blocking(
@@ -1176,11 +1231,34 @@ impl HttpRequestBodyWriter {
             }
             match self.sender.try_send(event) {
                 Ok(()) => return Ok(()),
-                Err(mpsc::TrySendError::Full(returned)) => {
+                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
                     event = returned;
                     std::thread::sleep(Duration::from_millis(1));
                 }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(HttpBridgeError::transport(
+                        "HTTP request body receiver closed",
+                    ))
+                }
+            }
+        }
+    }
+
+    async fn send_event_async(
+        &mut self,
+        mut event: HttpRequestBodyEvent,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        loop {
+            if self.cancellation.is_cancelled() {
+                return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+            }
+            match self.sender.try_send(event) {
+                Ok(()) => return Ok(()),
+                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
+                    event = returned;
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                     return Err(HttpBridgeError::transport(
                         "HTTP request body receiver closed",
                     ))
@@ -1191,8 +1269,8 @@ impl HttpRequestBodyWriter {
 }
 
 impl HttpRequestBodyStream {
-    fn new(capacity: usize) -> (Self, mpsc::SyncSender<HttpRequestBodyEvent>) {
-        let (sender, receiver) = mpsc::sync_channel(capacity);
+    fn new(capacity: usize) -> (Self, tokio::sync::mpsc::Sender<HttpRequestBodyEvent>) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(capacity);
         (
             Self {
                 receiver: Arc::new(Mutex::new(receiver)),
@@ -1213,13 +1291,44 @@ impl HttpRequestBodyStream {
                 .receiver
                 .lock()
                 .map_err(|_| HttpBridgeError::transport("HTTP request body receiver poisoned"))?
-                .recv_timeout(Duration::from_millis(10));
+                .try_recv();
             match result {
                 Ok(HttpRequestBodyEvent::Chunk(chunk)) => return Ok(Some(chunk)),
                 Ok(HttpRequestBodyEvent::Complete(Ok(()))) => return Ok(None),
                 Ok(HttpRequestBodyEvent::Complete(Err(error))) => return Err(error),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    return Err(HttpBridgeError::transport(
+                        "HTTP request body sender closed",
+                    ))
+                }
+            }
+        }
+    }
+
+    async fn read_chunk_async(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> std::result::Result<Option<Vec<u8>>, HttpBridgeError> {
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+            }
+            let result = self
+                .receiver
+                .lock()
+                .map_err(|_| HttpBridgeError::transport("HTTP request body receiver poisoned"))?
+                .try_recv();
+            match result {
+                Ok(HttpRequestBodyEvent::Chunk(chunk)) => return Ok(Some(chunk)),
+                Ok(HttpRequestBodyEvent::Complete(Ok(()))) => return Ok(None),
+                Ok(HttpRequestBodyEvent::Complete(Err(error))) => return Err(error),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     return Err(HttpBridgeError::transport(
                         "HTTP request body sender closed",
                     ))
@@ -1245,6 +1354,15 @@ impl HttpBridgeRequest {
             return Ok(None);
         };
         stream.read_chunk_blocking(&self.cancellation)
+    }
+
+    pub async fn read_streaming_body_chunk_async(
+        &self,
+    ) -> std::result::Result<Option<Vec<u8>>, HttpBridgeError> {
+        let Some(stream) = &self.body_stream else {
+            return Ok(None);
+        };
+        stream.read_chunk_async(&self.cancellation).await
     }
 
     pub fn respond(&self, response: HttpResponse) -> std::result::Result<(), HttpBridgeError> {
@@ -1399,6 +1517,63 @@ impl HttpBridge {
             cancellation,
             Some(body_producer),
         )
+    }
+
+    pub async fn request_streaming_async<Producer>(
+        &self,
+        request: HttpRequest,
+        limits: HttpRequestLimits,
+        cancellation: CancellationToken,
+        producer: Producer,
+    ) -> std::result::Result<HttpResponse, HttpBridgeError>
+    where
+        Producer:
+            for<'a> FnOnce(&'a mut HttpRequestBodyWriter) -> HttpRequestBodyProducerFuture<'a>,
+    {
+        if !request.body.is_empty() {
+            return Err(HttpBridgeError::invalid_request(
+                "streaming HTTP requests cannot include a buffered request body",
+            ));
+        }
+
+        let producer_cancellation = CancellationSource::new();
+        let (body_stream, body_sender) =
+            HttpRequestBodyStream::new(HTTP_REQUEST_BODY_EVENT_QUEUE_SIZE);
+        let mut writer = HttpRequestBodyWriter {
+            sender: body_sender,
+            cancellation: producer_cancellation.token(),
+            closed: false,
+        };
+        let producer_future = async {
+            match producer(&mut writer).await {
+                Ok(()) => writer.finish_async().await,
+                Err(error) => writer.fail_async(error).await,
+            }
+        };
+        let request_future =
+            self.request_async_with_stream(request, Some(body_stream), limits, cancellation);
+        tokio::pin!(producer_future);
+        tokio::pin!(request_future);
+        let mut producer_done = false;
+
+        loop {
+            if producer_done {
+                return request_future.await;
+            }
+            tokio::select! {
+                result = &mut request_future => {
+                    producer_cancellation.cancel();
+                    return result;
+                }
+                producer_result = &mut producer_future => {
+                    producer_done = true;
+                    if let Err(error) = producer_result {
+                        producer_cancellation.cancel();
+                        return Err(error);
+                    }
+                }
+            }
+        }
     }
 
     fn request_blocking_with_stream(
@@ -2634,7 +2809,7 @@ fn is_http_token_byte(byte: u8) -> bool {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
+    use std::{net::TcpListener, sync::mpsc};
 
     #[derive(Clone)]
     struct RecordingGatewayTransport {
@@ -2664,6 +2839,13 @@ mod tests {
     #[derive(Clone)]
     struct RecordingAsyncHttpTransport {
         records: Arc<Mutex<Vec<GatewayRecord>>>,
+    }
+
+    #[derive(Clone)]
+    struct RecordingAsyncUploadTransport {
+        records: Arc<Mutex<Vec<GatewayRecord>>>,
+        first_chunk_sender: Option<mpsc::SyncSender<Vec<u8>>>,
+        response_chunks: Vec<Vec<u8>>,
     }
 
     struct FailingAsyncHttpTransport {
@@ -2732,7 +2914,7 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = std::result::Result<(), HttpBridgeError>> + 'a>> {
             Box::pin(async move {
                 assert!(!cancellation.is_cancelled());
-                let body = request.body.read_to_end_blocking()?;
+                let body = request.body.read_to_end_async().await?;
                 self.records
                     .lock()
                     .expect("async transport records should lock")
@@ -2752,6 +2934,42 @@ mod tests {
                         b" worker".to_vec(),
                     )
                     .await
+            })
+        }
+    }
+
+    impl AsyncHttpBridgeTransport for RecordingAsyncUploadTransport {
+        fn dispatch<'a>(
+            &'a self,
+            mut request: GatewayHttpRequest,
+            response: GatewayHttpResponseWriter,
+            cancellation: CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<(), HttpBridgeError>> + 'a>> {
+            Box::pin(async move {
+                assert!(!cancellation.is_cancelled());
+                let mut body_chunks = Vec::new();
+                while let Some(chunk) = request.body.read_chunk_async().await? {
+                    if let Some(sender) = &self.first_chunk_sender {
+                        if body_chunks.is_empty() {
+                            sender.send(chunk.clone()).expect("first chunk should send");
+                        }
+                    }
+                    body_chunks.push(chunk);
+                }
+                self.records
+                    .lock()
+                    .expect("async upload transport records should lock")
+                    .push(GatewayRecord {
+                        id: request.id,
+                        method: request.method,
+                        url: request.url,
+                        headers: request.headers,
+                        body_chunks,
+                    });
+                for chunk in &self.response_chunks {
+                    response.write_body_chunk_async(chunk.clone()).await?;
+                }
+                response.finish_async(200, Vec::new(), Vec::new()).await
             })
         }
     }
@@ -2860,6 +3078,268 @@ mod tests {
 
             assert_eq!(error.kind, HttpBridgeErrorKind::Cors);
             assert_eq!(error.message, "request blocked by browser policy");
+        });
+    }
+
+    #[test]
+    fn async_http_bridge_worker_streams_upload_chunks() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(async {
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let transport = RecordingAsyncUploadTransport {
+                records: Arc::clone(&records),
+                first_chunk_sender: None,
+                response_chunks: vec![b"upload-ok".to_vec()],
+            };
+            let (bridge, receiver) = HttpBridge::new(1);
+            let requester = async {
+                let response = bridge
+                    .request_streaming_async(
+                        HttpRequest::new(
+                            "put",
+                            "https://example.test/upload",
+                            Vec::new(),
+                            Vec::new(),
+                        )
+                        .expect("request should be valid"),
+                        HttpRequestLimits::default(),
+                        CancellationSource::new().token(),
+                        async_upload_two_chunks,
+                    )
+                    .await
+                    .expect("async streaming upload should complete");
+                drop(bridge);
+                response
+            };
+
+            let ((), response) =
+                tokio::join!(run_async_http_bridge_worker(receiver, transport), requester);
+
+            assert_eq!(response.status, 200);
+            assert_eq!(response.body, b"upload-ok");
+            assert_eq!(
+                *records.lock().expect("async upload records should lock"),
+                [GatewayRecord {
+                    id: 1,
+                    method: "PUT".to_string(),
+                    url: "https://example.test/upload".to_string(),
+                    headers: Vec::new(),
+                    body_chunks: vec![b"hello ".to_vec(), b"stream".to_vec()],
+                }]
+            );
+        });
+    }
+
+    #[test]
+    fn async_http_bridge_worker_preserves_upload_producer_errors() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(async {
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let transport = RecordingAsyncUploadTransport {
+                records: Arc::clone(&records),
+                first_chunk_sender: None,
+                response_chunks: Vec::new(),
+            };
+            let (bridge, receiver) = HttpBridge::new(1);
+            let requester = async {
+                let error = bridge
+                    .request_streaming_async(
+                        HttpRequest::new(
+                            "put",
+                            "https://example.test/upload-error",
+                            Vec::new(),
+                            Vec::new(),
+                        )
+                        .expect("request should be valid"),
+                        HttpRequestLimits::default(),
+                        CancellationSource::new().token(),
+                        async_upload_fails_after_first_chunk,
+                    )
+                    .await
+                    .expect_err("async upload producer error should fail");
+                drop(bridge);
+                error
+            };
+
+            let ((), error) =
+                tokio::join!(run_async_http_bridge_worker(receiver, transport), requester);
+
+            assert_eq!(error.kind, HttpBridgeErrorKind::Transport);
+            assert_eq!(error.message, "upload source failed");
+            assert!(records
+                .lock()
+                .expect("async upload records should lock")
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn async_http_bridge_worker_cancels_streaming_upload() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(async {
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let (first_chunk_sender, first_chunk_receiver) = mpsc::sync_channel(1);
+            let transport = RecordingAsyncUploadTransport {
+                records: Arc::clone(&records),
+                first_chunk_sender: Some(first_chunk_sender),
+                response_chunks: Vec::new(),
+            };
+            let (bridge, receiver) = HttpBridge::new(1);
+            let cancellation = CancellationSource::new();
+            let token = cancellation.token();
+            let requester = async {
+                let error = bridge
+                    .request_streaming_async(
+                        HttpRequest::new(
+                            "put",
+                            "https://example.test/upload-cancel",
+                            Vec::new(),
+                            Vec::new(),
+                        )
+                        .expect("request should be valid"),
+                        HttpRequestLimits {
+                            response_body_bytes: 1024,
+                            wall_time: None,
+                        },
+                        token,
+                        async_upload_first_chunk_then_wait,
+                    )
+                    .await
+                    .expect_err("async upload should be cancelled");
+                drop(bridge);
+                error
+            };
+            let canceller = async {
+                let first_chunk = recv_sync_channel_async(first_chunk_receiver).await;
+                assert_eq!(first_chunk, b"first".to_vec());
+                cancellation.cancel();
+            };
+
+            let ((), error, ()) = tokio::join!(
+                run_async_http_bridge_worker(receiver, transport),
+                requester,
+                canceller
+            );
+
+            assert_eq!(error.kind, HttpBridgeErrorKind::Cancelled);
+            assert_eq!(error.message, "HTTP request cancelled");
+            assert!(records
+                .lock()
+                .expect("async upload records should lock")
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn async_http_bridge_worker_times_out_streaming_upload() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(async {
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let transport = RecordingAsyncUploadTransport {
+                records: Arc::clone(&records),
+                first_chunk_sender: None,
+                response_chunks: Vec::new(),
+            };
+            let (bridge, receiver) = HttpBridge::new(1);
+            let requester = async {
+                let error = bridge
+                    .request_streaming_async(
+                        HttpRequest::new(
+                            "put",
+                            "https://example.test/upload-timeout",
+                            Vec::new(),
+                            Vec::new(),
+                        )
+                        .expect("request should be valid"),
+                        HttpRequestLimits {
+                            response_body_bytes: 1024,
+                            wall_time: Some(Duration::from_millis(50)),
+                        },
+                        CancellationSource::new().token(),
+                        async_upload_first_chunk_then_wait,
+                    )
+                    .await
+                    .expect_err("async upload should time out");
+                drop(bridge);
+                error
+            };
+
+            let ((), error) =
+                tokio::join!(run_async_http_bridge_worker(receiver, transport), requester);
+
+            assert_eq!(error.kind, HttpBridgeErrorKind::Timeout);
+            assert_eq!(error.message, "HTTP request exceeded wall time limit");
+            assert!(records
+                .lock()
+                .expect("async upload records should lock")
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn async_http_bridge_worker_enforces_response_limit_after_streaming_upload() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(async {
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let transport = RecordingAsyncUploadTransport {
+                records: Arc::clone(&records),
+                first_chunk_sender: None,
+                response_chunks: vec![b"too-large".to_vec()],
+            };
+            let (bridge, receiver) = HttpBridge::new(1);
+            let requester = async {
+                let error = bridge
+                    .request_streaming_async(
+                        HttpRequest::new(
+                            "put",
+                            "https://example.test/upload-limit",
+                            Vec::new(),
+                            Vec::new(),
+                        )
+                        .expect("request should be valid"),
+                        HttpRequestLimits {
+                            response_body_bytes: 4,
+                            wall_time: None,
+                        },
+                        CancellationSource::new().token(),
+                        async_upload_two_chunks,
+                    )
+                    .await
+                    .expect_err("async upload response should exceed limit");
+                drop(bridge);
+                error
+            };
+
+            let ((), error) =
+                tokio::join!(run_async_http_bridge_worker(receiver, transport), requester);
+
+            assert_eq!(error.kind, HttpBridgeErrorKind::ResponseTooLarge);
+            assert_eq!(error.message, "HTTP response body exceeded 4 bytes");
+            assert_eq!(
+                *records.lock().expect("async upload records should lock"),
+                [GatewayRecord {
+                    id: 1,
+                    method: "PUT".to_string(),
+                    url: "https://example.test/upload-limit".to_string(),
+                    headers: Vec::new(),
+                    body_chunks: vec![b"hello ".to_vec(), b"stream".to_vec()],
+                }]
+            );
         });
     }
 
@@ -3602,6 +4082,48 @@ mod tests {
         server.join().expect("server should finish");
 
         result.map(|()| chunks)
+    }
+
+    fn async_upload_two_chunks(
+        body: &mut HttpRequestBodyWriter,
+    ) -> HttpRequestBodyProducerFuture<'_> {
+        Box::pin(async move {
+            body.write_chunk_async(b"hello ".to_vec()).await?;
+            body.write_chunk_async(b"stream".to_vec()).await
+        })
+    }
+
+    fn async_upload_fails_after_first_chunk(
+        body: &mut HttpRequestBodyWriter,
+    ) -> HttpRequestBodyProducerFuture<'_> {
+        Box::pin(async move {
+            body.write_chunk_async(b"first".to_vec()).await?;
+            Err(HttpBridgeError::transport("upload source failed"))
+        })
+    }
+
+    fn async_upload_first_chunk_then_wait(
+        body: &mut HttpRequestBodyWriter,
+    ) -> HttpRequestBodyProducerFuture<'_> {
+        Box::pin(async move {
+            body.write_chunk_async(b"first".to_vec()).await?;
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(())
+        })
+    }
+
+    async fn recv_sync_channel_async<T>(receiver: mpsc::Receiver<T>) -> T {
+        loop {
+            match receiver.try_recv() {
+                Ok(value) => return value,
+                Err(mpsc::TryRecvError::Empty) => {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("sync channel closed before value arrived")
+                }
+            }
+        }
     }
 
     fn read_test_http_request(stream: &mut TcpStream) -> String {

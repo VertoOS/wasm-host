@@ -50,8 +50,8 @@ pub use http::{
     run_async_http_bridge_worker, AsyncHttpBridgeTransport, GatewayHttpBridgeWorker,
     GatewayHttpRequest, GatewayHttpRequestBodyReader, GatewayHttpResponse, GatewayHttpResponseBody,
     GatewayHttpResponseWriter, GatewayHttpTransport, HttpBridge, HttpBridgeError,
-    HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest, HttpRequestLimits,
-    HttpResponse,
+    HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest, HttpRequestBodyProducerFuture,
+    HttpRequestLimits, HttpResponse,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::{NativeGatewayHttpTransport, NativeHttpBridgeWorker};

@@ -179,6 +179,11 @@ the same `HttpResponse`/`HttpBridgeError` contract, and map response chunks
 through the same response-limit and cancellation path used by every other HTTP
 bridge caller. Browser Fetch and browser gateway transports should implement
 the async transport trait rather than defining a separate HTTP contract.
+Buffered browser requests can enter the bridge with `HttpBridge::request_async`.
+Streaming browser uploads should use `HttpBridge::request_streaming_async` and
+consume body chunks with `GatewayHttpRequestBodyReader::read_chunk_async` or
+`read_to_end_async`; the blocking body reader is reserved for native worker
+paths.
 
 The terminal gateway uses JSON over `POST` for buffered requests:
 

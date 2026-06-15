@@ -9,7 +9,8 @@ use std::{
 
 use wasm_host_fixtures::{
     http_bridge_fixture_webc, http_bridge_fixture_webc_with_options,
-    http_bridge_fixture_webc_with_response_body_limit, http_bridge_streaming_upload_fixture_webc,
+    http_bridge_fixture_webc_with_response_body_limit,
+    http_bridge_invalid_stream_frame_fixture_webc, http_bridge_streaming_upload_fixture_webc,
     HttpBridgeFixtureOptions, HTTP_BRIDGE_COMMAND,
 };
 
@@ -208,6 +209,23 @@ fn native_http_bridge_streaming_upload_is_visible_to_wasi_guest() {
     );
 }
 
+#[test]
+fn native_http_bridge_invalid_device_request_is_visible_to_wasi_guest() {
+    let webc = http_bridge_invalid_stream_frame_fixture_webc().expect("build invalid HTTP fixture");
+    let output = run_native_http_bridge_fixture(webc, "http-invalid-request-fixture.webc");
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["kind"], "invalid_request");
+    let message = response["error"]["message"]
+        .as_str()
+        .expect("error message should be a string");
+    assert!(
+        message.contains("must start with a request frame"),
+        "unexpected invalid request error: {message}"
+    );
+}
+
 fn run_native_http_bridge_fixture(webc: Vec<u8>, webc_filename: &str) -> Output {
     let tmp = tempfile::tempdir().expect("temp dir");
     let webc_path = tmp.path().join(webc_filename);
@@ -236,7 +254,14 @@ fn parse_fixture_stdout(output: &Output) -> serde_json::Value {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).expect("fixture stdout should be JSON")
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "fixture stdout should be JSON: {error}\nstdout bytes: {:?}\nstdout:\n{}\nstderr:\n{}",
+            output.stdout,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
 }
 
 fn closed_local_http_url(path: &str) -> String {

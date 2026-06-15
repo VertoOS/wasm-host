@@ -136,6 +136,22 @@ pub fn http_bridge_streaming_upload_fixture_webc(url: &str) -> Result<Vec<u8>> {
     )
 }
 
+pub fn http_bridge_invalid_stream_frame_fixture_webc() -> Result<Vec<u8>> {
+    let frames = vec![serde_json::json!({
+        "type": "body_end"
+    })
+    .to_string()];
+    let wasm = wat::parse_str(http_bridge_fixture_wat(&frames))
+        .context("compile HTTP invalid stream frame fixture WAT")?;
+    package_wasi_fixture(
+        "vertoos/http-bridge-fixture",
+        HTTP_BRIDGE_COMMAND,
+        HTTP_BRIDGE_ATOM,
+        "HTTP bridge fixture",
+        wasm,
+    )
+}
+
 fn package_wasi_fixture(
     package_name: &str,
     command_name: &str,
@@ -373,6 +389,12 @@ mod tests {
     #[test]
     fn http_bridge_streaming_upload_fixture_is_webc() {
         let webc = http_bridge_streaming_upload_fixture_webc("http://127.0.0.1:1/upload").unwrap();
+        assert!(webc.starts_with(b"\0webc003"));
+    }
+
+    #[test]
+    fn http_bridge_invalid_stream_frame_fixture_is_webc() {
+        let webc = http_bridge_invalid_stream_frame_fixture_webc().unwrap();
         assert!(webc.starts_with(b"\0webc003"));
     }
 }

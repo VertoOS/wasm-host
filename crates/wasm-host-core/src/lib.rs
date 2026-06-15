@@ -685,6 +685,7 @@ struct HttpBridgeDeviceFile {
     request: Vec<u8>,
     upload: Option<HttpBridgeDeviceUploadState>,
     response: Option<Vec<u8>>,
+    reset_response_cursor: bool,
     cursor: usize,
 }
 
@@ -1786,6 +1787,7 @@ impl FileOpener for VirtualExecutableFileSystem {
                 request: Vec::new(),
                 upload: None,
                 response: None,
+                reset_response_cursor: false,
                 cursor: 0,
             }));
         }
@@ -1918,6 +1920,12 @@ impl VirtualFile for VirtualExecutableBridgeFile {
 }
 
 impl HttpBridgeDeviceFile {
+    fn set_response_from_write(&mut self, response: Vec<u8>) {
+        self.response = Some(response);
+        self.cursor = 0;
+        self.reset_response_cursor = true;
+    }
+
     fn read_upload_response(&mut self) -> Vec<u8> {
         let Some(mut upload) = self.upload.take() else {
             return encode_http_bridge_device_result(Err(HttpBridgeError::transport(
@@ -1947,6 +1955,7 @@ impl HttpBridgeDeviceFile {
             self.upload = None;
         }
         self.response = None;
+        self.reset_response_cursor = false;
         self.cursor = 0;
 
         if self.upload.is_some() {
@@ -1976,12 +1985,12 @@ impl HttpBridgeDeviceFile {
                         self.upload = Some(upload);
                     }
                     Err(error) => {
-                        self.response = Some(encode_http_bridge_device_result(Err(error)));
+                        self.set_response_from_write(encode_http_bridge_device_result(Err(error)));
                     }
                 }
             }
             Ok(_) => {
-                self.response = Some(encode_http_bridge_device_result(Err(
+                self.set_response_from_write(encode_http_bridge_device_result(Err(
                     HttpBridgeError::invalid_request(
                         "HTTP request body stream must start with a request frame",
                     ),
@@ -1989,7 +1998,7 @@ impl HttpBridgeDeviceFile {
             }
             Err(error) => {
                 if http_bridge_device_data_declares_frame(buf) {
-                    self.response = Some(encode_http_bridge_device_result(Err(
+                    self.set_response_from_write(encode_http_bridge_device_result(Err(
                         HttpBridgeError::invalid_request(format!(
                             "invalid HTTP bridge upload frame: {error}"
                         )),
@@ -2040,13 +2049,13 @@ impl HttpBridgeDeviceFile {
 
     fn send_upload_event(&mut self, event: HttpBridgeDeviceUploadEvent) {
         let Some(upload) = self.upload.as_mut() else {
-            self.response = Some(encode_http_bridge_device_result(Err(
+            self.set_response_from_write(encode_http_bridge_device_result(Err(
                 HttpBridgeError::transport("HTTP request body stream is not active"),
             )));
             return;
         };
         if let Err(error) = upload.send_event_blocking(event) {
-            self.response = Some(encode_http_bridge_device_result(Err(error)));
+            self.set_response_from_write(encode_http_bridge_device_result(Err(error)));
         }
     }
 
@@ -2054,7 +2063,7 @@ impl HttpBridgeDeviceFile {
         if let Some(upload) = self.upload.as_mut() {
             upload.fail_blocking(error);
         } else {
-            self.response = Some(encode_http_bridge_device_result(Err(error)));
+            self.set_response_from_write(encode_http_bridge_device_result(Err(error)));
         }
     }
 }
@@ -2078,6 +2087,10 @@ impl AsyncRead for HttpBridgeDeviceFile {
             };
             self.response = Some(response);
             self.cursor = 0;
+            self.reset_response_cursor = false;
+        } else if self.reset_response_cursor {
+            self.cursor = 0;
+            self.reset_response_cursor = false;
         }
 
         let response = self

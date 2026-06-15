@@ -64,7 +64,7 @@ version = "1.1.0"
 [dependencies.inkwell]
 version = "0.8.0"
 features = [
-    "llvm21-1-prefer-static",
+    "llvm21-1-prefer-dynamic",
     "target-x86",
     "target-aarch64",
     "target-riscv",

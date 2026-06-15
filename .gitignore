@@ -1,0 +1,8 @@
+.DS_Store
+target/
+dist/
+*.webc
+*.wasm
+*.sha256
+*.log
+*.tmp

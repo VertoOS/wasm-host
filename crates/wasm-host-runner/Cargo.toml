@@ -1,0 +1,16 @@
+[package]
+name = "wasm-host-runner"
+description = "Native runner for browser-compatible WebAssembly host testing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "wasm-host-runner"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+wasm-host-core.workspace = true

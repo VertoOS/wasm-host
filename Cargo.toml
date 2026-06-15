@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "crates/wasm-host-core",
+    "crates/wasm-host-runner",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.91"
+repository = "https://github.com/VertoOS/wasm-host"
+
+[workspace.dependencies]
+anyhow = "1.0.95"
+base64 = "0.22.1"
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.138"
+tokio = { version = "1.43.0", features = ["io-util", "rt-multi-thread", "sync", "time"] }
+virtual-fs = "0.701.0"
+wasm-host-core = { path = "crates/wasm-host-core" }
+wasmer = { version = "7.1.0", features = ["llvm"] }
+wasmer-package = "0.701.0"
+wasmer-wasix = "0.701.0"
+wat = "1.240.0"
+webc = "11.0.0"
+
+[patch.crates-io]
+wasmer-compiler-llvm = { path = "vendor/wasmer-compiler-llvm" }
+wasmer-wasix = { path = "vendor/wasmer-wasix" }

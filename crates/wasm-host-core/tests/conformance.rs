@@ -10,20 +10,22 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::Value;
 use tempfile::tempdir;
 use wasm_host_core::{
-    CancellationSource, EventBus, HostMount, Limits, RunRequest, SandboxState,
+    CancellationSource, EventBus, HostMount, HostProfile, Limits, RunRequest, SandboxState,
     VirtualExecutableBridge, VirtualProcessRequest,
 };
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 
-fn sandbox(
+fn sandbox_with_profile(
+    profile: HostProfile,
     files: HashMap<String, Option<Vec<u8>>>,
     host_mounts: Vec<HostMount>,
     env: HashMap<String, String>,
 ) -> SandboxState {
     let (events, _event_receiver) = EventBus::new(64);
     let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(64);
-    SandboxState::new(
+    SandboxState::new_with_profile(
+        profile,
         files,
         host_mounts,
         Vec::new(),
@@ -251,7 +253,8 @@ fn host_mounts_can_be_read_only_or_writable() {
         .expect("tokio runtime should initialize");
     let read_only_dir = tempdir().expect("tempdir should be created");
     fs::write(read_only_dir.path().join("input.txt"), "from-host").expect("fixture write");
-    let read_only_state = sandbox(
+    let read_only_state = sandbox_with_profile(
+        HostProfile::NativeFull,
         HashMap::new(),
         vec![HostMount {
             source: read_only_dir.path().to_string_lossy().to_string(),
@@ -275,7 +278,8 @@ fn host_mounts_can_be_read_only_or_writable() {
     );
 
     let writable_dir = tempdir().expect("tempdir should be created");
-    let writable_state = sandbox(
+    let writable_state = sandbox_with_profile(
+        HostProfile::NativeFull,
         HashMap::new(),
         vec![HostMount {
             source: writable_dir.path().to_string_lossy().to_string(),
@@ -290,6 +294,35 @@ fn host_mounts_can_be_read_only_or_writable() {
     assert_eq!(
         fs::read(writable_dir.path().join("output.txt")).expect("host file should exist"),
         b"from-sandbox"
+    );
+}
+
+#[test]
+fn browser_strict_profile_rejects_host_mounts() {
+    let source = tempdir().expect("tempdir should be created");
+    let (events, _event_receiver) = EventBus::new(64);
+    let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(64);
+    let result = SandboxState::new(
+        HashMap::new(),
+        vec![HostMount {
+            source: source.path().to_string_lossy().to_string(),
+            target: "/mnt".to_string(),
+            read_only: true,
+        }],
+        Vec::new(),
+        "/work".to_string(),
+        HashMap::new(),
+        events,
+        virtual_processes,
+    );
+    let error = match result {
+        Ok(_) => panic!("browser-strict should reject host mounts"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error.to_string().contains("native-full profile"),
+        "unexpected profile error: {error:#}"
     );
 }
 

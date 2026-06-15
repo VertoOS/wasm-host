@@ -7,8 +7,8 @@ use std::{
 };
 
 use wasm_host_core::{
-    CancellationSource, EventBus, HostMount, Limits, PackageCommandAlias, PackageSpec, RunRequest,
-    SandboxState, VirtualExecutableBridge,
+    CancellationSource, EventBus, HostMount, HostProfile, Limits, PackageCommandAlias, PackageSpec,
+    RunRequest, SandboxState, VirtualExecutableBridge,
 };
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
@@ -43,7 +43,8 @@ fn run() -> anyhow::Result<i32> {
         content_sha256: "0".repeat(64),
         command_aliases: options.command_aliases,
     };
-    let state = SandboxState::new(
+    let state = SandboxState::new_with_profile(
+        options.profile,
         HashMap::new(),
         options.host_mounts,
         vec![package],
@@ -74,6 +75,7 @@ fn run() -> anyhow::Result<i32> {
 
 struct Options {
     webc: PathBuf,
+    profile: HostProfile,
     package_name: Option<String>,
     command_aliases: Vec<PackageCommandAlias>,
     host_mounts: Vec<HostMount>,
@@ -89,6 +91,7 @@ impl Options {
     fn parse(args: impl IntoIterator<Item = OsString>) -> anyhow::Result<Self> {
         let mut args = args.into_iter().peekable();
         let mut webc = None;
+        let mut profile = HostProfile::default();
         let mut package_name = None;
         let mut command_aliases = Vec::new();
         let mut host_mounts = Vec::new();
@@ -117,6 +120,9 @@ impl Options {
                     std::process::exit(0);
                 }
                 "--webc" => webc = Some(PathBuf::from(next_value(&mut args, "--webc")?)),
+                "--profile" => {
+                    profile = HostProfile::parse(&next_value(&mut args, "--profile")?)?;
+                }
                 "--package" => package_name = Some(next_value(&mut args, "--package")?),
                 "--alias" => {
                     command_aliases.push(parse_alias(&next_value(&mut args, "--alias")?)?);
@@ -165,6 +171,7 @@ impl Options {
 
         Ok(Self {
             webc,
+            profile,
             package_name,
             command_aliases,
             host_mounts,
@@ -264,10 +271,12 @@ Usage:
 
 Options:
   --webc <path>              Local WebC package to load
+  --profile <name>           Host profile: browser-strict or native-full,
+                             default browser-strict
   --package <name>           Logical package name, defaults to file stem
   --alias <ALIAS=COMMAND>    Expose an extra command alias from the package
   --mount <HOST:GUEST[:ro|rw]>
-                             Mount a host directory into the sandbox
+                             Mount a host directory into the sandbox; requires native-full
   --cwd <path>               Sandbox cwd, default /work
   --env <KEY=VALUE>          Add or override an environment variable
   --env-pass <KEY>           Copy an environment variable from the host

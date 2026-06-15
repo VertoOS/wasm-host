@@ -89,6 +89,7 @@ run_package() {
 
   "${RUNNER[@]}" \
     --webc "$webc" \
+    --profile native-full \
     --package "$package" \
     --mount "$LANG_ROOT:/workspace:ro" \
     --cwd /workspace \

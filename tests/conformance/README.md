@@ -8,6 +8,9 @@ Run the current native conformance harness with:
 tests/conformance/run.sh
 ```
 
+The core runtime defaults to the `browser-strict` profile. Tests that exercise
+native-only host mounts opt into `native-full` explicitly.
+
 The first conformance slice covers:
 
 - virtual filesystem read/write/list/rename/delete behavior

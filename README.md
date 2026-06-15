@@ -27,6 +27,7 @@ until the boundaries are stable enough to split.
 ```sh
 cargo run --bin wasm-host-runner -- \
   --webc /path/to/package.webc \
+  --profile native-full \
   --mount "$PWD:/workspace:rw" \
   --cwd /workspace \
   --env HOME=/workspace \
@@ -36,6 +37,10 @@ cargo run --bin wasm-host-runner -- \
 
 Use `--env-pass KEY` for secrets so values come from the host environment
 without being embedded in the shell command.
+
+The runner defaults to `--profile browser-strict`, which rejects native host
+mounts. Use `--profile native-full` for local development scenarios that mount
+host directories.
 
 ## Project Shape
 

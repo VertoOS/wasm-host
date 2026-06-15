@@ -220,6 +220,12 @@ pub struct HostMount {
     pub read_only: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostProfile {
+    BrowserStrict,
+    NativeFull,
+}
+
 #[derive(Clone, Debug)]
 pub struct PackageCommandAlias {
     pub alias: String,
@@ -264,6 +270,7 @@ pub struct SandboxState {
     pub fs: TmpFileSystem,
     pub cwd: String,
     pub env: HashMap<String, String>,
+    pub profile: HostProfile,
     pub catalog: Arc<PackageCatalog>,
     pub events: EventBus,
     pub virtual_executables: VirtualExecutableRegistry,
@@ -492,6 +499,31 @@ impl FileSystemEventKind {
             Self::PathRenamed => "path_renamed",
             Self::EventsDropped => "events_dropped",
         }
+    }
+}
+
+impl HostProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BrowserStrict => "browser-strict",
+            Self::NativeFull => "native-full",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "browser-strict" => Ok(Self::BrowserStrict),
+            "native-full" => Ok(Self::NativeFull),
+            _ => Err(anyhow!(
+                "unknown host profile: {value}; expected browser-strict or native-full"
+            )),
+        }
+    }
+}
+
+impl Default for HostProfile {
+    fn default() -> Self {
+        Self::BrowserStrict
     }
 }
 
@@ -1661,6 +1693,35 @@ impl SandboxState {
         events: EventBus,
         virtual_processes: VirtualExecutableBridge,
     ) -> Result<Self> {
+        Self::new_with_profile(
+            HostProfile::default(),
+            files,
+            host_mounts,
+            packages,
+            cwd,
+            env,
+            events,
+            virtual_processes,
+        )
+    }
+
+    pub fn new_with_profile(
+        profile: HostProfile,
+        files: HashMap<String, Option<Vec<u8>>>,
+        host_mounts: Vec<HostMount>,
+        packages: Vec<PackageSpec>,
+        cwd: String,
+        env: HashMap<String, String>,
+        events: EventBus,
+        virtual_processes: VirtualExecutableBridge,
+    ) -> Result<Self> {
+        if profile != HostProfile::NativeFull && !host_mounts.is_empty() {
+            return Err(anyhow!(
+                "host mounts require the native-full profile, current profile is {}",
+                profile.as_str()
+            ));
+        }
+
         let catalog = catalog_for(packages)?;
         let fs = TmpFileSystem::new();
         create_default_layout(&catalog, &fs)?;
@@ -1676,6 +1737,7 @@ impl SandboxState {
             fs,
             cwd,
             env: sandbox_env,
+            profile,
             catalog,
             events,
             virtual_executables: VirtualExecutableRegistry::new(virtual_processes),
@@ -1833,6 +1895,13 @@ impl SandboxState {
     }
 
     pub fn mount_host(&self, mount: HostMount) -> Result<()> {
+        if self.profile != HostProfile::NativeFull {
+            return Err(anyhow!(
+                "host mounts require the native-full profile, current profile is {}",
+                self.profile.as_str()
+            ));
+        }
+
         let target = normalize_path(&mount.target)?;
         if target == Path::new("/") {
             return Err(anyhow!("host mount target cannot be the sandbox root"));

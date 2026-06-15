@@ -50,9 +50,11 @@ host directories.
 apps/
   web/                 # browser UI/runtime app
 bindings/
+  c/                   # C ABI header and ownership contract
   go/                  # Go binding surface
   python/              # Python binding/package surface
 crates/
+  wasm-host-c-api/     # C ABI over the core host contract
   wasm-host-core/      # core host runtime and Wasmer/WASIX backend
   wasm-host-runner/    # native terminal runner
 docs/

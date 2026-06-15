@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/wasm-host-c-api",
     "crates/wasm-host-core",
     "crates/wasm-host-runner",
 ]

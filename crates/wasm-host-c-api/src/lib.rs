@@ -1,0 +1,340 @@
+use std::{
+    collections::HashMap,
+    ffi::{c_char, CStr},
+    path::Path,
+};
+
+use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use serde::Deserialize;
+use wasm_host_core::{
+    CancellationSource, CompletedProcess, EventBus, HostMount, HostProfile, Limits,
+    PackageCommandAlias, PackageSpec, RunRequest, SandboxState, VirtualExecutableBridge,
+};
+
+const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+const DEFAULT_EVENT_QUEUE_SIZE: usize = 4096;
+const WASM_HOST_STATUS_OK: i32 = 0;
+const WASM_HOST_STATUS_ERROR: i32 = 1;
+const VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
+
+pub struct WasmHostRunResult {
+    status: i32,
+    returncode: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    error: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+struct FfiRunOptions {
+    webc: String,
+    command: Vec<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    package: Option<String>,
+    #[serde(default)]
+    aliases: Vec<FfiAlias>,
+    #[serde(default)]
+    mounts: Vec<FfiMount>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    #[serde(default)]
+    stdin_base64: Option<String>,
+    #[serde(default)]
+    output_limit: Option<usize>,
+    #[serde(default)]
+    timeout_seconds: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct FfiAlias {
+    alias: String,
+    command: String,
+}
+
+#[derive(Deserialize)]
+struct FfiMount {
+    source: String,
+    target: String,
+    #[serde(default = "default_read_only")]
+    read_only: bool,
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_version() -> *const c_char {
+    VERSION.as_ptr().cast()
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_run_json(options_json: *const c_char) -> *mut WasmHostRunResult {
+    let result = match std::panic::catch_unwind(|| parse_json_ptr(options_json).and_then(run_json))
+    {
+        Ok(Ok(process)) => result_from_process(process),
+        Ok(Err(error)) => result_from_error(error.to_string()),
+        Err(_) => result_from_error("wasm_host_run_json panicked".to_string()),
+    };
+
+    Box::into_raw(Box::new(result))
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_status(result: *const WasmHostRunResult) -> i32 {
+    with_result(result, WASM_HOST_STATUS_ERROR, |result| result.status)
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_returncode(result: *const WasmHostRunResult) -> i32 {
+    with_result(result, 125, |result| result.returncode)
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_stdout_ptr(result: *const WasmHostRunResult) -> *const u8 {
+    with_result(result, std::ptr::null(), |result| {
+        non_empty_ptr(&result.stdout).unwrap_or(std::ptr::null())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_stdout_len(result: *const WasmHostRunResult) -> usize {
+    with_result(result, 0, |result| result.stdout.len())
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_stderr_ptr(result: *const WasmHostRunResult) -> *const u8 {
+    with_result(result, std::ptr::null(), |result| {
+        non_empty_ptr(&result.stderr).unwrap_or(std::ptr::null())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_stderr_len(result: *const WasmHostRunResult) -> usize {
+    with_result(result, 0, |result| result.stderr.len())
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_error_ptr(result: *const WasmHostRunResult) -> *const u8 {
+    with_result(result, std::ptr::null(), |result| {
+        non_empty_ptr(&result.error).unwrap_or(std::ptr::null())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_error_len(result: *const WasmHostRunResult) -> usize {
+    with_result(result, 0, |result| result.error.len())
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_result_free(result: *mut WasmHostRunResult) {
+    if result.is_null() {
+        return;
+    }
+    unsafe {
+        drop(Box::from_raw(result));
+    }
+}
+
+fn parse_json_ptr(options_json: *const c_char) -> Result<String> {
+    if options_json.is_null() {
+        return Err(anyhow!("options_json cannot be null"));
+    }
+    let options = unsafe { CStr::from_ptr(options_json) };
+    options
+        .to_str()
+        .map(ToString::to_string)
+        .context("options_json must be valid UTF-8")
+}
+
+fn run_json(options_json: String) -> Result<CompletedProcess> {
+    let options: FfiRunOptions =
+        serde_json::from_str(&options_json).context("unable to parse run options JSON")?;
+    run_options(options)
+}
+
+fn result_from_process(process: CompletedProcess) -> WasmHostRunResult {
+    WasmHostRunResult {
+        status: WASM_HOST_STATUS_OK,
+        returncode: process.returncode,
+        stdout: process.stdout,
+        stderr: process.stderr,
+        error: Vec::new(),
+    }
+}
+
+fn result_from_error(error: String) -> WasmHostRunResult {
+    WasmHostRunResult {
+        status: WASM_HOST_STATUS_ERROR,
+        returncode: 125,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        error: error.into_bytes(),
+    }
+}
+
+fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
+    if options.command.is_empty() {
+        return Err(anyhow!("command cannot be empty"));
+    }
+
+    let profile = match options.profile {
+        Some(profile) => HostProfile::parse(&profile)?,
+        None => HostProfile::default(),
+    };
+    let package_name = options
+        .package
+        .unwrap_or_else(|| package_name(&options.webc));
+    let aliases = options
+        .aliases
+        .into_iter()
+        .map(|alias| PackageCommandAlias {
+            alias: alias.alias,
+            command: alias.command,
+        })
+        .collect::<Vec<_>>();
+    let host_mounts = options
+        .mounts
+        .into_iter()
+        .map(|mount| HostMount {
+            source: mount.source,
+            target: mount.target,
+            read_only: mount.read_only,
+        })
+        .collect::<Vec<_>>();
+    let stdin = options
+        .stdin_base64
+        .map(|stdin| {
+            BASE64
+                .decode(stdin)
+                .context("stdin_base64 must be valid base64")
+        })
+        .transpose()?;
+    let package = PackageSpec {
+        name: package_name,
+        webc_path: options.webc,
+        content_sha256: "0".repeat(64),
+        command_aliases: aliases,
+    };
+    let (events, _event_receiver) = EventBus::new(DEFAULT_EVENT_QUEUE_SIZE);
+    let (virtual_executables, _virtual_process_receiver) =
+        VirtualExecutableBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
+    let state = SandboxState::new_with_profile(
+        profile,
+        HashMap::new(),
+        host_mounts,
+        vec![package],
+        options.cwd.unwrap_or_else(|| "/work".to_string()),
+        options.env,
+        events,
+        virtual_executables,
+    )?;
+    let cancellation = CancellationSource::new();
+    state.run_blocking(
+        RunRequest {
+            args: options.command,
+            input: stdin,
+            env: None,
+            cwd: None,
+            limits: Limits {
+                output_bytes: options.output_limit.unwrap_or(DEFAULT_OUTPUT_LIMIT),
+                wall_time_seconds: options.timeout_seconds,
+            },
+        },
+        cancellation.token(),
+    )
+}
+
+fn package_name(webc: &str) -> String {
+    Path::new(webc)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("package")
+        .to_string()
+}
+
+fn default_read_only() -> bool {
+    true
+}
+
+fn with_result<T>(
+    result: *const WasmHostRunResult,
+    default: T,
+    operation: impl FnOnce(&WasmHostRunResult) -> T,
+) -> T {
+    if result.is_null() {
+        return default;
+    }
+    unsafe { operation(&*result) }
+}
+
+fn non_empty_ptr(data: &[u8]) -> Option<*const u8> {
+    if data.is_empty() {
+        None
+    } else {
+        Some(data.as_ptr())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn null_json_returns_owned_error_result() {
+        let result = wasm_host_run_json(std::ptr::null());
+        assert!(!result.is_null());
+        assert_eq!(wasm_host_result_status(result), WASM_HOST_STATUS_ERROR);
+        assert_eq!(wasm_host_result_returncode(result), 125);
+        assert!(wasm_host_result_error_len(result) > 0);
+        wasm_host_result_free(result);
+    }
+
+    #[test]
+    fn invalid_json_returns_parse_error() {
+        let options = std::ffi::CString::new("{").unwrap();
+        let result = wasm_host_run_json(options.as_ptr());
+        assert_eq!(wasm_host_result_status(result), WASM_HOST_STATUS_ERROR);
+        assert_eq!(wasm_host_result_stdout_len(result), 0);
+        assert_eq!(wasm_host_result_stderr_len(result), 0);
+        let error = unsafe {
+            std::slice::from_raw_parts(
+                wasm_host_result_error_ptr(result),
+                wasm_host_result_error_len(result),
+            )
+        };
+        assert!(std::str::from_utf8(error)
+            .unwrap()
+            .contains("unable to parse run options JSON"));
+        wasm_host_result_free(result);
+    }
+
+    #[test]
+    fn empty_command_is_rejected_before_runtime_setup() {
+        let options = std::ffi::CString::new(r#"{"webc":"missing.webc","command":[]}"#).unwrap();
+        let result = wasm_host_run_json(options.as_ptr());
+        assert_eq!(wasm_host_result_status(result), WASM_HOST_STATUS_ERROR);
+        let error = unsafe {
+            std::slice::from_raw_parts(
+                wasm_host_result_error_ptr(result),
+                wasm_host_result_error_len(result),
+            )
+        };
+        assert_eq!(
+            std::str::from_utf8(error).unwrap(),
+            "command cannot be empty"
+        );
+        wasm_host_result_free(result);
+    }
+
+    #[test]
+    fn mounts_default_to_read_only() {
+        let options: FfiRunOptions = serde_json::from_str(
+            r#"{"webc":"missing.webc","command":["tool"],"mounts":[{"source":".","target":"/workspace"}]}"#,
+        )
+        .unwrap();
+
+        assert!(options.mounts[0].read_only);
+    }
+}

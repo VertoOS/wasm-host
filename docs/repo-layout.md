@@ -10,6 +10,7 @@ together until the behavior is stable.
 apps/
   web/                 # browser UI/runtime app
 bindings/
+  c/                   # C ABI header and ownership contract
   go/                  # Go binding and examples
   python/              # Python package surface
 crates/

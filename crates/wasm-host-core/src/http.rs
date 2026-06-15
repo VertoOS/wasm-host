@@ -702,21 +702,29 @@ fn dispatch_gateway_endpoint_request(
         })?;
 
     write_gateway_endpoint_request(&mut stream, &url, request, cancellation.clone())?;
-    let head = read_gateway_endpoint_response_head(&mut stream, &cancellation)?;
+    let head = read_native_http_response_head(&mut stream, &cancellation)?;
     validate_gateway_endpoint_status(head.status)?;
     if is_gateway_stream_response(&head.headers) {
         let mut decoder = GatewayStreamResponseDecoder::new(response);
-        read_gateway_endpoint_response_body_chunks(&mut stream, &cancellation, head, |chunk| {
-            decoder.push(chunk)
-        })?;
+        read_native_http_response_body_chunks(
+            &mut stream,
+            &cancellation,
+            head,
+            Some(HTTP_GATEWAY_RESPONSE_BODY_LIMIT),
+            |chunk| decoder.push(chunk),
+        )?;
         decoder.finish()
     } else {
         let status = head.status;
         let headers = head.headers.clone();
         let mut body = Vec::new();
-        read_gateway_endpoint_response_body_chunks(&mut stream, &cancellation, head, |chunk| {
-            append_response_body(&mut body, chunk, HTTP_GATEWAY_RESPONSE_BODY_LIMIT)
-        })?;
+        read_native_http_response_body_chunks(
+            &mut stream,
+            &cancellation,
+            head,
+            Some(HTTP_GATEWAY_RESPONSE_BODY_LIMIT),
+            |chunk| append_response_body(&mut body, chunk, HTTP_GATEWAY_RESPONSE_BODY_LIMIT),
+        )?;
         response.respond(decode_gateway_endpoint_response(HttpResponse::new(
             status, headers, body,
         )?)?)
@@ -981,331 +989,6 @@ fn is_gateway_stream_response(headers: &[HttpHeader]) -> bool {
             .trim()
             .eq_ignore_ascii_case("application/x-ndjson")
     })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_gateway_endpoint_response_head(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-) -> std::result::Result<NativeHttpResponseHead, HttpBridgeError> {
-    let mut buffer = Vec::new();
-    let header_end = loop {
-        if cancellation.is_cancelled() {
-            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
-        }
-        if let Some(index) = find_header_end(&buffer) {
-            break index;
-        }
-        if buffer.len() > NATIVE_HTTP_HEADER_LIMIT {
-            return Err(HttpBridgeError::invalid_response(format!(
-                "HTTP response headers exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
-            )));
-        }
-        if read_more_gateway_http(stream, cancellation, &mut buffer, "HTTP response headers")? == 0
-        {
-            return Err(HttpBridgeError::transport(
-                "HTTP connection closed before response headers",
-            ));
-        }
-    };
-
-    let header_bytes = &buffer[..header_end];
-    let body_start = header_end + 4;
-    let body_prefix = buffer[body_start..].to_vec();
-    let (status, headers, content_length, chunked) =
-        parse_native_http_response_headers(header_bytes)?;
-    Ok(NativeHttpResponseHead {
-        status,
-        headers,
-        content_length,
-        chunked,
-        body_prefix,
-    })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_gateway_endpoint_response_body_chunks<Consumer>(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-    head: NativeHttpResponseHead,
-    mut consumer: Consumer,
-) -> std::result::Result<(), HttpBridgeError>
-where
-    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
-{
-    let mut encoded_bytes = 0_usize;
-    if head.chunked {
-        read_gateway_chunked_http_body(
-            stream,
-            cancellation,
-            head.body_prefix,
-            &mut encoded_bytes,
-            consumer,
-        )
-    } else if let Some(length) = head.content_length {
-        let accepted = head.body_prefix.len().min(length);
-        push_gateway_response_chunk(
-            &mut consumer,
-            &mut encoded_bytes,
-            head.body_prefix[..accepted].to_vec(),
-        )?;
-        read_gateway_fixed_http_body(
-            stream,
-            cancellation,
-            length.saturating_sub(accepted),
-            &mut encoded_bytes,
-            consumer,
-        )
-    } else {
-        push_gateway_response_chunk(&mut consumer, &mut encoded_bytes, head.body_prefix)?;
-        read_gateway_until_eof_http_body(stream, cancellation, &mut encoded_bytes, consumer)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_gateway_chunked_http_body<Consumer>(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-    mut buffer: Vec<u8>,
-    encoded_bytes: &mut usize,
-    mut consumer: Consumer,
-) -> std::result::Result<(), HttpBridgeError>
-where
-    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
-{
-    loop {
-        let size_line = read_gateway_http_line(
-            stream,
-            cancellation,
-            &mut buffer,
-            "chunked HTTP response chunk size",
-        )?;
-        let mut remaining = parse_native_http_chunk_size(&size_line)?;
-        if remaining == 0 {
-            read_gateway_http_trailers(stream, cancellation, &mut buffer)?;
-            return Ok(());
-        }
-
-        while remaining > 0 {
-            if buffer.is_empty()
-                && read_more_gateway_http(
-                    stream,
-                    cancellation,
-                    &mut buffer,
-                    "chunked HTTP response body",
-                )? == 0
-            {
-                return Err(HttpBridgeError::transport(
-                    "HTTP connection closed before chunked response body completed",
-                ));
-            }
-
-            let accepted = buffer.len().min(remaining);
-            push_gateway_response_chunk(&mut consumer, encoded_bytes, buffer[..accepted].to_vec())?;
-            buffer.drain(..accepted);
-            remaining -= accepted;
-        }
-
-        ensure_gateway_http_buffer(
-            stream,
-            cancellation,
-            &mut buffer,
-            2,
-            "chunked HTTP response chunk terminator",
-        )?;
-        if &buffer[..2] != b"\r\n" {
-            return Err(HttpBridgeError::invalid_response(
-                "chunked HTTP response chunk missing CRLF terminator",
-            ));
-        }
-        buffer.drain(..2);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_gateway_fixed_http_body<Consumer>(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-    mut remaining: usize,
-    encoded_bytes: &mut usize,
-    mut consumer: Consumer,
-) -> std::result::Result<(), HttpBridgeError>
-where
-    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
-{
-    let mut buffer = [0_u8; 8192];
-    while remaining > 0 {
-        if cancellation.is_cancelled() {
-            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
-        }
-        let read_len = buffer.len().min(remaining);
-        match stream.read(&mut buffer[..read_len]) {
-            Ok(0) => return Err(HttpBridgeError::transport("HTTP response body ended early")),
-            Ok(count) => {
-                remaining -= count;
-                push_gateway_response_chunk(
-                    &mut consumer,
-                    encoded_bytes,
-                    buffer[..count].to_vec(),
-                )?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(error) => {
-                return Err(HttpBridgeError::transport(format!(
-                    "unable to read HTTP response body: {error}"
-                )))
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_gateway_until_eof_http_body<Consumer>(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-    encoded_bytes: &mut usize,
-    mut consumer: Consumer,
-) -> std::result::Result<(), HttpBridgeError>
-where
-    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
-{
-    let mut buffer = [0_u8; 8192];
-    loop {
-        if cancellation.is_cancelled() {
-            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
-        }
-        match stream.read(&mut buffer) {
-            Ok(0) => return Ok(()),
-            Ok(count) => {
-                push_gateway_response_chunk(
-                    &mut consumer,
-                    encoded_bytes,
-                    buffer[..count].to_vec(),
-                )?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(error) => {
-                return Err(HttpBridgeError::transport(format!(
-                    "unable to read HTTP response body: {error}"
-                )))
-            }
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn push_gateway_response_chunk<Consumer>(
-    consumer: &mut Consumer,
-    encoded_bytes: &mut usize,
-    chunk: Vec<u8>,
-) -> std::result::Result<(), HttpBridgeError>
-where
-    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
-{
-    if chunk.is_empty() {
-        return Ok(());
-    }
-    *encoded_bytes = encoded_bytes
-        .checked_add(chunk.len())
-        .ok_or_else(|| response_too_large_error(HTTP_GATEWAY_RESPONSE_BODY_LIMIT))?;
-    if *encoded_bytes > HTTP_GATEWAY_RESPONSE_BODY_LIMIT {
-        return Err(response_too_large_error(HTTP_GATEWAY_RESPONSE_BODY_LIMIT));
-    }
-    consumer(chunk)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_gateway_http_trailers(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-    buffer: &mut Vec<u8>,
-) -> std::result::Result<(), HttpBridgeError> {
-    loop {
-        let line = read_gateway_http_line(
-            stream,
-            cancellation,
-            buffer,
-            "chunked HTTP response trailers",
-        )?;
-        if line.is_empty() {
-            return Ok(());
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_gateway_http_line(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-    buffer: &mut Vec<u8>,
-    context: &str,
-) -> std::result::Result<Vec<u8>, HttpBridgeError> {
-    loop {
-        if let Some(index) = find_crlf(buffer) {
-            let line = buffer[..index].to_vec();
-            buffer.drain(..index + 2);
-            return Ok(line);
-        }
-        if buffer.len() > NATIVE_HTTP_HEADER_LIMIT {
-            return Err(HttpBridgeError::invalid_response(format!(
-                "{context} exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
-            )));
-        }
-        if read_more_gateway_http(stream, cancellation, buffer, context)? == 0 {
-            return Err(HttpBridgeError::transport(format!(
-                "HTTP connection closed before {context}"
-            )));
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn ensure_gateway_http_buffer(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-    buffer: &mut Vec<u8>,
-    length: usize,
-    context: &str,
-) -> std::result::Result<(), HttpBridgeError> {
-    while buffer.len() < length {
-        if read_more_gateway_http(stream, cancellation, buffer, context)? == 0 {
-            return Err(HttpBridgeError::transport(format!(
-                "HTTP connection closed before {context}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_more_gateway_http(
-    stream: &mut TcpStream,
-    cancellation: &CancellationToken,
-    buffer: &mut Vec<u8>,
-    context: &str,
-) -> std::result::Result<usize, HttpBridgeError> {
-    let mut chunk = [0_u8; 4096];
-    loop {
-        if cancellation.is_cancelled() {
-            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
-        }
-        match stream.read(&mut chunk) {
-            Ok(count) => {
-                buffer.extend_from_slice(&chunk[..count]);
-                return Ok(count);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(error) => {
-                return Err(HttpBridgeError::transport(format!(
-                    "unable to read {context}: {error}"
-                )))
-            }
-        }
-    }
 }
 
 fn decode_gateway_wire_response(
@@ -1820,8 +1503,9 @@ fn dispatch_native_http_request(
             return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
         }
 
+        let cancellation = request.cancellation_token();
         let url = parse_native_http_url(&current.url)?;
-        let mut stream = connect_native_http(&url, request.cancellation_token())?;
+        let mut stream = connect_native_http(&url, cancellation.clone())?;
         stream
             .set_read_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
             .map_err(|error| {
@@ -1834,7 +1518,7 @@ fn dispatch_native_http_request(
             })?;
 
         write_native_http_request(&mut stream, request, &current, &url)?;
-        let head = read_native_http_response_head(&mut stream, request)?;
+        let head = read_native_http_response_head(&mut stream, &cancellation)?;
         if let Some(redirected) =
             native_http_redirect_request(&current, &url, &head, redirect_count)?
         {
@@ -2047,11 +1731,11 @@ fn write_http_line(
 #[cfg(not(target_arch = "wasm32"))]
 fn read_native_http_response_head(
     stream: &mut TcpStream,
-    request: &HttpBridgeRequest,
+    cancellation: &CancellationToken,
 ) -> std::result::Result<NativeHttpResponseHead, HttpBridgeError> {
     let mut buffer = Vec::new();
     let header_end = loop {
-        if request.cancellation_token().is_cancelled() {
+        if cancellation.is_cancelled() {
             return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
         }
         if let Some(index) = find_header_end(&buffer) {
@@ -2062,7 +1746,7 @@ fn read_native_http_response_head(
                 "HTTP response headers exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
             )));
         }
-        if read_more_native_http(stream, request, &mut buffer, "HTTP response headers")? == 0 {
+        if read_more_native_http(stream, cancellation, &mut buffer, "HTTP response headers")? == 0 {
             return Err(HttpBridgeError::transport(
                 "HTTP connection closed before response headers",
             ));
@@ -2089,18 +1773,14 @@ fn read_native_http_response_body(
     request: &HttpBridgeRequest,
     head: NativeHttpResponseHead,
 ) -> std::result::Result<HttpResponse, HttpBridgeError> {
-    if head.chunked {
-        read_chunked_native_http_body(stream, request, head.body_prefix)?;
-    } else if let Some(length) = head.content_length {
-        let accepted = head.body_prefix.len().min(length);
-        write_native_http_body_chunk(request, head.body_prefix[..accepted].to_vec())?;
-        read_fixed_native_http_body(stream, request, length.saturating_sub(accepted))?;
-    } else {
-        write_native_http_body_chunk(request, head.body_prefix)?;
-        read_until_eof_native_http_body(stream, request)?;
-    }
+    let status = head.status;
+    let headers = head.headers.clone();
+    let cancellation = request.cancellation_token();
+    read_native_http_response_body_chunks(stream, &cancellation, head, None, |chunk| {
+        write_native_http_body_chunk(request, chunk)
+    })?;
 
-    HttpResponse::new(head.status, head.headers, Vec::new())
+    HttpResponse::new(status, headers, Vec::new())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2279,21 +1959,81 @@ fn parse_native_http_status(status_line: &str) -> std::result::Result<u16, HttpB
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_chunked_native_http_body(
+fn read_native_http_response_body_chunks<Consumer>(
     stream: &mut TcpStream,
-    request: &HttpBridgeRequest,
+    cancellation: &CancellationToken,
+    head: NativeHttpResponseHead,
+    body_limit: Option<usize>,
+    mut consumer: Consumer,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
+    let mut delivered_bytes = 0_usize;
+    if head.chunked {
+        read_chunked_native_http_body_chunks(
+            stream,
+            cancellation,
+            head.body_prefix,
+            body_limit,
+            &mut delivered_bytes,
+            &mut consumer,
+        )
+    } else if let Some(length) = head.content_length {
+        let accepted = head.body_prefix.len().min(length);
+        push_native_http_response_body_chunk(
+            &mut consumer,
+            &mut delivered_bytes,
+            body_limit,
+            head.body_prefix[..accepted].to_vec(),
+        )?;
+        read_fixed_native_http_body_chunks(
+            stream,
+            cancellation,
+            length.saturating_sub(accepted),
+            body_limit,
+            &mut delivered_bytes,
+            &mut consumer,
+        )
+    } else {
+        push_native_http_response_body_chunk(
+            &mut consumer,
+            &mut delivered_bytes,
+            body_limit,
+            head.body_prefix,
+        )?;
+        read_until_eof_native_http_body_chunks(
+            stream,
+            cancellation,
+            body_limit,
+            &mut delivered_bytes,
+            &mut consumer,
+        )
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_chunked_native_http_body_chunks<Consumer>(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
     mut buffer: Vec<u8>,
-) -> std::result::Result<(), HttpBridgeError> {
+    body_limit: Option<usize>,
+    delivered_bytes: &mut usize,
+    consumer: &mut Consumer,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
     loop {
         let size_line = read_native_http_line(
             stream,
-            request,
+            cancellation,
             &mut buffer,
             "chunked HTTP response chunk size",
         )?;
         let mut remaining = parse_native_http_chunk_size(&size_line)?;
         if remaining == 0 {
-            read_native_http_trailers(stream, request, &mut buffer)?;
+            read_native_http_trailers(stream, cancellation, &mut buffer)?;
             return Ok(());
         }
 
@@ -2301,7 +2041,7 @@ fn read_chunked_native_http_body(
             if buffer.is_empty()
                 && read_more_native_http(
                     stream,
-                    request,
+                    cancellation,
                     &mut buffer,
                     "chunked HTTP response body",
                 )? == 0
@@ -2312,14 +2052,19 @@ fn read_chunked_native_http_body(
             }
 
             let accepted = buffer.len().min(remaining);
-            write_native_http_body_chunk(request, buffer[..accepted].to_vec())?;
+            push_native_http_response_body_chunk(
+                consumer,
+                delivered_bytes,
+                body_limit,
+                buffer[..accepted].to_vec(),
+            )?;
             buffer.drain(..accepted);
             remaining -= accepted;
         }
 
         ensure_native_http_buffer(
             stream,
-            request,
+            cancellation,
             &mut buffer,
             2,
             "chunked HTTP response chunk terminator",
@@ -2354,12 +2099,16 @@ fn parse_native_http_chunk_size(line: &[u8]) -> std::result::Result<usize, HttpB
 #[cfg(not(target_arch = "wasm32"))]
 fn read_native_http_trailers(
     stream: &mut TcpStream,
-    request: &HttpBridgeRequest,
+    cancellation: &CancellationToken,
     buffer: &mut Vec<u8>,
 ) -> std::result::Result<(), HttpBridgeError> {
     loop {
-        let line =
-            read_native_http_line(stream, request, buffer, "chunked HTTP response trailers")?;
+        let line = read_native_http_line(
+            stream,
+            cancellation,
+            buffer,
+            "chunked HTTP response trailers",
+        )?;
         if line.is_empty() {
             return Ok(());
         }
@@ -2369,7 +2118,7 @@ fn read_native_http_trailers(
 #[cfg(not(target_arch = "wasm32"))]
 fn read_native_http_line(
     stream: &mut TcpStream,
-    request: &HttpBridgeRequest,
+    cancellation: &CancellationToken,
     buffer: &mut Vec<u8>,
     context: &str,
 ) -> std::result::Result<Vec<u8>, HttpBridgeError> {
@@ -2384,7 +2133,7 @@ fn read_native_http_line(
                 "{context} exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
             )));
         }
-        if read_more_native_http(stream, request, buffer, context)? == 0 {
+        if read_more_native_http(stream, cancellation, buffer, context)? == 0 {
             return Err(HttpBridgeError::transport(format!(
                 "HTTP connection closed before {context}"
             )));
@@ -2395,13 +2144,13 @@ fn read_native_http_line(
 #[cfg(not(target_arch = "wasm32"))]
 fn ensure_native_http_buffer(
     stream: &mut TcpStream,
-    request: &HttpBridgeRequest,
+    cancellation: &CancellationToken,
     buffer: &mut Vec<u8>,
     length: usize,
     context: &str,
 ) -> std::result::Result<(), HttpBridgeError> {
     while buffer.len() < length {
-        if read_more_native_http(stream, request, buffer, context)? == 0 {
+        if read_more_native_http(stream, cancellation, buffer, context)? == 0 {
             return Err(HttpBridgeError::transport(format!(
                 "HTTP connection closed before {context}"
             )));
@@ -2413,13 +2162,13 @@ fn ensure_native_http_buffer(
 #[cfg(not(target_arch = "wasm32"))]
 fn read_more_native_http(
     stream: &mut TcpStream,
-    request: &HttpBridgeRequest,
+    cancellation: &CancellationToken,
     buffer: &mut Vec<u8>,
     context: &str,
 ) -> std::result::Result<usize, HttpBridgeError> {
     let mut chunk = [0_u8; 4096];
     loop {
-        if request.cancellation_token().is_cancelled() {
+        if cancellation.is_cancelled() {
             return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
         }
         match stream.read(&mut chunk) {
@@ -2439,14 +2188,20 @@ fn read_more_native_http(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_fixed_native_http_body(
+fn read_fixed_native_http_body_chunks<Consumer>(
     stream: &mut TcpStream,
-    request: &HttpBridgeRequest,
+    cancellation: &CancellationToken,
     mut remaining: usize,
-) -> std::result::Result<(), HttpBridgeError> {
+    body_limit: Option<usize>,
+    delivered_bytes: &mut usize,
+    consumer: &mut Consumer,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
     let mut buffer = [0_u8; 8192];
     while remaining > 0 {
-        if request.cancellation_token().is_cancelled() {
+        if cancellation.is_cancelled() {
             return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
         }
         let read_len = buffer.len().min(remaining);
@@ -2454,7 +2209,12 @@ fn read_fixed_native_http_body(
             Ok(0) => return Err(HttpBridgeError::transport("HTTP response body ended early")),
             Ok(count) => {
                 remaining -= count;
-                write_native_http_body_chunk(request, buffer[..count].to_vec())?;
+                push_native_http_response_body_chunk(
+                    consumer,
+                    delivered_bytes,
+                    body_limit,
+                    buffer[..count].to_vec(),
+                )?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
@@ -2469,18 +2229,29 @@ fn read_fixed_native_http_body(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_until_eof_native_http_body(
+fn read_until_eof_native_http_body_chunks<Consumer>(
     stream: &mut TcpStream,
-    request: &HttpBridgeRequest,
-) -> std::result::Result<(), HttpBridgeError> {
+    cancellation: &CancellationToken,
+    body_limit: Option<usize>,
+    delivered_bytes: &mut usize,
+    consumer: &mut Consumer,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
     let mut buffer = [0_u8; 8192];
     loop {
-        if request.cancellation_token().is_cancelled() {
+        if cancellation.is_cancelled() {
             return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
         }
         match stream.read(&mut buffer) {
             Ok(0) => return Ok(()),
-            Ok(count) => write_native_http_body_chunk(request, buffer[..count].to_vec())?,
+            Ok(count) => push_native_http_response_body_chunk(
+                consumer,
+                delivered_bytes,
+                body_limit,
+                buffer[..count].to_vec(),
+            )?,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
             Err(error) => {
@@ -2490,6 +2261,30 @@ fn read_until_eof_native_http_body(
             }
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn push_native_http_response_body_chunk<Consumer>(
+    consumer: &mut Consumer,
+    delivered_bytes: &mut usize,
+    body_limit: Option<usize>,
+    chunk: Vec<u8>,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    if let Some(limit) = body_limit {
+        *delivered_bytes = delivered_bytes
+            .checked_add(chunk.len())
+            .ok_or_else(|| response_too_large_error(limit))?;
+        if *delivered_bytes > limit {
+            return Err(response_too_large_error(limit));
+        }
+    }
+    consumer(chunk)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2664,6 +2459,118 @@ mod tests {
             while request.body.read_chunk_blocking()?.is_some() {}
             GatewayHttpResponse::complete(200, Vec::new(), b"upload-ok".to_vec())
         }
+    }
+
+    #[test]
+    fn native_http_response_reader_delivers_content_length_body() {
+        let chunks = read_native_test_response_body_chunks(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nhello world",
+            None,
+            CancellationSource::new().token(),
+        )
+        .expect("content-length response should read");
+
+        assert_eq!(chunks.concat(), b"hello world");
+    }
+
+    #[test]
+    fn native_http_response_reader_decodes_chunked_body_and_trailers() {
+        let chunks = read_native_test_response_body_chunks(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1; ext=value\r\n \r\n5\r\nworld\r\n0\r\nTrailer-Name: ignored\r\n\r\n",
+            None,
+            CancellationSource::new().token(),
+        )
+        .expect("chunked response should read");
+
+        assert_eq!(chunks.concat(), b"hello world");
+    }
+
+    #[test]
+    fn native_http_response_reader_delivers_eof_delimited_body() {
+        let chunks = read_native_test_response_body_chunks(
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\neof-body",
+            None,
+            CancellationSource::new().token(),
+        )
+        .expect("EOF-delimited response should read");
+
+        assert_eq!(chunks.concat(), b"eof-body");
+    }
+
+    #[test]
+    fn native_http_response_reader_rejects_early_eof() {
+        let error = read_native_test_response_body_chunks(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nshort",
+            None,
+            CancellationSource::new().token(),
+        )
+        .expect_err("early EOF should fail");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::Transport);
+        assert_eq!(error.message, "HTTP response body ended early");
+    }
+
+    #[test]
+    fn native_http_response_reader_rejects_invalid_chunk_size() {
+        let error = read_native_test_response_body_chunks(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nbad\r\n0\r\n\r\n",
+            None,
+            CancellationSource::new().token(),
+        )
+        .expect_err("invalid chunk size should fail");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::InvalidResponse);
+        assert!(error
+            .message
+            .contains("invalid chunked HTTP response chunk size"));
+    }
+
+    #[test]
+    fn native_http_response_reader_observes_cancellation() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener should bind");
+        let address = listener.local_addr().expect("listener address should read");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("connection should arrive");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n")
+                .expect("response headers should write");
+            thread::sleep(Duration::from_millis(250));
+        });
+
+        let mut stream = TcpStream::connect(address).expect("client should connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("read timeout should set");
+        let cancellation = CancellationSource::new();
+        let token = cancellation.token();
+        let head = read_native_http_response_head(&mut stream, &token)
+            .expect("response headers should read");
+        cancellation.cancel();
+        let mut chunks = Vec::new();
+        let error =
+            read_native_http_response_body_chunks(&mut stream, &token, head, None, |chunk| {
+                chunks.push(chunk);
+                Ok(())
+            })
+            .expect_err("cancelled response body should fail");
+        server.join().expect("server should finish");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::Cancelled);
+        assert_eq!(error.message, "HTTP request cancelled");
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn native_http_response_reader_enforces_optional_body_limit() {
+        let error = read_native_test_response_body_chunks(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nlimit",
+            Some(4),
+            CancellationSource::new().token(),
+        )
+        .expect_err("response body limit should fail");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::ResponseTooLarge);
+        assert_eq!(error.message, "HTTP response body exceeded 4 bytes");
     }
 
     #[test]
@@ -3258,6 +3165,41 @@ mod tests {
 
         assert_eq!(error.kind, HttpBridgeErrorKind::UnsupportedScheme);
         assert!(error.message.contains("https"));
+    }
+
+    fn read_native_test_response_body_chunks(
+        response: &'static [u8],
+        body_limit: Option<usize>,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<Vec<Vec<u8>>, HttpBridgeError> {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener should bind");
+        let address = listener.local_addr().expect("listener address should read");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("connection should arrive");
+            stream
+                .write_all(response)
+                .expect("test HTTP response should write");
+        });
+
+        let mut stream = TcpStream::connect(address).expect("client should connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("read timeout should set");
+        let head = read_native_http_response_head(&mut stream, &cancellation)?;
+        let mut chunks = Vec::new();
+        let result = read_native_http_response_body_chunks(
+            &mut stream,
+            &cancellation,
+            head,
+            body_limit,
+            |chunk| {
+                chunks.push(chunk);
+                Ok(())
+            },
+        );
+        server.join().expect("server should finish");
+
+        result.map(|()| chunks)
     }
 
     fn read_test_http_request(stream: &mut TcpStream) -> String {

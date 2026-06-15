@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
-cargo build --quiet --manifest-path "$ROOT/Cargo.toml" --bin wasm-host-runner --locked
+cargo build --quiet --manifest-path "$ROOT/Cargo.toml" --bin wasm-host-runner --bin wasm-host-fixtures --locked
 
 printf '<!doctype html>' > "$TMP_ROOT/bad.webc"
 
@@ -46,5 +46,44 @@ assert failed["exit_code"] == 65
 assert "expected magic bytes \\0webc" in failed["error"]
 assert "found <!doc" in failed["error"]
 PY
+
+"$ROOT/target/debug/wasm-host-fixtures" stdout \
+  --output "$TMP_ROOT/valid.webc" \
+  --stdout "unused"
+
+workspace="$TMP_ROOT/workspace"
+mkdir -p "$workspace"
+printf 'stdin-data' > "$TMP_ROOT/stdin.txt"
+
+"$ROOT/target/debug/wasm-host-runner" \
+  --webc "$TMP_ROOT/valid.webc" \
+  --profile native-full \
+  --package fixture \
+  --mount "$workspace:/workspace:rw" \
+  --cwd /workspace \
+  --env PATH=/tools:/bin:/usr/bin \
+  --stdin-file "$TMP_ROOT/stdin.txt" \
+  --host-command /tools/host-sh=/bin/sh \
+  -- host-sh \
+  -c 'cat > host-command-output.txt; printf "arg=%s\n" "$1"; printf "host-stderr\n" >&2' \
+  script-name \
+  arg1 >"$TMP_ROOT/host-command-stdout" 2>"$TMP_ROOT/host-command-stderr"
+
+if [[ "$(cat "$TMP_ROOT/host-command-stdout")" != "arg=arg1" ]]; then
+  echo "unexpected host-command stdout" >&2
+  cat "$TMP_ROOT/host-command-stdout" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$TMP_ROOT/host-command-stderr")" != "host-stderr" ]]; then
+  echo "unexpected host-command stderr" >&2
+  cat "$TMP_ROOT/host-command-stderr" >&2
+  exit 1
+fi
+
+if [[ "$(cat "$workspace/host-command-output.txt")" != "stdin-data" ]]; then
+  echo "host-command did not write stdin into the mounted workspace" >&2
+  exit 1
+fi
 
 echo "runner harness tests passed"

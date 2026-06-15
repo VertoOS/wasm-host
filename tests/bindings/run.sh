@@ -25,6 +25,26 @@ if [[ ! -s "$LIB" ]]; then
   exit 1
 fi
 
+if command -v cc >/dev/null 2>&1; then
+  echo "c abi"
+  TMP_ROOT="$(mktemp -d)"
+  trap 'rm -rf "$TMP_ROOT"' EXIT
+  cc \
+    -std=c11 \
+    -Wall \
+    -Wextra \
+    -Werror \
+    -I "$ROOT/bindings/c" \
+    "$ROOT/tests/bindings/c/abi_smoke.c" \
+    -L "$ROOT/target/debug" \
+    -lwasm_host_c_api \
+    -Wl,-rpath,"$ROOT/target/debug" \
+    -o "$TMP_ROOT/c-abi-smoke"
+  "$TMP_ROOT/c-abi-smoke"
+else
+  echo "c abi: skipped; cc is not installed"
+fi
+
 echo "python bindings"
 PYTHONPATH="$ROOT/bindings/python" WASM_HOST_LIBRARY="$LIB" \
   python3 -m unittest discover -s "$ROOT/bindings/python/tests"

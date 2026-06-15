@@ -36,6 +36,13 @@ Optional fields:
 The result status reports host/API success or failure. A guest process that exits
 non-zero still has status `0`; inspect `wasm_host_result_returncode`.
 
+## Tests
+
+`tests/bindings/run.sh` builds the C ABI library and, when `cc` is available,
+compiles `tests/bindings/c/abi_smoke.c` against this header. The smoke binary
+links the produced shared library and verifies version lookup, owned error
+results, empty buffer pointer/length behavior, and null-safe result freeing.
+
 ## C usage
 
 ```c

@@ -130,7 +130,8 @@ tests/bindings/run.sh
 ```
 
 The harness builds `wasm-host-c-api`, points Python at the produced dynamic
-library, and runs Go tests when Go is installed.
+library, compiles and runs a C header/link smoke test when `cc` is installed,
+and runs Go tests when Go is installed.
 
 ## Planning
 

@@ -56,7 +56,7 @@ silently depend on capabilities the browser cannot match.
 | Workspace writes | Writable host mount | Writable virtual workspace, optional user-granted directory | Persist through snapshot/export or browser storage. |
 | stdin/stdout/stderr | Captured or streaming pipes | Message channels and terminal streams | Same chunking, close, and error semantics. |
 | Terminal/PTY | Native terminal process wrapper where available | xterm.js-style terminal plus PTY emulation | Emulate enough TTY behavior for Bash/readline. |
-| Processes | WASIX process execution in runtime | WASIX process model emulated by runtime and workers | No arbitrary host process spawn in browser. Spawn only packaged commands or approved bridges. |
+| Processes | WASIX process execution in runtime; explicit native host-command bridges for testing | WASIX process model emulated by runtime and workers | No arbitrary host process spawn in browser. Spawn only packaged commands or approved bridges. |
 | Shell/tool execution | Sandbox Bash/coreutils packages | Same packaged tools in the browser | Treat shell commands as sandbox commands, not host OS commands. |
 | Signals/cancel | Runtime process termination | Cooperative cancellation and worker termination | Define graceful stop, hard stop, and exit-code behavior explicitly. |
 | Networking | Native sockets or HTTP bridge | Fetch/WebSocket/gateway only | Prefer HTTP bridge semantics so browser and native match. Raw TCP/UDP requires a proxy. |

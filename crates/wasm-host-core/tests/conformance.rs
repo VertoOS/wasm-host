@@ -6,8 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use serde_json::Value;
 use tempfile::tempdir;
 use wasm_host_core::{
     CancellationSource, EventBus, HostMount, HostProfile, HttpBridge, HttpBridgeError,
@@ -661,29 +659,21 @@ fn virtual_executables_dispatch_through_the_host_bridge() {
         let request = virtual_process_receiver
             .blocking_recv()
             .expect("virtual process request should arrive");
-        let payload: Value =
-            serde_json::from_slice(&request.payload).expect("payload should be JSON");
-        assert_eq!(payload["handler_token"], 42);
-        assert_eq!(payload["executable_path"], "/tools/host-tool");
-        assert_eq!(payload["argv"], serde_json::json!(["host-tool", "--flag"]));
-        assert_eq!(payload["cwd"], "/work");
+        let invocation = request
+            .invocation()
+            .expect("virtual process invocation should decode");
+        assert_eq!(invocation.handler_token, 42);
+        assert_eq!(invocation.executable_path, "/tools/host-tool");
+        assert_eq!(invocation.argv, ["host-tool", "--flag"]);
+        assert_eq!(invocation.cwd, "/work");
+        assert_eq!(invocation.stdin, b"request-body");
         assert_eq!(
-            BASE64
-                .decode(payload["stdin"].as_str().expect("stdin should be a string"))
-                .expect("stdin should decode"),
-            b"request-body"
+            invocation.env.get("PATH").map(String::as_str),
+            Some("/tools:/bin:/usr/bin")
         );
-        assert!(payload["env"]["PATH"]
-            .as_str()
-            .expect("PATH should be present")
-            .starts_with("/tools"));
 
         request
-            .respond(encode_virtual_process_response(
-                7,
-                b"bridge-out",
-                b"bridge-err",
-            ))
+            .respond_process(7, b"bridge-out".to_vec(), b"bridge-err".to_vec())
             .expect("response should send");
     });
 

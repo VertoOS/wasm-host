@@ -371,6 +371,16 @@ pub struct VirtualProcessRequest {
     response_sender: mpsc::Sender<VirtualProcessResponseEvent>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VirtualProcessInvocation {
+    pub handler_token: u64,
+    pub executable_path: String,
+    pub argv: Vec<String>,
+    pub cwd: String,
+    pub env: HashMap<String, String>,
+    pub stdin: Vec<u8>,
+}
+
 #[derive(Debug)]
 enum VirtualProcessResponseEvent {
     Stdout(Vec<u8>),
@@ -731,10 +741,36 @@ impl VirtualProcessRequest {
         self.cancellation.clone()
     }
 
+    pub fn invocation(&self) -> Result<VirtualProcessInvocation> {
+        let payload: VirtualProcessPayload =
+            serde_json::from_slice(&self.payload).context("invalid virtual process payload")?;
+        let stdin = BASE64
+            .decode(payload.stdin)
+            .context("invalid virtual process stdin")?;
+        Ok(VirtualProcessInvocation {
+            handler_token: payload.handler_token,
+            executable_path: payload.executable_path,
+            argv: payload.argv,
+            cwd: payload.cwd,
+            env: payload.env,
+            stdin,
+        })
+    }
+
     pub fn respond(&self, response: Vec<u8>) -> Result<()> {
         self.response_sender
             .send(VirtualProcessResponseEvent::Complete(response))
             .map_err(|_| anyhow!("virtual process response receiver closed"))
+    }
+
+    pub fn respond_process(&self, returncode: i32, stdout: Vec<u8>, stderr: Vec<u8>) -> Result<()> {
+        self.respond(encode_virtual_process_response(
+            &VirtualProcessResponsePayload {
+                returncode,
+                stdout,
+                stderr,
+            },
+        ))
     }
 
     pub fn write_stdout(&self, data: Vec<u8>) -> Result<()> {

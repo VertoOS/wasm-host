@@ -29,6 +29,7 @@ The first conformance slice covers:
 - filesystem event emission for create/modify/rename/delete
 - read-only and writable host mounts
 - virtual executable dispatch through the host bridge
+- typed virtual process invocation/response helpers for host adapters
 - virtual process exit-code/stderr propagation
 - process stdout/stderr streaming while preserving captured output, including
   host-backed virtual process output chunks before final response

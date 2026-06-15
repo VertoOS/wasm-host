@@ -5,15 +5,17 @@ use std::{
     fs::File,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::ExitCode,
+    process::{Command, ExitCode, Stdio},
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use anyhow::Context;
 use serde_json::{json, Map, Value};
 use wasm_host_core::{
     CancellationSource, EventBus, HostMount, HostProfile, Limits, OutputSink, OutputSinks,
     PackageCommandAlias, PackageSpec, RunError, RunErrorKind, RunRequest, SandboxOptions,
-    SandboxState, VirtualExecutableBridge,
+    SandboxState, VirtualExecutableBridge, VirtualProcessInvocation, VirtualProcessRequest,
 };
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
@@ -65,7 +67,7 @@ fn run() -> Result<i32, RunnerError> {
         .map_err(RunnerError::host)?;
 
     let (events, _event_receiver) = EventBus::new(DEFAULT_EVENT_QUEUE_SIZE);
-    let (virtual_executables, _virtual_process_receiver) =
+    let (virtual_executables, virtual_process_receiver) =
         VirtualExecutableBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
     let package = PackageSpec {
         name: package_name.clone(),
@@ -79,7 +81,7 @@ fn run() -> Result<i32, RunnerError> {
     let state = match SandboxState::new_with_profile_and_options(
         options.profile,
         HashMap::new(),
-        options.host_mounts,
+        options.host_mounts.clone(),
         vec![package],
         options.cwd,
         options.env,
@@ -95,6 +97,17 @@ fn run() -> Result<i32, RunnerError> {
             return Err(RunnerError::host_reported(error, options.event_format));
         }
     };
+    if let Err(error) = register_host_commands(&state, &options.host_commands) {
+        reporter
+            .runner_failed("sandbox", EXIT_HOST, &error, started_at.elapsed())
+            .map_err(RunnerError::host)?;
+        return Err(RunnerError::host_reported(error, options.event_format));
+    }
+    let _host_command_worker = HostCommandWorker::spawn(
+        options.host_commands.clone(),
+        options.host_mounts.clone(),
+        virtual_process_receiver,
+    );
     reporter
         .sandbox_initialized(&package_name)
         .map_err(RunnerError::host)?;
@@ -209,6 +222,7 @@ struct Options {
     module_cache_dir: Option<PathBuf>,
     package_name: Option<String>,
     command_aliases: Vec<PackageCommandAlias>,
+    host_commands: Vec<HostCommandSpec>,
     host_mounts: Vec<HostMount>,
     cwd: String,
     env: HashMap<String, String>,
@@ -216,6 +230,16 @@ struct Options {
     output_limit: usize,
     timeout_seconds: Option<f64>,
     command: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HostCommandSpec {
+    guest_path: String,
+    host_command: PathBuf,
+}
+
+struct HostCommandWorker {
+    _handle: thread::JoinHandle<()>,
 }
 
 struct RunFailure {
@@ -342,6 +366,7 @@ fn runner_started_event(options: &Options, package_name: &str) -> Value {
         "argv0": options.command.first().map(String::as_str),
         "argc": options.command.len(),
         "alias_count": options.command_aliases.len(),
+        "host_command_count": options.host_commands.len(),
         "mount_count": options.host_mounts.len(),
         "env_keys": env_keys,
         "env_count": options.env.len(),
@@ -405,6 +430,7 @@ impl Options {
         let mut module_cache_dir = None;
         let mut package_name = None;
         let mut command_aliases = Vec::new();
+        let mut host_commands = Vec::new();
         let mut host_mounts = Vec::new();
         let mut cwd = "/work".to_string();
         let mut env = HashMap::new();
@@ -445,6 +471,12 @@ impl Options {
                 "--alias" => {
                     command_aliases.push(parse_alias(&next_value(&mut args, "--alias")?)?);
                 }
+                "--host-command" => {
+                    host_commands.push(parse_host_command(&next_value(
+                        &mut args,
+                        "--host-command",
+                    )?)?);
+                }
                 "--mount" => {
                     host_mounts.push(parse_mount(&next_value(&mut args, "--mount")?)?);
                 }
@@ -479,6 +511,11 @@ impl Options {
         if command.is_empty() {
             return Err(anyhow::anyhow!("missing command after --"));
         }
+        if !host_commands.is_empty() && profile != HostProfile::NativeFull {
+            return Err(anyhow::anyhow!(
+                "--host-command requires --profile native-full"
+            ));
+        }
 
         Ok(Self {
             webc,
@@ -487,6 +524,7 @@ impl Options {
             module_cache_dir,
             package_name,
             command_aliases,
+            host_commands,
             host_mounts,
             cwd,
             env,
@@ -530,6 +568,27 @@ fn parse_alias(value: &str) -> anyhow::Result<PackageCommandAlias> {
     Ok(PackageCommandAlias {
         alias: alias.to_string(),
         command: command.to_string(),
+    })
+}
+
+fn parse_host_command(value: &str) -> anyhow::Result<HostCommandSpec> {
+    let (guest_path, host_command) = value
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("expected GUEST_PATH=HOST_COMMAND"))?;
+    if guest_path.is_empty() || !guest_path.starts_with('/') {
+        return Err(anyhow::anyhow!(
+            "host command guest path must be an absolute sandbox path"
+        ));
+    }
+    let host_command = PathBuf::from(host_command);
+    if host_command.as_os_str().is_empty() || !host_command.is_absolute() {
+        return Err(anyhow::anyhow!(
+            "host command target must be an absolute host path"
+        ));
+    }
+    Ok(HostCommandSpec {
+        guest_path: guest_path.to_string(),
+        host_command,
     })
 }
 
@@ -622,6 +681,222 @@ fn duration_ms(duration: Duration) -> u64 {
     duration.as_millis().min(u64::MAX as u128) as u64
 }
 
+fn register_host_commands(
+    state: &SandboxState,
+    host_commands: &[HostCommandSpec],
+) -> anyhow::Result<()> {
+    for (index, spec) in host_commands.iter().enumerate() {
+        state
+            .register_virtual_executable(
+                host_command_token(index),
+                vec![spec.guest_path.clone()],
+                false,
+            )
+            .with_context(|| {
+                format!(
+                    "unable to register host command bridge at {}",
+                    spec.guest_path
+                )
+            })?;
+    }
+    Ok(())
+}
+
+fn host_command_token(index: usize) -> u64 {
+    index as u64 + 1
+}
+
+impl HostCommandWorker {
+    fn spawn(
+        host_commands: Vec<HostCommandSpec>,
+        host_mounts: Vec<HostMount>,
+        mut receiver: tokio::sync::mpsc::Receiver<VirtualProcessRequest>,
+    ) -> Option<Self> {
+        if host_commands.is_empty() {
+            return None;
+        }
+
+        let commands = host_commands
+            .into_iter()
+            .enumerate()
+            .map(|(index, spec)| (host_command_token(index), spec))
+            .collect::<HashMap<_, _>>();
+        Some(Self {
+            _handle: thread::spawn(move || {
+                while let Some(request) = receiver.blocking_recv() {
+                    if let Err(error) =
+                        handle_host_command_request(&request, &commands, &host_mounts)
+                    {
+                        let _ = request.respond_process(
+                            126,
+                            Vec::new(),
+                            format!("host command bridge failed: {error:#}\n").into_bytes(),
+                        );
+                    }
+                }
+            }),
+        })
+    }
+}
+
+fn handle_host_command_request(
+    request: &VirtualProcessRequest,
+    commands: &HashMap<u64, HostCommandSpec>,
+    host_mounts: &[HostMount],
+) -> anyhow::Result<()> {
+    let invocation = request.invocation()?;
+    let spec = commands.get(&invocation.handler_token).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown host command bridge token: {}",
+            invocation.handler_token
+        )
+    })?;
+    run_host_command(request, &invocation, spec, host_mounts)
+}
+
+fn run_host_command(
+    request: &VirtualProcessRequest,
+    invocation: &VirtualProcessInvocation,
+    spec: &HostCommandSpec,
+    host_mounts: &[HostMount],
+) -> anyhow::Result<()> {
+    let mut command = Command::new(&spec.host_command);
+    command
+        .args(invocation.argv.iter().skip(1))
+        .env_clear()
+        .envs(&invocation.env)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(cwd) = map_guest_path_to_host(&invocation.cwd, host_mounts) {
+        command.current_dir(cwd);
+    }
+
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "unable to spawn host command {} for {}",
+            spec.host_command.display(),
+            invocation.executable_path
+        )
+    })?;
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let stdin_handle = stdin.map(|mut stdin| {
+        let input = invocation.stdin.clone();
+        thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        })
+    });
+    let stdout_handle =
+        stdout.map(|stdout| stream_host_command_output(stdout, request.clone(), true));
+    let stderr_handle =
+        stderr.map(|stderr| stream_host_command_output(stderr, request.clone(), false));
+
+    let status = loop {
+        if request.cancellation_token().is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+
+    if let Some(handle) = stdin_handle {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stdout_handle {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stderr_handle {
+        let _ = handle.join();
+    }
+
+    request.respond_process(exit_status_code(status), Vec::new(), Vec::new())
+}
+
+fn stream_host_command_output(
+    mut reader: impl Read + Send + 'static,
+    request: VirtualProcessRequest,
+    stdout: bool,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let count = match reader.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(count) => count,
+                Err(_) => return,
+            };
+            let data = buffer[..count].to_vec();
+            let result = if stdout {
+                request.write_stdout(data)
+            } else {
+                request.write_stderr(data)
+            };
+            if result.is_err() {
+                return;
+            }
+        }
+    })
+}
+
+fn map_guest_path_to_host(guest_path: &str, host_mounts: &[HostMount]) -> Option<PathBuf> {
+    let mut best: Option<(&HostMount, &str)> = None;
+    for mount in host_mounts {
+        if let Some(relative) = guest_path_relative_to_mount(guest_path, &mount.target) {
+            let replace = best
+                .as_ref()
+                .is_none_or(|(existing, _)| mount.target.len() > existing.target.len());
+            if replace {
+                best = Some((mount, relative));
+            }
+        }
+    }
+
+    let (mount, relative) = best?;
+    let mut path = PathBuf::from(&mount.source);
+    if !relative.is_empty() {
+        path.push(relative);
+    }
+    Some(path)
+}
+
+fn guest_path_relative_to_mount<'a>(guest_path: &'a str, mount_target: &str) -> Option<&'a str> {
+    if mount_target == "/" {
+        return Some(guest_path.trim_start_matches('/'));
+    }
+    if guest_path == mount_target {
+        return Some("");
+    }
+    guest_path
+        .strip_prefix(mount_target)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+}
+
+fn exit_status_code(status: std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    signal_exit_code(status)
+}
+
+#[cfg(unix)]
+fn signal_exit_code(status: std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+
+    status.signal().map_or(1, |signal| 128 + signal)
+}
+
+#[cfg(not(unix))]
+fn signal_exit_code(_status: std::process::ExitStatus) -> i32 {
+    1
+}
+
 fn print_usage() {
     println!(
         "\
@@ -640,6 +915,9 @@ Options:
                              Defaults to XDG_CACHE_HOME/HOME/temp fallback
   --package <name>           Logical package name, defaults to file stem
   --alias <ALIAS=COMMAND>    Expose an extra command alias from the package
+  --host-command <GUEST=HOST>
+                             Register an approved native host command bridge;
+                             requires native-full and an absolute host path
   --mount <HOST:GUEST[:ro|rw]>
                              Mount a host directory into the sandbox; requires native-full
   --cwd <path>               Sandbox cwd, default /work
@@ -703,6 +981,72 @@ mod tests {
             Some(PathBuf::from(".cache/modules"))
         );
         assert_eq!(options.command, ["tool"]);
+    }
+
+    #[test]
+    fn parse_accepts_native_host_command_bridge() {
+        let options = Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--profile",
+            "native-full",
+            "--host-command",
+            "/tools/echo=/bin/echo",
+            "--",
+            "tool",
+        ]))
+        .expect("options should parse");
+
+        assert_eq!(
+            options.host_commands,
+            [HostCommandSpec {
+                guest_path: "/tools/echo".to_string(),
+                host_command: PathBuf::from("/bin/echo"),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_rejects_host_command_without_native_full_profile() {
+        let error = match Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--host-command",
+            "/tools/echo=/bin/echo",
+            "--",
+            "tool",
+        ])) {
+            Ok(_) => panic!("host command bridge should require native-full"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("native-full"));
+    }
+
+    #[test]
+    fn host_command_cwd_uses_longest_matching_mount() {
+        let mounts = vec![
+            HostMount {
+                source: "/tmp/root".to_string(),
+                target: "/workspace".to_string(),
+                read_only: true,
+            },
+            HostMount {
+                source: "/tmp/project".to_string(),
+                target: "/workspace/project".to_string(),
+                read_only: true,
+            },
+        ];
+
+        assert_eq!(
+            map_guest_path_to_host("/workspace/project/src", &mounts),
+            Some(PathBuf::from("/tmp/project/src"))
+        );
+        assert_eq!(
+            map_guest_path_to_host("/workspace/other", &mounts),
+            Some(PathBuf::from("/tmp/root/other"))
+        );
+        assert_eq!(map_guest_path_to_host("/unmounted", &mounts), None);
     }
 
     #[test]
@@ -797,6 +1141,10 @@ mod tests {
                 alias: "alias".to_string(),
                 command: "tool".to_string(),
             }],
+            host_commands: vec![HostCommandSpec {
+                guest_path: "/tools/host-tool".to_string(),
+                host_command: PathBuf::from("/bin/echo"),
+            }],
             host_mounts: vec![HostMount {
                 source: ".".to_string(),
                 target: "/workspace".to_string(),
@@ -827,6 +1175,7 @@ mod tests {
         assert_eq!(event["argv0"], "tool");
         assert_eq!(event["argc"], 2);
         assert_eq!(event["alias_count"], 1);
+        assert_eq!(event["host_command_count"], 1);
         assert_eq!(event["mount_count"], 1);
         assert_eq!(event["env_keys"], json!(["PUBLIC", "SECRET"]));
         assert_eq!(event["env_count"], 2);

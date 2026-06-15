@@ -46,6 +46,13 @@ The runner defaults to `--profile browser-strict`, which rejects native host
 mounts. Use `--profile native-full` for local development scenarios that mount
 host directories.
 
+Use `--host-command /guest/path=/absolute/host/tool` with `--profile native-full`
+to register an explicit native host-command bridge. This is for fast terminal
+adapter testing of process behavior; it is not available in `browser-strict`.
+The bridge streams stdout/stderr back through the same output path as package
+processes and maps guest cwd to a host cwd when it falls under a configured
+mount.
+
 The runner validates the package before runtime setup. Missing or invalid WebC
 inputs fail with exit code `65`; command-line usage errors fail with exit code
 `2`; unresolved commands fail with exit code `127`; wall-time timeouts fail with

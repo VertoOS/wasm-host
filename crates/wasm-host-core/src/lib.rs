@@ -4298,6 +4298,57 @@ mod tests {
     }
 
     #[test]
+    fn http_bridge_device_preserves_policy_error_kinds() {
+        let cases = [
+            (
+                HttpBridgeError::gateway_unavailable("local gateway is not running"),
+                "gateway_unavailable",
+            ),
+            (
+                HttpBridgeError::auth_failure("gateway authentication failed"),
+                "auth_failure",
+            ),
+            (
+                HttpBridgeError::cors("request blocked by origin policy"),
+                "cors",
+            ),
+            (
+                HttpBridgeError::transport("TLS handshake failed"),
+                "transport",
+            ),
+        ];
+
+        for (error, expected_kind) in cases {
+            let expected_message = error.message.clone();
+            let (bridge, mut http_receiver) = HttpBridge::new(4);
+            let handler = std::thread::spawn(move || {
+                let request = http_receiver
+                    .blocking_recv()
+                    .expect("HTTP request should arrive");
+                request.fail(error).expect("HTTP error should send");
+            });
+            let payload = serde_json::json!({
+                "method": "get",
+                "url": "https://example.test/policy",
+            });
+
+            let output = handle_http_bridge_device_request(
+                &bridge,
+                &serde_json::to_vec(&payload).expect("payload should encode"),
+                Some(Duration::from_secs(5)),
+                CancellationSource::new().token(),
+            );
+            handler.join().expect("handler should finish");
+
+            let value: serde_json::Value =
+                serde_json::from_slice(&output).expect("response should be JSON");
+            assert_eq!(value["ok"], false);
+            assert_eq!(value["error"]["kind"], expected_kind);
+            assert_eq!(value["error"]["message"], expected_message);
+        }
+    }
+
+    #[test]
     fn command_path_normalization_uses_cwd_for_relative_paths() {
         let path = normalize_command_path("./tool", Path::new("/work")).unwrap();
         assert_eq!(path, PathBuf::from("/work/tool"));

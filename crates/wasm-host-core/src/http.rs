@@ -1410,6 +1410,34 @@ mod tests {
     }
 
     #[test]
+    fn native_http_bridge_rejects_userinfo_without_leaking_secret_url_parts() {
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let error = bridge
+            .request_blocking(
+                HttpRequest::new(
+                    "GET",
+                    "http://user:secret@127.0.0.1:80/private?token=secret",
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("request should normalize"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect_err("native worker should reject userinfo");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::InvalidRequest);
+        assert_eq!(
+            error.message,
+            "HTTP request URL must include a host without userinfo"
+        );
+        assert!(!error.message.contains("secret"));
+        assert!(!error.message.contains("token"));
+        assert!(!error.message.contains("private"));
+    }
+
+    #[test]
     fn native_http_bridge_rejects_https_until_tls_adapter_exists() {
         let (bridge, receiver) = HttpBridge::new(4);
         let _worker = NativeHttpBridgeWorker::spawn(receiver);

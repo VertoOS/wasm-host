@@ -139,6 +139,33 @@ limit. Browser adapters should map this to per-request Fetch/gateway
 aborts and return the same structured `timeout` error that the native bridge
 returns, while still respecting any stricter outer sandbox timeout.
 
+### HTTP Scheme And Gateway Policy
+
+The logical HTTP bridge accepts normalized `http://` and `https://` request
+URLs. Concrete adapters decide how those URLs are dispatched:
+
+| Adapter | Supported request schemes | Policy |
+| --- | --- | --- |
+| Native `--http-bridge native` | `http://` only | Direct plain HTTP for deterministic local and terminal-runner tests. `https://` returns `unsupported_scheme` until a gateway or TLS adapter exists. |
+| Browser Fetch | Browser-allowed `http://` and `https://` | Browser security policy wins. Mixed content, CORS, credential mode, and permission failures are reported as bridge errors rather than bypassed. |
+| Gateway | `http://` and `https://` if the gateway allows them | The gateway owns DNS, TLS, auth, CORS/proxy policy, and upstream transport behavior. |
+
+Error mapping is part of the bridge contract:
+
+| Failure | Bridge error kind |
+| --- | --- |
+| Unsupported URL scheme or adapter-disabled scheme | `unsupported_scheme` |
+| Gateway process unavailable, closed dispatcher, or unreachable gateway endpoint | `gateway_unavailable` |
+| Gateway credential/session failure, missing auth token, or rejected secret provider | `auth_failure` |
+| Browser Fetch CORS denial, mixed-content block, or gateway origin-policy denial | `cors` |
+| TLS/certificate/handshake failure before an HTTP response is available | `transport` |
+| Request timeout or adapter abort caused by `timeout_ms` or the sandbox wall-time limit | `timeout` |
+
+HTTP status codes such as `401`, `403`, and `5xx` remain successful bridge
+responses unless the adapter itself cannot dispatch the request. Errors and
+events must not include full URLs, auth headers, cookies, bearer tokens, or
+secret-bearing query strings.
+
 ## Full CLI Target
 
 The browser-capable CLI target should be a sandboxed CLI runtime, not a native

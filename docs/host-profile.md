@@ -193,6 +193,19 @@ while reading. Browser `TypeError` fetch failures are classified as `cors`
 because browsers intentionally collapse CORS, mixed-content, policy, and some
 network failures into opaque Fetch errors.
 
+The browser gateway transport also lives in `apps/web/src/http.js`. It posts the
+same JSON or newline-delimited JSON gateway envelope to a configured endpoint,
+defaults gateway endpoint credentials to `same-origin`, streams upload frames
+with `ReadableStream`, streams gateway response frames back through the bridge
+writer, and maps gateway endpoint status or wire errors into the bridge error
+vocabulary. Browser adapters should prefer direct Fetch only when the target
+URL is browser-reachable under normal browser security policy. Requests that
+need server-side DNS/TLS behavior, private credentials, proxy policy,
+non-browser origins, or centralized upstream auth should go through a gateway.
+Generated gateway transport errors must not include configured gateway endpoint
+URLs, request URLs, auth headers, cookies, bearer tokens, or secret-bearing
+query strings.
+
 The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json

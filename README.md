@@ -23,10 +23,12 @@ until the boundaries are stable enough to split.
   request dispatch, clean errors, response limits, and cancellation.
 - The native runner can expose an opt-in HTTP bridge device for guest packages
   through `/dev/wasm-host-http`.
+- The browser adapter package has deterministic direct Fetch and
+  gateway-backed HTTP transport tests.
 - C ABI and initial Python/Go binding smoke tests are implemented, including
   generated WebC success-path fixtures.
-- Browser adapter, packaged runtime artifacts, and full language WebC e2e
-  coverage are not implemented yet.
+- Browser worker/runtime wiring, packaged runtime artifacts, and full language
+  WebC e2e coverage are not implemented yet.
 
 ## Run A WebC Package
 
@@ -155,8 +157,8 @@ with `WASM_HOST_GO_COMMAND` and `WASM_HOST_GO_ARGS`.
 
 ## Web Adapter Tests
 
-The browser adapter package currently owns direct Fetch transport code and
-deterministic browser-networking tests. Run them with:
+The browser adapter package currently owns direct Fetch and gateway-backed
+transport code plus deterministic browser-networking tests. Run them with:
 
 ```sh
 npm --prefix apps/web run check

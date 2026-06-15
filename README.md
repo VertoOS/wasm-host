@@ -69,7 +69,8 @@ device: first `{"type":"request", ...}`, then zero or more
 Use `--http-bridge gateway=http://127.0.0.1:PORT/bridge` to route the same
 guest HTTP bridge requests through a local gateway endpoint instead of direct
 plain HTTP. Runner events record the bridge mode as `gateway` and intentionally
-omit the gateway endpoint URL.
+omit the gateway endpoint URL. Buffered bridge requests are sent as a JSON
+envelope; streaming uploads are sent as chunked newline-delimited JSON frames.
 
 The runner validates the package before runtime setup. Missing or invalid WebC
 inputs fail with exit code `65`; command-line usage errors fail with exit code

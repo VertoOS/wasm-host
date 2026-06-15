@@ -335,11 +335,29 @@ fn gateway_http_bridge_preserves_streaming_upload_chunks() {
     assert_eq!(response["response"]["body_base64"], "dXBsb2FkLW9r");
 
     let request = gateway.request();
-    assert_eq!(request.body["method"], "POST");
-    assert_eq!(request.body["url"], "https://example.test/upload");
+    assert!(
+        request
+            .head
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked\r\n"),
+        "gateway streaming request should use chunked transfer encoding:\n{}",
+        request.head
+    );
     assert_eq!(
-        request.body["body_chunks_base64"],
-        json!(["Z3Vlc3Qt", "dXBsb2Fk"])
+        request.frames,
+        vec![
+            json!({
+                "type": "request",
+                "schema": 1,
+                "id": 1,
+                "method": "POST",
+                "url": "https://example.test/upload",
+                "headers": [{"name": "x-fixture", "value": "wasm-host-runner"}]
+            }),
+            json!({"type": "body_chunk", "body_base64": "Z3Vlc3Qt"}),
+            json!({"type": "body_chunk", "body_base64": "dXBsb2Fk"}),
+            json!({"type": "body_end"}),
+        ]
     );
 }
 
@@ -597,6 +615,7 @@ struct GatewayHttpServer {
 struct GatewayHttpRequestCapture {
     head: String,
     body: Value,
+    frames: Vec<Value>,
 }
 
 impl GatewayHttpServer {
@@ -606,8 +625,7 @@ impl GatewayHttpServer {
         let (request_sender, request_receiver) = mpsc::sync_channel(1);
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept gateway request");
-            let (head, body) = read_test_http_request_with_body(&mut stream);
-            let body: Value = serde_json::from_slice(&body).expect("gateway body should be JSON");
+            let request = read_gateway_http_request(&mut stream);
             let response_body =
                 serde_json::to_vec(&response_body).expect("gateway response should encode");
             write!(
@@ -620,7 +638,7 @@ impl GatewayHttpServer {
                 .write_all(&response_body)
                 .expect("write gateway response body");
             request_sender
-                .send(GatewayHttpRequestCapture { head, body })
+                .send(request)
                 .expect("send captured gateway request");
         });
         Self {
@@ -679,6 +697,21 @@ fn read_test_http_request_with_body(stream: &mut TcpStream) -> (String, Vec<u8>)
     };
     let mut body = data.split_off(header_end);
     let head = String::from_utf8(data).expect("HTTP request head should be UTF-8");
+    if head
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
+        while !body.ends_with(b"0\r\n\r\n") {
+            let length = stream.read(&mut buffer).expect("read chunked HTTP body");
+            assert!(length > 0, "chunked HTTP body ended early");
+            body.extend_from_slice(&buffer[..length]);
+            assert!(
+                body.len() <= 1024 * 1024,
+                "chunked HTTP body exceeded 1 MiB"
+            );
+        }
+        return (head, body);
+    }
     let content_length = content_length_from_head(&head);
     while body.len() < content_length {
         let length = stream.read(&mut buffer).expect("read HTTP request body");
@@ -691,6 +724,59 @@ fn read_test_http_request_with_body(stream: &mut TcpStream) -> (String, Vec<u8>)
     }
     body.truncate(content_length);
     (head, body)
+}
+
+fn read_gateway_http_request(stream: &mut TcpStream) -> GatewayHttpRequestCapture {
+    let (head, body) = read_test_http_request_with_body(stream);
+    if head
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
+        let decoded = decode_test_chunked_body(&body);
+        let frames = decoded
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).expect("gateway frame should be JSON"))
+            .collect::<Vec<_>>();
+        return GatewayHttpRequestCapture {
+            head,
+            body: Value::Null,
+            frames,
+        };
+    }
+
+    let body: Value = serde_json::from_slice(&body).expect("gateway body should be JSON");
+    GatewayHttpRequestCapture {
+        head,
+        body,
+        frames: Vec::new(),
+    }
+}
+
+fn decode_test_chunked_body(body: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::new();
+    let mut offset = 0;
+    loop {
+        let line_end = find_bytes(&body[offset..], b"\r\n").expect("chunk size should end in CRLF");
+        let size_text = std::str::from_utf8(&body[offset..offset + line_end])
+            .expect("chunk size should be UTF-8");
+        let size = usize::from_str_radix(size_text.trim(), 16).expect("chunk size should be hex");
+        offset += line_end + 2;
+        if size == 0 {
+            break;
+        }
+        decoded.extend_from_slice(&body[offset..offset + size]);
+        offset += size;
+        assert_eq!(&body[offset..offset + 2], b"\r\n");
+        offset += 2;
+    }
+    decoded
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn content_length_from_head(head: &str) -> usize {

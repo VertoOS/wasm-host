@@ -152,6 +152,22 @@ struct GatewayWireRequest {
     body_chunks_base64: Vec<String>,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum GatewayStreamWireRequestFrame {
+    Request {
+        schema: u32,
+        id: u64,
+        method: String,
+        url: String,
+        headers: Vec<GatewayWireHeader>,
+    },
+    BodyChunk {
+        body_base64: String,
+    },
+    BodyEnd,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct GatewayWireHeader {
     name: String,
@@ -378,6 +394,10 @@ impl GatewayHttpRequestBodyReader {
         }
         Ok(body)
     }
+
+    fn is_streaming(&self) -> bool {
+        self.stream_request.is_some()
+    }
 }
 
 impl GatewayHttpResponse {
@@ -438,6 +458,10 @@ impl GatewayHttpTransport for NativeGatewayHttpTransport {
         request: GatewayHttpRequest,
         cancellation: CancellationToken,
     ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
+        if request.body.is_streaming() {
+            return self.dispatch_streaming_request(request, cancellation);
+        }
+
         let wire_request = encode_gateway_wire_request(request)?;
         let body = serde_json::to_vec(&wire_request).map_err(|error| {
             HttpBridgeError::invalid_request(format!(
@@ -468,6 +492,39 @@ impl GatewayHttpTransport for NativeGatewayHttpTransport {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeGatewayHttpTransport {
+    fn dispatch_streaming_request(
+        &self,
+        request: GatewayHttpRequest,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
+        let endpoint = self.endpoint.clone();
+        let response = self
+            .bridge
+            .request_streaming_blocking(
+                HttpRequest::new(
+                    "POST",
+                    endpoint,
+                    vec![
+                        HttpHeader::new("content-type", "application/x-ndjson")?,
+                        HttpHeader::new("accept", "application/json")?,
+                    ],
+                    Vec::new(),
+                )?,
+                HttpRequestLimits {
+                    response_body_bytes: HTTP_GATEWAY_RESPONSE_BODY_LIMIT,
+                    wall_time: None,
+                },
+                cancellation,
+                move |body| write_gateway_streaming_request_body(body, request),
+            )
+            .map_err(map_gateway_endpoint_error)?;
+
+        decode_gateway_endpoint_response(response)
+    }
+}
+
 fn encode_gateway_wire_request(
     mut request: GatewayHttpRequest,
 ) -> std::result::Result<GatewayWireRequest, HttpBridgeError> {
@@ -491,6 +548,49 @@ fn encode_gateway_wire_request(
             .collect(),
         body_chunks_base64,
     })
+}
+
+fn write_gateway_streaming_request_body(
+    body: &mut HttpRequestBodyWriter,
+    mut request: GatewayHttpRequest,
+) -> std::result::Result<(), HttpBridgeError> {
+    write_gateway_stream_frame(
+        body,
+        &GatewayStreamWireRequestFrame::Request {
+            schema: 1,
+            id: request.id,
+            method: request.method,
+            url: request.url,
+            headers: request
+                .headers
+                .into_iter()
+                .map(|header| GatewayWireHeader {
+                    name: header.name,
+                    value: header.value,
+                })
+                .collect(),
+        },
+    )?;
+    while let Some(chunk) = request.body.read_chunk_blocking()? {
+        write_gateway_stream_frame(
+            body,
+            &GatewayStreamWireRequestFrame::BodyChunk {
+                body_base64: BASE64.encode(chunk),
+            },
+        )?;
+    }
+    write_gateway_stream_frame(body, &GatewayStreamWireRequestFrame::BodyEnd)
+}
+
+fn write_gateway_stream_frame(
+    body: &mut HttpRequestBodyWriter,
+    frame: &GatewayStreamWireRequestFrame,
+) -> std::result::Result<(), HttpBridgeError> {
+    let mut data = serde_json::to_vec(frame).map_err(|error| {
+        HttpBridgeError::invalid_request(format!("unable to encode HTTP gateway frame: {error}"))
+    })?;
+    data.push(b'\n');
+    body.write_chunk_blocking(data)
 }
 
 fn decode_gateway_endpoint_response(

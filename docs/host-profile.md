@@ -179,8 +179,7 @@ path used by every other HTTP bridge caller. A browser Fetch transport or local
 gateway transport should implement that trait rather than defining a separate
 HTTP contract.
 
-The initial terminal gateway wire format is JSON over `POST` to the configured
-gateway endpoint:
+The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json
 {
@@ -203,6 +202,22 @@ guest device:
 ```json
 {"ok":false,"error":{"kind":"cors","message":"request blocked by gateway policy"}}
 ```
+
+For streaming request bodies, the terminal gateway sends
+`Content-Type: application/x-ndjson` with chunked transfer encoding. The first
+line is a request frame, followed by zero or more body chunks, then an explicit
+end frame:
+
+```json
+{"type":"request","schema":1,"id":1,"method":"POST","url":"https://example.test/upload","headers":[]}
+{"type":"body_chunk","body_base64":"Z3Vlc3Qt"}
+{"type":"body_chunk","body_base64":"dXBsb2Fk"}
+{"type":"body_end"}
+```
+
+The buffered JSON envelope is acceptable for small, non-streaming requests.
+Streaming request frames are required when the guest provides a streaming upload
+or when an adapter cannot safely collect the full request body before dispatch.
 
 Endpoint URLs are configuration, not telemetry. Runner events expose the bridge
 mode as `gateway` but must not include the configured gateway URL.

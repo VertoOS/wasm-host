@@ -8,8 +8,18 @@ Run the current native conformance harness with:
 tests/conformance/run.sh
 ```
 
-The core runtime defaults to the `browser-strict` profile. Tests that exercise
-native-only host mounts opt into `native-full` explicitly.
+The harness defaults to both supported host profiles:
+
+```sh
+tests/conformance/run.sh --profile all
+tests/conformance/run.sh --profile browser-strict
+tests/conformance/run.sh --profile native-full
+```
+
+The core runtime defaults to the `browser-strict` profile. Profile-neutral tests
+run under whichever profile the harness selects. Tests that require native-only
+host mounts run only under `native-full`; tests that prove browser-safe mount
+rejection run only under `browser-strict`.
 
 The first conformance slice covers:
 
@@ -25,8 +35,8 @@ The first conformance slice covers:
 
 These tests should eventually run against:
 
-- native full profile
 - native browser-strict profile
+- native full profile
 - browser adapter
 
 The goal is to prove filesystem, stdio, terminal, process, networking, and

@@ -25,6 +25,6 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --locked
       - name: Conformance harness
-        run: tests/conformance/run.sh
+        run: tests/conformance/run.sh --profile all
       - name: Language e2e harness
         run: tests/e2e/languages/run.sh

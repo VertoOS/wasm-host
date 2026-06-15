@@ -15,15 +15,26 @@ use wasm_host_core::{
 };
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
+const CONFORMANCE_PROFILE_ENV: &str = "WASM_HOST_CONFORMANCE_PROFILE";
 
-fn sandbox_with_profile(
+fn selected_profile() -> HostProfile {
+    match std::env::var(CONFORMANCE_PROFILE_ENV) {
+        Ok(value) => HostProfile::parse(&value).unwrap_or_else(|error| {
+            panic!("{CONFORMANCE_PROFILE_ENV} must be a valid host profile: {error:#}")
+        }),
+        Err(std::env::VarError::NotPresent) => HostProfile::default(),
+        Err(error) => panic!("{CONFORMANCE_PROFILE_ENV} must be valid UTF-8: {error}"),
+    }
+}
+
+fn sandbox_with_components(
     profile: HostProfile,
     files: HashMap<String, Option<Vec<u8>>>,
     host_mounts: Vec<HostMount>,
     env: HashMap<String, String>,
+    events: EventBus,
+    virtual_processes: VirtualExecutableBridge,
 ) -> SandboxState {
-    let (events, _event_receiver) = EventBus::new(64);
-    let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(64);
     SandboxState::new_with_profile(
         profile,
         files,
@@ -35,6 +46,17 @@ fn sandbox_with_profile(
         virtual_processes,
     )
     .expect("sandbox should initialize")
+}
+
+fn sandbox_with_profile(
+    profile: HostProfile,
+    files: HashMap<String, Option<Vec<u8>>>,
+    host_mounts: Vec<HostMount>,
+    env: HashMap<String, String>,
+) -> SandboxState {
+    let (events, _event_receiver) = EventBus::new(64);
+    let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(64);
+    sandbox_with_components(profile, files, host_mounts, env, events, virtual_processes)
 }
 
 fn limits() -> Limits {
@@ -61,7 +83,8 @@ fn virtual_command_sandbox() -> (
 ) {
     let (events, _event_receiver) = EventBus::new(64);
     let (virtual_processes, virtual_process_receiver) = VirtualExecutableBridge::new(64);
-    let state = SandboxState::new(
+    let state = SandboxState::new_with_profile(
+        selected_profile(),
         HashMap::new(),
         Vec::new(),
         Vec::new(),
@@ -82,16 +105,14 @@ fn virtual_filesystem_supports_read_write_list_and_events() {
     let (events, mut event_receiver) = EventBus::new(64);
     let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(64);
     events.set_enabled(true);
-    let state = SandboxState::new(
+    let state = sandbox_with_components(
+        selected_profile(),
         HashMap::new(),
         Vec::new(),
-        Vec::new(),
-        "/work".to_string(),
         HashMap::new(),
         events,
         virtual_processes,
-    )
-    .expect("sandbox should initialize");
+    );
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -130,16 +151,14 @@ fn virtual_filesystem_supports_rename_delete_symlink_and_events() {
     let (events, mut event_receiver) = EventBus::new(64);
     let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(64);
     events.set_enabled(true);
-    let state = SandboxState::new(
+    let state = sandbox_with_components(
+        selected_profile(),
         HashMap::new(),
         Vec::new(),
-        Vec::new(),
-        "/work".to_string(),
         HashMap::new(),
         events,
         virtual_processes,
-    )
-    .expect("sandbox should initialize");
+    );
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -247,6 +266,10 @@ fn virtual_filesystem_supports_rename_delete_symlink_and_events() {
 
 #[test]
 fn host_mounts_can_be_read_only_or_writable() {
+    if selected_profile() != HostProfile::NativeFull {
+        return;
+    }
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -299,10 +322,15 @@ fn host_mounts_can_be_read_only_or_writable() {
 
 #[test]
 fn browser_strict_profile_rejects_host_mounts() {
+    if selected_profile() != HostProfile::BrowserStrict {
+        return;
+    }
+
     let source = tempdir().expect("tempdir should be created");
     let (events, _event_receiver) = EventBus::new(64);
     let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(64);
-    let result = SandboxState::new(
+    let result = SandboxState::new_with_profile(
+        HostProfile::BrowserStrict,
         HashMap::new(),
         vec![HostMount {
             source: source.path().to_string_lossy().to_string(),

@@ -27,6 +27,8 @@ until the boundaries are stable enough to split.
   gateway-backed HTTP transport tests.
 - The browser adapter package has an initial worker-side HTTP message runtime
   for pluggable direct/gateway dispatch.
+- The browser adapter package has a worker entrypoint and local worker-boundary
+  HTTP tests for direct Fetch, gateway, and cancellation behavior.
 - C ABI and initial Python/Go binding smoke tests are implemented, including
   generated WebC success-path fixtures.
 - Browser worker/runtime wiring, packaged runtime artifacts, and full language

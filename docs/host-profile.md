@@ -212,7 +212,11 @@ normalized request metadata, optional body chunks, timeouts, and response body
 limits; it accepts `http.cancel` messages for in-flight requests; and it emits
 `http.response.body`, `http.response.complete`, or `http.response.error` events.
 This is the worker-side message layer for pluggable direct/gateway transports.
-It is not yet the full WebC package startup or browser filesystem runtime.
+`apps/web/src/http-worker-entry.js` starts that runtime in a browser worker
+context. The local worker-boundary harness uses the same entrypoint through a
+Node worker and local HTTP fixtures for direct Fetch, gateway, and cancellation
+coverage. This is not yet the full WebC package startup or browser filesystem
+runtime.
 
 The terminal gateway uses JSON over `POST` for buffered requests:
 

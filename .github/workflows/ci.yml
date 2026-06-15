@@ -28,5 +28,7 @@ jobs:
         run: tests/bindings/run.sh
       - name: Conformance harness
         run: tests/conformance/run.sh --profile all
+      - name: Fixture harness
+        run: tests/fixtures/run.sh
       - name: Language e2e harness
         run: tests/e2e/languages/run.sh

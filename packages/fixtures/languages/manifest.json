@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "cache_dir_env": "WASM_HOST_FIXTURE_CACHE_DIR",
+  "artifacts": {
+    "python": {
+      "package": "python",
+      "description": "Python runtime package used by the language e2e smoke test.",
+      "source": {
+        "type": "webc-package",
+        "upstream": null,
+        "version": null
+      },
+      "storage": {
+        "path_env": "WASM_HOST_PYTHON_WEBC",
+        "url_env": "WASM_HOST_PYTHON_WEBC_URL",
+        "sha256_env": "WASM_HOST_PYTHON_WEBC_SHA256",
+        "cache_name": "python.webc"
+      },
+      "artifact": {
+        "path": null,
+        "url": null,
+        "sha256": null
+      },
+      "command": {
+        "env": "WASM_HOST_PYTHON_COMMAND",
+        "default": "python",
+        "args_env": "WASM_HOST_PYTHON_ARGS",
+        "default_args": [
+          "/workspace/python/smoke.py"
+        ],
+        "expected_marker": "PYTHON_E2E_OK"
+      }
+    },
+    "go": {
+      "package": "go",
+      "description": "Go toolchain or prebuilt smoke package used by the language e2e smoke test.",
+      "source": {
+        "type": "webc-package",
+        "upstream": null,
+        "version": null
+      },
+      "storage": {
+        "path_env": "WASM_HOST_GO_WEBC",
+        "url_env": "WASM_HOST_GO_WEBC_URL",
+        "sha256_env": "WASM_HOST_GO_WEBC_SHA256",
+        "cache_name": "go.webc"
+      },
+      "artifact": {
+        "path": null,
+        "url": null,
+        "sha256": null
+      },
+      "command": {
+        "env": "WASM_HOST_GO_COMMAND",
+        "default": "go",
+        "args_env": "WASM_HOST_GO_ARGS",
+        "default_args": [
+          "run",
+          "/workspace/go/smoke.go"
+        ],
+        "expected_marker": "GO_E2E_OK"
+      }
+    }
+  }
+}

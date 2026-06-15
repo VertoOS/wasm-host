@@ -21,8 +21,9 @@ until the boundaries are stable enough to split.
 - The host profile and monorepo layout are documented.
 - Core conformance covers the first HTTP bridge contract for adapter-owned
   request dispatch, clean errors, response limits, and cancellation.
-- Browser adapter, conformance fixtures, C ABI, and language bindings are
-  scaffolded but not implemented yet.
+- C ABI and initial Python/Go binding smoke tests are implemented.
+- Browser adapter, packaged runtime artifacts, and full language WebC e2e
+  coverage are not implemented yet.
 
 ## Run A WebC Package
 
@@ -69,6 +70,7 @@ packages/
 tests/
   conformance/         # host behavior tests shared by adapters
   e2e/                 # full runtime/language/application e2e tests
+  fixtures/            # fixture manifest and resolver checks
 vendor/
   wasmer-*             # backend patches required by the current runtime
 ```
@@ -81,17 +83,27 @@ Language e2e tests run code inside the host through `wasm-host-runner`.
 tests/e2e/languages/run.sh
 ```
 
-The script skips languages whose WebC package is not configured. To require a
-language:
+The script resolves package metadata through
+[`packages/fixtures/languages/manifest.json`](packages/fixtures/languages/manifest.json)
+and skips languages whose WebC package is not configured. To require a language:
 
 ```sh
 WASM_HOST_PYTHON_WEBC=/path/to/python.webc tests/e2e/languages/run.sh --require-python
 WASM_HOST_GO_WEBC=/path/to/go-toolchain.webc tests/e2e/languages/run.sh --require-go
 ```
 
-For Go, the default command is `go run /workspace/go/smoke.go`. A prebuilt Go
-fixture package can override that with `WASM_HOST_GO_COMMAND` and
-`WASM_HOST_GO_ARGS`.
+Artifacts can also come from URL-backed fixture inputs:
+
+```sh
+WASM_HOST_FIXTURE_CACHE_DIR=.cache/fixtures \
+WASM_HOST_PYTHON_WEBC_URL=https://example.invalid/python.webc.gz \
+WASM_HOST_PYTHON_WEBC_SHA256=<sha256-of-downloaded-file> \
+tests/e2e/languages/run.sh --require-python
+```
+
+For Go, the default command comes from the fixture manifest:
+`go run /workspace/go/smoke.go`. A prebuilt Go fixture package can override that
+with `WASM_HOST_GO_COMMAND` and `WASM_HOST_GO_ARGS`.
 
 ## Binding Tests
 

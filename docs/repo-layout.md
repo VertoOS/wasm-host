@@ -20,6 +20,7 @@ docs/                  # host profile and layout
 packages/
   fixtures/            # source and package fixtures
 tests/
+  bindings/            # C ABI wrapper smoke tests
   conformance/         # host behavior tests shared by adapters
   e2e/                 # language and application e2e flows
 vendor/                # patched backend dependencies

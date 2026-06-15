@@ -89,6 +89,17 @@ For Go, the default command is `go run /workspace/go/smoke.go`. A prebuilt Go
 fixture package can override that with `WASM_HOST_GO_COMMAND` and
 `WASM_HOST_GO_ARGS`.
 
+## Binding Tests
+
+Python and Go bindings wrap the shared C ABI. Run their smoke tests with:
+
+```sh
+tests/bindings/run.sh
+```
+
+The harness builds `wasm-host-c-api`, points Python at the produced dynamic
+library, and runs Go tests when Go is installed.
+
 ## Planning
 
 Planning and task tracking live in GitHub issues. Design/reference docs live in

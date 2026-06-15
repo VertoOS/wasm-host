@@ -95,6 +95,9 @@ vendor/
 ## Language E2E
 
 Language e2e tests run code inside the host through `wasm-host-runner`.
+When a language package is configured, the harness validates the guest JSON
+payload for the expected marker, cwd, `/tmp` writes, runtime metadata, and
+program args.
 
 ```sh
 tests/e2e/languages/run.sh

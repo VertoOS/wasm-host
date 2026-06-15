@@ -31,4 +31,6 @@ jobs:
       - name: Fixture harness
         run: tests/fixtures/run.sh
       - name: Language e2e harness
-        run: tests/e2e/languages/run.sh
+        run: |
+          tests/e2e/languages/test-validator.sh
+          tests/e2e/languages/run.sh

@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LANG_ROOT="$ROOT/tests/e2e/languages"
 MANIFEST="$ROOT/packages/fixtures/languages/manifest.json"
 RESOLVER="$ROOT/packages/fixtures/languages/resolve.py"
+VALIDATOR="$LANG_ROOT/validate_output.py"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -131,7 +132,10 @@ run_language() {
     "$WASM_HOST_RESOLVED_COMMAND" \
     "${args[@]}")"
   printf '%s\n' "$output"
-  grep -q "$WASM_HOST_RESOLVED_MARKER" <<<"$output"
+  printf '%s\n' "$output" | python3 "$VALIDATOR" \
+    --language "$language" \
+    --marker "$WASM_HOST_RESOLVED_MARKER" \
+    --args-json "$WASM_HOST_RESOLVED_ARGS_JSON"
 }
 
 ran_any=false

@@ -9,8 +9,8 @@ use std::{
 
 use wasm_host_fixtures::{
     http_bridge_fixture_webc, http_bridge_fixture_webc_with_options,
-    http_bridge_fixture_webc_with_response_body_limit, HttpBridgeFixtureOptions,
-    HTTP_BRIDGE_COMMAND,
+    http_bridge_fixture_webc_with_response_body_limit, http_bridge_streaming_upload_fixture_webc,
+    HttpBridgeFixtureOptions, HTTP_BRIDGE_COMMAND,
 };
 
 #[test]
@@ -168,6 +168,43 @@ fn native_http_bridge_timeout_error_is_visible_to_wasi_guest() {
     assert!(
         request.starts_with("GET /http-bridge-timeout HTTP/1.1\r\n"),
         "unexpected request line:\n{request}"
+    );
+}
+
+#[test]
+fn native_http_bridge_streaming_upload_is_visible_to_wasi_guest() {
+    let mut server = StreamingUploadHttpServer::spawn();
+    let webc = http_bridge_streaming_upload_fixture_webc(&server.url())
+        .expect("build HTTP streaming upload fixture");
+    let output = run_native_http_bridge_fixture(webc, "http-streaming-upload-fixture.webc");
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["response"]["status"], 200);
+    assert_eq!(response["response"]["body_base64"], "dXBsb2FkLW9r");
+
+    let request = server.request();
+    assert!(
+        request.starts_with("POST /http-bridge-upload HTTP/1.1\r\n"),
+        "unexpected request line:\n{request}"
+    );
+    assert!(
+        request.contains("x-fixture: wasm-host-runner\r\n"),
+        "missing fixture header:\n{request}"
+    );
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked\r\n"),
+        "missing chunked transfer encoding:\n{request}"
+    );
+    assert!(
+        !request.to_ascii_lowercase().contains("content-length:"),
+        "streaming upload should not send Content-Length:\n{request}"
+    );
+    assert!(
+        request.ends_with("\r\n6\r\nguest-\r\n6\r\nupload\r\n0\r\n\r\n"),
+        "unexpected chunked body:\n{request}"
     );
 }
 
@@ -357,6 +394,54 @@ impl SlowHttpServer {
     }
 }
 
+struct StreamingUploadHttpServer {
+    url: String,
+    request_receiver: mpsc::Receiver<String>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl StreamingUploadHttpServer {
+    fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind upload HTTP server");
+        let address = listener.local_addr().expect("read upload server address");
+        let (request_sender, request_receiver) = mpsc::sync_channel(1);
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept upload request");
+            let request = read_chunked_test_http_request(&mut stream);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nupload-ok",
+                )
+                .expect("write upload response");
+            request_sender
+                .send(request)
+                .expect("send captured upload request");
+        });
+        Self {
+            url: format!("http://{address}/http-bridge-upload"),
+            request_receiver,
+            handle: Some(handle),
+        }
+    }
+
+    fn url(&self) -> String {
+        self.url.clone()
+    }
+
+    fn request(&mut self) -> String {
+        let request = self
+            .request_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("receive captured upload request");
+        if let Some(handle) = self.handle.take() {
+            handle
+                .join()
+                .expect("upload HTTP server should exit cleanly");
+        }
+        request
+    }
+}
+
 fn handle_test_http_request(mut stream: TcpStream, response_body: &[u8]) -> String {
     let request = read_test_http_request(&mut stream);
     write!(
@@ -386,4 +471,22 @@ fn read_test_http_request(stream: &mut TcpStream) -> String {
         assert!(request.len() < 8192, "HTTP request headers exceeded 8 KiB");
     }
     String::from_utf8(request).expect("HTTP request should be UTF-8")
+}
+
+fn read_chunked_test_http_request(stream: &mut TcpStream) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("upload read timeout should set");
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 512];
+    loop {
+        let length = stream.read(&mut buffer).expect("read upload HTTP request");
+        assert!(length > 0, "upload request should include chunked body");
+        request.extend_from_slice(&buffer[..length]);
+        if request.ends_with(b"0\r\n\r\n") {
+            break;
+        }
+        assert!(request.len() < 8192, "upload HTTP request exceeded 8 KiB");
+    }
+    String::from_utf8(request).expect("upload HTTP request should be UTF-8")
 }

@@ -59,8 +59,12 @@ mount.
 
 Use `--http-bridge native` to expose `/dev/wasm-host-http` to guest packages.
 The device accepts a JSON request with `method`, `url`, optional `headers`,
-optional base64 `body_base64`, and optional `response_body_limit`, then returns
-JSON with either a response status/headers/base64 body or a classified error.
+optional base64 `body_base64`, optional `response_body_limit`, and optional
+`timeout_ms`, then returns JSON with either a response status/headers/base64
+body or a classified error. Streaming uploads use framed writes to the same
+device: first `{"type":"request", ...}`, then zero or more
+`{"type":"body_chunk","body_base64":"..."}` frames, then
+`{"type":"body_end"}` before reading the JSON response.
 
 The runner validates the package before runtime setup. Missing or invalid WebC
 inputs fail with exit code `65`; command-line usage errors fail with exit code

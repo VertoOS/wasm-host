@@ -85,7 +85,48 @@ pub fn http_bridge_fixture_webc_with_options(
     }
     let request = request.to_string();
     let wasm =
-        wat::parse_str(http_bridge_fixture_wat(&request)).context("compile HTTP fixture WAT")?;
+        wat::parse_str(http_bridge_fixture_wat(&[request])).context("compile HTTP fixture WAT")?;
+    package_wasi_fixture(
+        "vertoos/http-bridge-fixture",
+        HTTP_BRIDGE_COMMAND,
+        HTTP_BRIDGE_ATOM,
+        "HTTP bridge fixture",
+        wasm,
+    )
+}
+
+pub fn http_bridge_streaming_upload_fixture_webc(url: &str) -> Result<Vec<u8>> {
+    let frames = vec![
+        serde_json::json!({
+            "type": "request",
+            "method": "POST",
+            "url": url,
+            "headers": [
+                {
+                    "name": "x-fixture",
+                    "value": "wasm-host-runner"
+                }
+            ],
+            "response_body_limit": HttpBridgeFixtureOptions::default().response_body_limit
+        })
+        .to_string(),
+        serde_json::json!({
+            "type": "body_chunk",
+            "body_base64": "Z3Vlc3Qt"
+        })
+        .to_string(),
+        serde_json::json!({
+            "type": "body_chunk",
+            "body_base64": "dXBsb2Fk"
+        })
+        .to_string(),
+        serde_json::json!({
+            "type": "body_end"
+        })
+        .to_string(),
+    ];
+    let wasm = wat::parse_str(http_bridge_fixture_wat(&frames))
+        .context("compile HTTP streaming upload fixture WAT")?;
     package_wasi_fixture(
         "vertoos/http-bridge-fixture",
         HTTP_BRIDGE_COMMAND,
@@ -202,9 +243,28 @@ fn stdout_fixture_wat(stdout: &[u8]) -> String {
     )
 }
 
-fn http_bridge_fixture_wat(request: &str) -> String {
+fn http_bridge_fixture_wat(frames: &[String]) -> String {
     let path_len = HTTP_BRIDGE_PATH.len();
-    let request_len = request.len();
+    let mut frame_offset = 256;
+    let mut frame_data = String::new();
+    let mut frame_writes = String::new();
+    for frame in frames {
+        let frame_len = frame.len();
+        frame_data.push_str(&format!(
+            r#"
+  (data (i32.const {frame_offset}) "{frame_data}")"#,
+            frame_data = wat_string_bytes(frame.as_bytes()),
+        ));
+        frame_writes.push_str(&format!(
+            r#"
+    (i32.store (global.get $iovec) (i32.const {frame_offset}))
+    (i32.store (i32.add (global.get $iovec) (i32.const 4)) (i32.const {frame_len}))
+    (if
+      (call $fd_write (local.get $fd) (global.get $iovec) (i32.const 1) (global.get $written_ptr))
+      (then (call $proc_exit (i32.const 21))))"#
+        ));
+        frame_offset += frame_len;
+    }
     format!(
         r#"
 (module
@@ -224,12 +284,10 @@ fn http_bridge_fixture_wat(request: &str) -> String {
   (global $written_ptr i32 (i32.const 8))
   (global $iovec i32 (i32.const 16))
   (global $path i32 (i32.const 64))
-  (global $request i32 (i32.const 256))
   (global $response i32 (i32.const 4096))
   (global $response_cap i32 (i32.const 8192))
 
-  (data (i32.const 64) "{path_data}")
-  (data (i32.const 256) "{request_data}")
+  (data (i32.const 64) "{path_data}"){frame_data}
 
   (func $_start (export "_start")
     (local $fd i32)
@@ -249,11 +307,7 @@ fn http_bridge_fixture_wat(request: &str) -> String {
       (then (call $proc_exit (i32.const 20))))
     (local.set $fd (i32.load (global.get $fd_ptr)))
 
-    (i32.store (global.get $iovec) (global.get $request))
-    (i32.store (i32.add (global.get $iovec) (i32.const 4)) (i32.const {request_len}))
-    (if
-      (call $fd_write (local.get $fd) (global.get $iovec) (i32.const 1) (global.get $written_ptr))
-      (then (call $proc_exit (i32.const 21))))
+{frame_writes}
 
     (i32.store (global.get $iovec) (global.get $response))
     (i32.store (i32.add (global.get $iovec) (i32.const 4)) (global.get $response_cap))
@@ -269,7 +323,6 @@ fn http_bridge_fixture_wat(request: &str) -> String {
 )
 "#,
         path_data = wat_string_bytes(HTTP_BRIDGE_PATH.as_bytes()),
-        request_data = wat_string_bytes(request.as_bytes()),
     )
 }
 
@@ -314,6 +367,12 @@ mod tests {
             },
         )
         .unwrap();
+        assert!(webc.starts_with(b"\0webc003"));
+    }
+
+    #[test]
+    fn http_bridge_streaming_upload_fixture_is_webc() {
+        let webc = http_bridge_streaming_upload_fixture_webc("http://127.0.0.1:1/upload").unwrap();
         assert!(webc.starts_with(b"\0webc003"));
     }
 }

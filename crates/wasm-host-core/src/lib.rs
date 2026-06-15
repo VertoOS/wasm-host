@@ -56,6 +56,7 @@ pub use http::{
 const COMMAND_PATH_PREFIXES: &[&str] = &["/bin", "/usr/bin"];
 const VIRTUAL_EXEC_BRIDGE_PATH: &str = "/dev/wasm-host-virtual-exec";
 const HTTP_BRIDGE_PATH: &str = "/dev/wasm-host-http";
+const HTTP_BRIDGE_DEVICE_UPLOAD_QUEUE_SIZE: usize = 1;
 const VIRTUAL_EXECUTABLE_WASM: &str = r#"
 (module
   (type $errno0 (func (param i32 i32) (result i32)))
@@ -466,6 +467,25 @@ struct HttpBridgeDeviceRequest {
     timeout_ms: Option<u64>,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum HttpBridgeDeviceStreamFrame {
+    Request {
+        method: String,
+        url: String,
+        #[serde(default)]
+        headers: Vec<HttpBridgeDeviceHeader>,
+        #[serde(default)]
+        response_body_limit: Option<usize>,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    BodyChunk {
+        body_base64: String,
+    },
+    BodyEnd,
+}
+
 #[derive(Deserialize, Serialize)]
 struct HttpBridgeDeviceHeader {
     name: String,
@@ -492,6 +512,21 @@ struct HttpBridgeDeviceSuccess {
 struct HttpBridgeDeviceError {
     kind: String,
     message: String,
+}
+
+#[derive(Debug)]
+enum HttpBridgeDeviceUploadEvent {
+    Chunk(Vec<u8>),
+    End,
+    Fail(HttpBridgeError),
+}
+
+#[derive(Debug)]
+struct HttpBridgeDeviceUploadState {
+    sender: mpsc::SyncSender<HttpBridgeDeviceUploadEvent>,
+    response_receiver: Mutex<mpsc::Receiver<Vec<u8>>>,
+    cancellation: CancellationToken,
+    closed: bool,
 }
 
 struct VirtualProcessResponsePayload {
@@ -648,6 +683,7 @@ struct HttpBridgeDeviceFile {
     wall_time: Option<Duration>,
     cancellation: CancellationToken,
     request: Vec<u8>,
+    upload: Option<HttpBridgeDeviceUploadState>,
     response: Option<Vec<u8>>,
     cursor: usize,
 }
@@ -1748,6 +1784,7 @@ impl FileOpener for VirtualExecutableFileSystem {
                 wall_time: self.wall_time,
                 cancellation: self.cancellation.clone(),
                 request: Vec::new(),
+                upload: None,
                 response: None,
                 cursor: 0,
             }));
@@ -1880,6 +1917,148 @@ impl VirtualFile for VirtualExecutableBridgeFile {
     }
 }
 
+impl HttpBridgeDeviceFile {
+    fn read_upload_response(&mut self) -> Vec<u8> {
+        let Some(mut upload) = self.upload.take() else {
+            return encode_http_bridge_device_result(Err(HttpBridgeError::transport(
+                "HTTP request body stream is not active",
+            )));
+        };
+        if !upload.closed {
+            upload.fail_blocking(HttpBridgeError::invalid_request(
+                "HTTP request body stream must be completed with a body_end frame before reading",
+            ));
+        }
+        upload
+            .response_receiver
+            .lock()
+            .map_err(|_| HttpBridgeError::transport("HTTP request body stream response poisoned"))
+            .and_then(|receiver| {
+                receiver.recv().map_err(|_| {
+                    HttpBridgeError::transport("HTTP request body stream response closed")
+                })
+            })
+            .unwrap_or_else(|error| encode_http_bridge_device_result(Err(error)))
+    }
+
+    fn write_device_data(&mut self, buf: &[u8]) {
+        if self.response.is_some() {
+            self.request.clear();
+            self.upload = None;
+        }
+        self.response = None;
+        self.cursor = 0;
+
+        if self.upload.is_some() {
+            self.write_upload_frame(buf);
+            return;
+        }
+
+        match serde_json::from_slice::<HttpBridgeDeviceStreamFrame>(buf) {
+            Ok(HttpBridgeDeviceStreamFrame::Request {
+                method,
+                url,
+                headers,
+                response_body_limit,
+                timeout_ms,
+            }) => {
+                match start_http_bridge_device_upload(
+                    self.bridge.clone(),
+                    method,
+                    url,
+                    headers,
+                    response_body_limit,
+                    timeout_ms,
+                    self.wall_time,
+                    self.cancellation.clone(),
+                ) {
+                    Ok(upload) => {
+                        self.upload = Some(upload);
+                    }
+                    Err(error) => {
+                        self.response = Some(encode_http_bridge_device_result(Err(error)));
+                    }
+                }
+            }
+            Ok(_) => {
+                self.response = Some(encode_http_bridge_device_result(Err(
+                    HttpBridgeError::invalid_request(
+                        "HTTP request body stream must start with a request frame",
+                    ),
+                )));
+            }
+            Err(error) => {
+                if http_bridge_device_data_declares_frame(buf) {
+                    self.response = Some(encode_http_bridge_device_result(Err(
+                        HttpBridgeError::invalid_request(format!(
+                            "invalid HTTP bridge upload frame: {error}"
+                        )),
+                    )));
+                } else {
+                    self.request.extend_from_slice(buf);
+                }
+            }
+        }
+    }
+
+    fn write_upload_frame(&mut self, buf: &[u8]) {
+        let frame = match serde_json::from_slice::<HttpBridgeDeviceStreamFrame>(buf) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.fail_upload(HttpBridgeError::invalid_request(format!(
+                    "invalid HTTP bridge upload frame: {error}"
+                )));
+                return;
+            }
+        };
+        match frame {
+            HttpBridgeDeviceStreamFrame::BodyChunk { body_base64 } => {
+                let chunk = match BASE64.decode(body_base64) {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        self.fail_upload(HttpBridgeError::invalid_request(format!(
+                            "invalid HTTP bridge request body chunk: {error}"
+                        )));
+                        return;
+                    }
+                };
+                self.send_upload_event(HttpBridgeDeviceUploadEvent::Chunk(chunk));
+            }
+            HttpBridgeDeviceStreamFrame::BodyEnd => {
+                self.send_upload_event(HttpBridgeDeviceUploadEvent::End);
+                if let Some(upload) = self.upload.as_mut() {
+                    upload.closed = true;
+                }
+            }
+            HttpBridgeDeviceStreamFrame::Request { .. } => {
+                self.fail_upload(HttpBridgeError::invalid_request(
+                    "HTTP request body stream is already active",
+                ));
+            }
+        }
+    }
+
+    fn send_upload_event(&mut self, event: HttpBridgeDeviceUploadEvent) {
+        let Some(upload) = self.upload.as_mut() else {
+            self.response = Some(encode_http_bridge_device_result(Err(
+                HttpBridgeError::transport("HTTP request body stream is not active"),
+            )));
+            return;
+        };
+        if let Err(error) = upload.send_event_blocking(event) {
+            self.response = Some(encode_http_bridge_device_result(Err(error)));
+        }
+    }
+
+    fn fail_upload(&mut self, error: HttpBridgeError) {
+        if let Some(upload) = self.upload.as_mut() {
+            upload.fail_blocking(error);
+        } else {
+            self.response = Some(encode_http_bridge_device_result(Err(error)));
+        }
+    }
+}
+
 impl AsyncRead for HttpBridgeDeviceFile {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -1887,12 +2066,16 @@ impl AsyncRead for HttpBridgeDeviceFile {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         if self.response.is_none() {
-            let response = handle_http_bridge_device_request(
-                &self.bridge,
-                &self.request,
-                self.wall_time,
-                self.cancellation.clone(),
-            );
+            let response = if self.upload.is_some() {
+                self.read_upload_response()
+            } else {
+                handle_http_bridge_device_request(
+                    &self.bridge,
+                    &self.request,
+                    self.wall_time,
+                    self.cancellation.clone(),
+                )
+            };
             self.response = Some(response);
             self.cursor = 0;
         }
@@ -1946,12 +2129,7 @@ impl AsyncWrite for HttpBridgeDeviceFile {
         _cx: &mut TaskContext<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        if self.response.is_some() {
-            self.request.clear();
-        }
-        self.request.extend_from_slice(buf);
-        self.response = None;
-        self.cursor = 0;
+        self.write_device_data(buf);
         Poll::Ready(Ok(buf.len()))
     }
 
@@ -3697,8 +3875,18 @@ fn handle_http_bridge_device_request(
     wall_time: Option<Duration>,
     cancellation: CancellationToken,
 ) -> Vec<u8> {
-    let response = match dispatch_http_bridge_device_request(bridge, data, wall_time, cancellation)
-    {
+    encode_http_bridge_device_result(dispatch_http_bridge_device_request(
+        bridge,
+        data,
+        wall_time,
+        cancellation,
+    ))
+}
+
+fn encode_http_bridge_device_result(
+    result: std::result::Result<HttpBridgeDeviceSuccess, HttpBridgeError>,
+) -> Vec<u8> {
+    let response = match result {
         Ok(response) => HttpBridgeDeviceResponse {
             ok: true,
             response: Some(response),
@@ -3748,7 +3936,18 @@ fn dispatch_http_bridge_device_request(
         wall_time,
     };
     let response = bridge.request_blocking(request, limits, cancellation)?;
-    Ok(HttpBridgeDeviceSuccess {
+    Ok(http_bridge_device_success_from_response(response))
+}
+
+fn http_bridge_device_data_declares_frame(data: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(data)
+        .ok()
+        .and_then(|value| value.get("type").cloned())
+        .is_some()
+}
+
+fn http_bridge_device_success_from_response(response: HttpResponse) -> HttpBridgeDeviceSuccess {
+    HttpBridgeDeviceSuccess {
         status: response.status,
         headers: response
             .headers
@@ -3759,7 +3958,97 @@ fn dispatch_http_bridge_device_request(
             })
             .collect(),
         body_base64: BASE64.encode(response.body),
+    }
+}
+
+fn start_http_bridge_device_upload(
+    bridge: HttpBridge,
+    method: String,
+    url: String,
+    headers: Vec<HttpBridgeDeviceHeader>,
+    response_body_limit: Option<usize>,
+    timeout_ms: Option<u64>,
+    inherited_wall_time: Option<Duration>,
+    cancellation: CancellationToken,
+) -> std::result::Result<HttpBridgeDeviceUploadState, HttpBridgeError> {
+    let response_body_bytes =
+        response_body_limit.unwrap_or_else(|| HttpRequestLimits::default().response_body_bytes);
+    let wall_time = http_bridge_device_wall_time(inherited_wall_time, timeout_ms)?;
+    let headers = headers
+        .into_iter()
+        .map(|header| HttpHeader::new(header.name, header.value))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let request = HttpRequest::new(method, url, headers, Vec::new())?;
+    let limits = HttpRequestLimits {
+        response_body_bytes,
+        wall_time,
+    };
+    let (sender, receiver) = mpsc::sync_channel(HTTP_BRIDGE_DEVICE_UPLOAD_QUEUE_SIZE);
+    let (response_sender, response_receiver) = mpsc::sync_channel(1);
+    let bridge_cancellation = cancellation.clone();
+    std::thread::spawn(move || {
+        let result = bridge
+            .request_streaming_blocking(request, limits, bridge_cancellation, move |body| loop {
+                match receiver.recv() {
+                    Ok(HttpBridgeDeviceUploadEvent::Chunk(chunk)) => {
+                        body.write_chunk_blocking(chunk)?;
+                    }
+                    Ok(HttpBridgeDeviceUploadEvent::End) => return Ok(()),
+                    Ok(HttpBridgeDeviceUploadEvent::Fail(error)) => return Err(error),
+                    Err(_) => {
+                        return Err(HttpBridgeError::transport(
+                            "HTTP request body stream closed before completion",
+                        ))
+                    }
+                }
+            })
+            .map(http_bridge_device_success_from_response);
+        let _ = response_sender.send(encode_http_bridge_device_result(result));
+    });
+    Ok(HttpBridgeDeviceUploadState {
+        sender,
+        response_receiver: Mutex::new(response_receiver),
+        cancellation,
+        closed: false,
     })
+}
+
+impl HttpBridgeDeviceUploadState {
+    fn send_event_blocking(
+        &mut self,
+        mut event: HttpBridgeDeviceUploadEvent,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        if self.closed {
+            return Err(HttpBridgeError::invalid_request(
+                "HTTP request body stream is already closed",
+            ));
+        }
+        loop {
+            if self.cancellation.is_cancelled() {
+                return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+            }
+            match self.sender.try_send(event) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    event = returned;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    return Err(HttpBridgeError::transport(
+                        "HTTP request body stream receiver closed",
+                    ))
+                }
+            }
+        }
+    }
+
+    fn fail_blocking(&mut self, error: HttpBridgeError) {
+        if self.closed {
+            return;
+        }
+        let _ = self.send_event_blocking(HttpBridgeDeviceUploadEvent::Fail(error));
+        self.closed = true;
+    }
 }
 
 fn http_bridge_device_wall_time(
@@ -4205,6 +4494,145 @@ mod tests {
             value["response"]["body_base64"],
             BASE64.encode(b"response-body")
         );
+    }
+
+    #[tokio::test]
+    async fn http_bridge_device_streams_request_body_frames() {
+        let root = TmpFileSystem::new();
+        create_dir_all(&root, Path::new("/dev")).expect("/dev should be created");
+        let (events, _event_receiver) = EventBus::new(4);
+        let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(4);
+        let (bridge, mut http_receiver) = HttpBridge::new(4);
+        let handler = std::thread::spawn(move || {
+            let request = http_receiver
+                .blocking_recv()
+                .expect("HTTP request should arrive");
+            assert_eq!(request.request.method, "POST");
+            assert_eq!(request.request.url, "https://example.test/upload");
+            assert!(request.request.body.is_empty());
+            assert!(request.has_streaming_body());
+            assert_eq!(
+                request
+                    .read_streaming_body_chunk_blocking()
+                    .expect("first body chunk should read"),
+                Some(b"hello ".to_vec())
+            );
+            assert_eq!(
+                request
+                    .read_streaming_body_chunk_blocking()
+                    .expect("second body chunk should read"),
+                Some(b"stream".to_vec())
+            );
+            assert_eq!(
+                request
+                    .read_streaming_body_chunk_blocking()
+                    .expect("body stream should finish"),
+                None
+            );
+            request
+                .respond(
+                    HttpResponse::new(201, Vec::new(), b"uploaded".to_vec())
+                        .expect("response should be valid"),
+                )
+                .expect("response should send");
+        });
+        let filesystem = process_filesystem(
+            root,
+            None,
+            events,
+            VirtualExecutableRegistry::new(virtual_processes),
+            Some(bridge),
+            Some(Duration::from_secs(5)),
+            CancellationSource::new().token(),
+        );
+        let mut file = filesystem
+            .new_open_options()
+            .read(true)
+            .write(true)
+            .open(Path::new(HTTP_BRIDGE_PATH))
+            .expect("HTTP bridge device should open");
+        for frame in [
+            serde_json::json!({
+                "type": "request",
+                "method": "post",
+                "url": "https://example.test/upload",
+                "headers": [{"name": "x-test", "value": "yes"}],
+            }),
+            serde_json::json!({
+                "type": "body_chunk",
+                "body_base64": BASE64.encode(b"hello "),
+            }),
+            serde_json::json!({
+                "type": "body_chunk",
+                "body_base64": BASE64.encode(b"stream"),
+            }),
+            serde_json::json!({
+                "type": "body_end",
+            }),
+        ] {
+            file.write_all(&serde_json::to_vec(&frame).expect("frame should encode"))
+                .await
+                .expect("HTTP bridge upload frame should write");
+        }
+
+        let mut output = Vec::new();
+        file.read_to_end(&mut output)
+            .await
+            .expect("HTTP bridge response should read");
+        handler.join().expect("handler should finish");
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&output).expect("response should be JSON");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["response"]["status"], 201);
+        assert_eq!(value["response"]["body_base64"], BASE64.encode(b"uploaded"));
+    }
+
+    #[tokio::test]
+    async fn http_bridge_device_rejects_malformed_stream_frame() {
+        let root = TmpFileSystem::new();
+        create_dir_all(&root, Path::new("/dev")).expect("/dev should be created");
+        let (events, _event_receiver) = EventBus::new(4);
+        let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(4);
+        let (bridge, http_receiver) = HttpBridge::new(4);
+        drop(http_receiver);
+        let filesystem = process_filesystem(
+            root,
+            None,
+            events,
+            VirtualExecutableRegistry::new(virtual_processes),
+            Some(bridge),
+            Some(Duration::from_secs(5)),
+            CancellationSource::new().token(),
+        );
+        let mut file = filesystem
+            .new_open_options()
+            .read(true)
+            .write(true)
+            .open(Path::new(HTTP_BRIDGE_PATH))
+            .expect("HTTP bridge device should open");
+        let payload = serde_json::json!({
+            "type": "request",
+            "method": "post",
+            "url": "https://example.test/upload",
+            "body_base64": BASE64.encode(b"ambiguous"),
+        });
+        file.write_all(&serde_json::to_vec(&payload).expect("payload should encode"))
+            .await
+            .expect("HTTP bridge request should write");
+
+        let mut output = Vec::new();
+        file.read_to_end(&mut output)
+            .await
+            .expect("HTTP bridge response should read");
+        let value: serde_json::Value =
+            serde_json::from_slice(&output).expect("response should be JSON");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["kind"], "invalid_request");
+        assert!(value["error"]["message"]
+            .as_str()
+            .expect("error message should be a string")
+            .contains("invalid HTTP bridge upload frame"));
     }
 
     #[tokio::test]

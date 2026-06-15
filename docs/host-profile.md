@@ -144,6 +144,15 @@ a simple JSON request/response surface for early guest-package tests; browser
 adapters should implement the same logical contract over Fetch or a gateway
 rather than depending on native sockets.
 
+The device keeps the buffered request shape for small requests:
+`method`, `url`, optional `headers`, optional base64 `body_base64`, optional
+`response_body_limit`, and optional `timeout_ms`. Streaming uploads use framed
+writes on the same open file. A guest writes one `{"type":"request", ...}` frame,
+then zero or more `{"type":"body_chunk","body_base64":"..."}` frames, then an
+explicit `{"type":"body_end"}` frame before reading the response. Hosts should
+feed body chunks through the bounded request-body stream rather than collecting
+an unbounded upload buffer.
+
 Device requests may include `timeout_ms` to set a request-scoped wall-time
 limit. Browser adapters should map this to per-request Fetch/gateway
 aborts and return the same structured `timeout` error that the native bridge

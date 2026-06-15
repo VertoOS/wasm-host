@@ -31,6 +31,7 @@ until the boundaries are stable enough to split.
 cargo run --bin wasm-host-runner -- \
   --webc /path/to/package.webc \
   --profile native-full \
+  --module-cache-dir .cache/wasm-host/modules \
   --mount "$PWD:/workspace:rw" \
   --cwd /workspace \
   --env HOME=/workspace \
@@ -48,6 +49,10 @@ host directories.
 The runner validates the package before runtime setup. Missing or invalid WebC
 inputs fail with exit code `65`; command-line usage errors fail with exit code
 `2`; guest process exits preserve the guest return code.
+
+Use `--module-cache-dir PATH` to pin where compiled module cache artifacts are
+stored. Without it, the runtime uses `XDG_CACHE_HOME`, `HOME/.cache`, or a temp
+directory fallback.
 
 Use `--event-format json` to emit structured runner lifecycle events to stderr
 as JSON lines. Event payloads include package, profile, command counts, output

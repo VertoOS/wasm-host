@@ -12,6 +12,7 @@ printf '<!doctype html>' > "$TMP_ROOT/bad.webc"
 set +e
 "$ROOT/target/debug/wasm-host-runner" \
   --event-format json \
+  --module-cache-dir "$TMP_ROOT/modules" \
   --webc "$TMP_ROOT/bad.webc" \
   -- tool >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"
 status="$?"
@@ -39,6 +40,7 @@ started, failed = events
 assert started["schema"] == 1
 assert started["env_keys"] == []
 assert started["argc"] == 1
+assert started["module_cache_dir"].endswith("/modules")
 assert failed["stage"] == "package"
 assert failed["exit_code"] == 65
 assert "expected magic bytes \\0webc" in failed["error"]

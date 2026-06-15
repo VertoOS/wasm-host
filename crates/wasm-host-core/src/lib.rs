@@ -246,6 +246,11 @@ pub struct PackageSpec {
     pub command_aliases: Vec<PackageCommandAlias>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct SandboxOptions {
+    pub module_cache_dir: Option<PathBuf>,
+}
+
 #[derive(Clone, Debug)]
 struct ResolvedPackageSpec {
     name: String,
@@ -1699,7 +1704,7 @@ impl SandboxState {
         events: EventBus,
         virtual_processes: VirtualExecutableBridge,
     ) -> Result<Self> {
-        Self::new_with_profile(
+        Self::new_with_profile_and_options(
             HostProfile::default(),
             files,
             host_mounts,
@@ -1708,6 +1713,7 @@ impl SandboxState {
             env,
             events,
             virtual_processes,
+            SandboxOptions::default(),
         )
     }
 
@@ -1721,6 +1727,30 @@ impl SandboxState {
         events: EventBus,
         virtual_processes: VirtualExecutableBridge,
     ) -> Result<Self> {
+        Self::new_with_profile_and_options(
+            profile,
+            files,
+            host_mounts,
+            packages,
+            cwd,
+            env,
+            events,
+            virtual_processes,
+            SandboxOptions::default(),
+        )
+    }
+
+    pub fn new_with_profile_and_options(
+        profile: HostProfile,
+        files: HashMap<String, Option<Vec<u8>>>,
+        host_mounts: Vec<HostMount>,
+        packages: Vec<PackageSpec>,
+        cwd: String,
+        env: HashMap<String, String>,
+        events: EventBus,
+        virtual_processes: VirtualExecutableBridge,
+        options: SandboxOptions,
+    ) -> Result<Self> {
         if profile != HostProfile::NativeFull && !host_mounts.is_empty() {
             return Err(anyhow!(
                 "host mounts require the native-full profile, current profile is {}",
@@ -1728,7 +1758,7 @@ impl SandboxState {
             ));
         }
 
-        let catalog = catalog_for(packages)?;
+        let catalog = catalog_for(packages, &options)?;
         let fs = TmpFileSystem::new();
         create_default_layout(&catalog, &fs)?;
         let cwd = normalize_path(&cwd)?;
@@ -1992,7 +2022,10 @@ impl SandboxState {
 }
 
 impl PackageCatalog {
-    fn load(package_specs: Vec<ResolvedPackageSpec>) -> Result<Arc<Self>> {
+    fn load(
+        package_specs: Vec<ResolvedPackageSpec>,
+        module_cache_dir: PathBuf,
+    ) -> Result<Arc<Self>> {
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_name("wasm-host-wasmer")
@@ -2006,7 +2039,7 @@ impl PackageCatalog {
         runtime.set_engine(sandbox_engine());
         runtime.set_tty(Arc::new(NonInteractiveTty));
         runtime.set_module_cache(SharedCache::default().with_fallback(FileSystemCache::new(
-            module_cache_dir(),
+            module_cache_dir,
             Arc::clone(&task_manager),
         )));
         runtime.set_package_loader(BuiltinPackageLoader::new());
@@ -2877,9 +2910,12 @@ fn normalize_process_outcome(command: &str, returncode: i32, stderr: Vec<u8>) ->
     (returncode, stderr)
 }
 
-fn catalog_for(packages: Vec<PackageSpec>) -> Result<Arc<PackageCatalog>> {
+fn catalog_for(
+    packages: Vec<PackageSpec>,
+    options: &SandboxOptions,
+) -> Result<Arc<PackageCatalog>> {
     let package_specs = resolve_package_specs(packages)?;
-    PackageCatalog::load(package_specs)
+    PackageCatalog::load(package_specs, module_cache_dir(options))
 }
 
 fn resolve_package_specs(packages: Vec<PackageSpec>) -> Result<Vec<ResolvedPackageSpec>> {
@@ -3028,7 +3064,14 @@ fn sandbox_engine() -> wasmer::Engine {
     engine
 }
 
-fn module_cache_dir() -> PathBuf {
+fn module_cache_dir(options: &SandboxOptions) -> PathBuf {
+    options
+        .module_cache_dir
+        .clone()
+        .unwrap_or_else(default_module_cache_dir)
+}
+
+fn default_module_cache_dir() -> PathBuf {
     if let Some(cache_home) = env::var_os("XDG_CACHE_HOME") {
         if !cache_home.is_empty() {
             return PathBuf::from(cache_home).join("wasm-host").join("modules");
@@ -3464,5 +3507,24 @@ mod tests {
         let (returncode, stderr) = normalize_process_outcome("find", 1, real_error);
         assert_eq!(returncode, 1);
         assert!(stderr.starts_with(b"find: missing argument"));
+    }
+
+    #[test]
+    fn module_cache_dir_uses_explicit_option() {
+        let options = SandboxOptions {
+            module_cache_dir: Some(PathBuf::from("/tmp/wasm-host-modules")),
+        };
+
+        assert_eq!(
+            module_cache_dir(&options),
+            PathBuf::from("/tmp/wasm-host-modules")
+        );
+    }
+
+    #[test]
+    fn module_cache_dir_uses_default_when_option_is_missing() {
+        let options = SandboxOptions::default();
+
+        assert_eq!(module_cache_dir(&options), default_module_cache_dir());
     }
 }

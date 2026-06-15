@@ -12,7 +12,7 @@ use std::{
 use serde_json::{json, Map, Value};
 use wasm_host_core::{
     CancellationSource, EventBus, HostMount, HostProfile, Limits, PackageCommandAlias, PackageSpec,
-    RunRequest, SandboxState, VirtualExecutableBridge,
+    RunRequest, SandboxOptions, SandboxState, VirtualExecutableBridge,
 };
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
@@ -69,7 +69,10 @@ fn run() -> Result<i32, RunnerError> {
         content_sha256: "0".repeat(64),
         command_aliases: options.command_aliases,
     };
-    let state = match SandboxState::new_with_profile(
+    let sandbox_options = SandboxOptions {
+        module_cache_dir: options.module_cache_dir.clone(),
+    };
+    let state = match SandboxState::new_with_profile_and_options(
         options.profile,
         HashMap::new(),
         options.host_mounts,
@@ -78,6 +81,7 @@ fn run() -> Result<i32, RunnerError> {
         options.env,
         events,
         virtual_executables,
+        sandbox_options,
     ) {
         Ok(state) => state,
         Err(error) => {
@@ -184,6 +188,7 @@ struct Options {
     webc: PathBuf,
     profile: HostProfile,
     event_format: EventFormat,
+    module_cache_dir: Option<PathBuf>,
     package_name: Option<String>,
     command_aliases: Vec<PackageCommandAlias>,
     host_mounts: Vec<HostMount>,
@@ -296,6 +301,10 @@ fn runner_started_event(options: &Options, package_name: &str) -> Value {
         "mount_count": options.host_mounts.len(),
         "env_keys": env_keys,
         "env_count": options.env.len(),
+        "module_cache_dir": options
+            .module_cache_dir
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
         "output_limit": options.output_limit,
         "timeout_seconds": options.timeout_seconds,
     })
@@ -349,6 +358,7 @@ impl Options {
         let mut webc = None;
         let mut profile = HostProfile::default();
         let mut event_format = EventFormat::None;
+        let mut module_cache_dir = None;
         let mut package_name = None;
         let mut command_aliases = Vec::new();
         let mut host_mounts = Vec::new();
@@ -382,6 +392,10 @@ impl Options {
                 }
                 "--event-format" => {
                     event_format = EventFormat::parse(&next_value(&mut args, "--event-format")?)?;
+                }
+                "--module-cache-dir" => {
+                    module_cache_dir =
+                        Some(PathBuf::from(next_value(&mut args, "--module-cache-dir")?));
                 }
                 "--package" => package_name = Some(next_value(&mut args, "--package")?),
                 "--alias" => {
@@ -433,6 +447,7 @@ impl Options {
             webc,
             profile,
             event_format,
+            module_cache_dir,
             package_name,
             command_aliases,
             host_mounts,
@@ -569,6 +584,8 @@ Options:
                              default browser-strict
   --event-format <name>      Runner event format: none or json, default none.
                              JSON events are written to stderr as JSON lines
+  --module-cache-dir <path>  Directory for compiled module cache artifacts.
+                             Defaults to XDG_CACHE_HOME/HOME/temp fallback
   --package <name>           Logical package name, defaults to file stem
   --alias <ALIAS=COMMAND>    Expose an extra command alias from the package
   --mount <HOST:GUEST[:ro|rw]>
@@ -596,6 +613,7 @@ mod tests {
         assert_eq!(options.webc, PathBuf::from("tool.webc"));
         assert_eq!(options.profile, HostProfile::BrowserStrict);
         assert_eq!(options.event_format, EventFormat::None);
+        assert_eq!(options.module_cache_dir, None);
         assert_eq!(options.command, ["tool"]);
         assert_eq!(options.cwd, "/work");
     }
@@ -613,6 +631,25 @@ mod tests {
         .expect("options should parse");
 
         assert_eq!(options.event_format, EventFormat::Json);
+        assert_eq!(options.command, ["tool"]);
+    }
+
+    #[test]
+    fn parse_accepts_module_cache_dir() {
+        let options = Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--module-cache-dir",
+            ".cache/modules",
+            "--",
+            "tool",
+        ]))
+        .expect("options should parse");
+
+        assert_eq!(
+            options.module_cache_dir,
+            Some(PathBuf::from(".cache/modules"))
+        );
         assert_eq!(options.command, ["tool"]);
     }
 
@@ -684,6 +721,7 @@ mod tests {
             webc: PathBuf::from("/packages/tool.webc"),
             profile: HostProfile::NativeFull,
             event_format: EventFormat::Json,
+            module_cache_dir: Some(PathBuf::from("/cache/modules")),
             package_name: Some("tool".to_string()),
             command_aliases: vec![PackageCommandAlias {
                 alias: "alias".to_string(),
@@ -722,6 +760,7 @@ mod tests {
         assert_eq!(event["mount_count"], 1);
         assert_eq!(event["env_keys"], json!(["PUBLIC", "SECRET"]));
         assert_eq!(event["env_count"], 2);
+        assert_eq!(event["module_cache_dir"], "/cache/modules");
     }
 
     #[test]

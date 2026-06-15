@@ -206,6 +206,14 @@ Generated gateway transport errors must not include configured gateway endpoint
 URLs, request URLs, auth headers, cookies, bearer tokens, or secret-bearing
 query strings.
 
+The initial browser HTTP worker message runtime lives in
+`apps/web/src/http-worker.js`. It accepts `http.dispatch` messages with
+normalized request metadata, optional body chunks, timeouts, and response body
+limits; it accepts `http.cancel` messages for in-flight requests; and it emits
+`http.response.body`, `http.response.complete`, or `http.response.error` events.
+This is the worker-side message layer for pluggable direct/gateway transports.
+It is not yet the full WebC package startup or browser filesystem runtime.
+
 The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json

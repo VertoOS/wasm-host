@@ -39,7 +39,7 @@ export class DirectFetchHttpTransport {
       cancellation,
       credentials: this.credentials,
       fetchImpl: this.fetchImpl,
-      responseBodyLimit: this.responseBodyLimit,
+      responseBodyLimit: request.responseBodyLimit ?? this.responseBodyLimit,
       streamUploads: this.streamUploads,
     });
     for (const chunk of response.bodyChunks) {
@@ -73,8 +73,9 @@ export class GatewayFetchHttpTransport {
       credentials: this.credentials,
       endpoint: this.endpoint,
       fetchImpl: this.fetchImpl,
-      gatewayResponseLimit: this.gatewayResponseLimit,
-      responseBodyLimit: this.responseBodyLimit,
+      gatewayResponseLimit:
+        request.gatewayResponseLimit ?? this.gatewayResponseLimit,
+      responseBodyLimit: request.responseBodyLimit ?? this.responseBodyLimit,
       streamUploads: this.streamUploads,
     });
   }

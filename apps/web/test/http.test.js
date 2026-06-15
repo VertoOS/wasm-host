@@ -120,6 +120,32 @@ test("DirectFetchHttpTransport accepts bridge-style writer methods", async () =>
   assert.equal(writer.finished.body.length, 0);
 });
 
+test("DirectFetchHttpTransport honors per-request response body limits", async () => {
+  const transport = new DirectFetchHttpTransport({
+    fetchImpl: async () => new Response(readableStream(["too-large"])),
+  });
+
+  await assert.rejects(
+    transport.dispatch(
+      {
+        id: 20,
+        method: "GET",
+        url: "https://example.test/large",
+        headers: [],
+        body: null,
+        responseBodyLimit: 4,
+      },
+      recordingWriter(),
+      new AbortController().signal,
+    ),
+    (error) => {
+      assert.equal(error.kind, "response_too_large");
+      assert.equal(error.message, "HTTP response body exceeded 4 bytes");
+      return true;
+    },
+  );
+});
+
 test("GatewayFetchHttpTransport maps buffered gateway requests and responses", async () => {
   const seen = {};
   const transport = new GatewayFetchHttpTransport({

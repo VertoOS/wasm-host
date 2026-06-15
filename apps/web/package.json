@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check src/http.js && node --check test/http.test.js",
+    "check": "node --check src/http.js && node --check src/http-worker.js && node --check test/http.test.js && node --check test/http-worker.test.js",
     "test": "node --test"
   }
 }

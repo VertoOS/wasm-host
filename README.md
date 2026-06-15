@@ -9,19 +9,18 @@ in two places:
 - a browser adapter with browser-safe filesystem, terminal, process, network,
   and permission behavior
 
-This repo starts lean: Rust core runtime, native runner, vendor patches required
-for the current Wasmer/WASIX backend, and the host profile docs. Language
-bindings and package fixtures should split into separate repos once the host
-contract stabilizes.
+This is a fast-moving monorepo while the host contract is still changing. Keep
+runtime code, browser adapter work, bindings, fixtures, and e2e tests together
+until the boundaries are stable enough to split.
 
 ## Status
 
 - Native runner can execute a local WebC package.
 - The runner supports mounts, cwd, env, env pass-through, stdin files, output
   limits, and wall-time limits.
-- The host profile and roadmap are documented.
-- Browser adapter, conformance fixtures, C ABI, and language bindings are not
-  implemented yet.
+- The host profile and monorepo layout are documented.
+- Browser adapter, conformance fixtures, C ABI, and language bindings are
+  scaffolded but not implemented yet.
 
 ## Run A WebC Package
 
@@ -41,23 +40,53 @@ without being embedded in the shell command.
 ## Project Shape
 
 ```text
+apps/
+  web/                 # browser UI/runtime app
+bindings/
+  go/                  # Go binding surface
+  python/              # Python binding/package surface
 crates/
   wasm-host-core/      # core host runtime and Wasmer/WASIX backend
   wasm-host-runner/    # native terminal runner
 docs/
   host-profile.md      # browser-compatible host contract
-  roadmap.md           # milestones and repo split
+  repo-layout.md       # monorepo layout and future split rules
+packages/
+  fixtures/            # source and packaged language/runtime fixtures
+tests/
+  conformance/         # host behavior tests shared by adapters
+  e2e/                 # full runtime/language/application e2e tests
 vendor/
   wasmer-*             # backend patches required by the current runtime
 ```
 
-## Roadmap
+## Language E2E
 
-Start with the native runner as the fast adapter, but keep it constrained by the
-browser-compatible host profile. See:
+Language e2e tests run code inside the host through `wasm-host-runner`.
+
+```sh
+tests/e2e/languages/run.sh
+```
+
+The script skips languages whose WebC package is not configured. To require a
+language:
+
+```sh
+WASM_HOST_PYTHON_WEBC=/path/to/python.webc tests/e2e/languages/run.sh --require-python
+WASM_HOST_GO_WEBC=/path/to/go-toolchain.webc tests/e2e/languages/run.sh --require-go
+```
+
+For Go, the default command is `go run /workspace/go/smoke.go`. A prebuilt Go
+fixture package can override that with `WASM_HOST_GO_COMMAND` and
+`WASM_HOST_GO_ARGS`.
+
+## Planning
+
+Planning and task tracking live in GitHub issues. Design/reference docs live in
+the repo:
 
 - [`docs/host-profile.md`](docs/host-profile.md)
-- [`docs/roadmap.md`](docs/roadmap.md)
+- [`docs/repo-layout.md`](docs/repo-layout.md)
 
 ## Attribution
 

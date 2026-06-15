@@ -73,7 +73,7 @@ func TestUnknownHTTPBridgeReturnsErrorResult(t *testing.T) {
 	if result.ReturnCode != 125 {
 		t.Fatalf("return code = %d, want 125", result.ReturnCode)
 	}
-	if string(result.Error) != "unknown HTTP bridge mode: bad; expected off or native" {
+	if string(result.Error) != "unknown HTTP bridge mode: bad; expected off, native, or gateway=<url>" {
 		t.Fatalf("error = %q", result.Error)
 	}
 }

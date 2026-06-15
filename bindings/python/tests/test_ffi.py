@@ -53,7 +53,8 @@ class PythonBindingTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.returncode, 125)
         self.assertEqual(
-            result.error_text, "unknown HTTP bridge mode: bad; expected off or native"
+            result.error_text,
+            "unknown HTTP bridge mode: bad; expected off, native, or gateway=<url>",
         )
 
     def test_host_command_without_native_full_returns_error_result(self):

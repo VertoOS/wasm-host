@@ -66,6 +66,11 @@ device: first `{"type":"request", ...}`, then zero or more
 `{"type":"body_chunk","body_base64":"..."}` frames, then
 `{"type":"body_end"}` before reading the JSON response.
 
+Use `--http-bridge gateway=http://127.0.0.1:PORT/bridge` to route the same
+guest HTTP bridge requests through a local gateway endpoint instead of direct
+plain HTTP. Runner events record the bridge mode as `gateway` and intentionally
+omit the gateway endpoint URL.
+
 The runner validates the package before runtime setup. Missing or invalid WebC
 inputs fail with exit code `65`; command-line usage errors fail with exit code
 `2`; unresolved commands fail with exit code `127`; wall-time timeouts fail with

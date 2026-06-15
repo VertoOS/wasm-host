@@ -11,10 +11,11 @@ use std::{
 
 use serde_json::{json, Map, Value};
 use wasm_host_core::{
-    register_native_host_commands, CancellationSource, EventBus, HostMount, HostProfile,
-    HttpBridge, Limits, NativeHostCommandSpec, NativeHostCommandWorker, NativeHttpBridgeWorker,
-    OutputSink, OutputSinks, PackageCommandAlias, PackageSpec, RunError, RunErrorKind, RunRequest,
-    SandboxOptions, SandboxState, VirtualExecutableBridge,
+    register_native_host_commands, CancellationSource, EventBus, GatewayHttpBridgeWorker,
+    HostMount, HostProfile, HttpBridge, Limits, NativeGatewayHttpTransport, NativeHostCommandSpec,
+    NativeHostCommandWorker, NativeHttpBridgeWorker, OutputSink, OutputSinks, PackageCommandAlias,
+    PackageSpec, RunError, RunErrorKind, RunRequest, SandboxOptions, SandboxState,
+    VirtualExecutableBridge,
 };
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
@@ -68,12 +69,28 @@ fn run() -> Result<i32, RunnerError> {
     let (events, _event_receiver) = EventBus::new(DEFAULT_EVENT_QUEUE_SIZE);
     let (virtual_executables, virtual_process_receiver) =
         VirtualExecutableBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
-    let (http_bridge, _http_bridge_worker) = match options.http_bridge {
+    let (http_bridge, _http_bridge_worker) = match &options.http_bridge {
         HttpBridgeMode::Off => (None, None),
         HttpBridgeMode::Native => {
             let (bridge, receiver) = HttpBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
             let worker = NativeHttpBridgeWorker::spawn(receiver);
-            (Some(bridge), Some(worker))
+            (
+                Some(bridge),
+                Some(HttpBridgeWorker::Native { _worker: worker }),
+            )
+        }
+        HttpBridgeMode::Gateway { endpoint } => {
+            let (bridge, receiver) = HttpBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
+            let transport = NativeGatewayHttpTransport::new(endpoint.clone()).map_err(|error| {
+                RunnerError::host(anyhow::anyhow!(
+                    "unable to configure HTTP gateway bridge: {error}"
+                ))
+            })?;
+            let worker = GatewayHttpBridgeWorker::spawn(receiver, transport);
+            (
+                Some(bridge),
+                Some(HttpBridgeWorker::Gateway { _worker: worker }),
+            )
         }
     };
     let package = PackageSpec {
@@ -273,10 +290,16 @@ enum EventFormat {
     Json,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HttpBridgeWorker {
+    Native { _worker: NativeHttpBridgeWorker },
+    Gateway { _worker: GatewayHttpBridgeWorker },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum HttpBridgeMode {
     Off,
     Native,
+    Gateway { endpoint: String },
 }
 
 impl EventFormat {
@@ -296,16 +319,28 @@ impl HttpBridgeMode {
         match value {
             "off" => Ok(Self::Off),
             "native" => Ok(Self::Native),
+            _ if value.starts_with("gateway=") => {
+                let endpoint = value
+                    .strip_prefix("gateway=")
+                    .expect("prefix should be present");
+                if endpoint.is_empty() {
+                    return Err(anyhow::anyhow!("HTTP gateway mode requires gateway=<url>"));
+                }
+                Ok(Self::Gateway {
+                    endpoint: endpoint.to_string(),
+                })
+            }
             _ => Err(anyhow::anyhow!(
-                "unknown HTTP bridge mode: {value}; expected off or native"
+                "unknown HTTP bridge mode: {value}; expected off, native, or gateway=<url>"
             )),
         }
     }
 
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Self::Off => "off",
             Self::Native => "native",
+            Self::Gateway { .. } => "gateway",
         }
     }
 }
@@ -713,8 +748,10 @@ Options:
                              JSON events are written to stderr as JSON lines
   --module-cache-dir <path>  Directory for compiled module cache artifacts.
                              Defaults to XDG_CACHE_HOME/HOME/temp fallback
-  --http-bridge <mode>       HTTP bridge adapter: off or native, default off.
-                             native exposes /dev/wasm-host-http to guest packages
+  --http-bridge <mode>       HTTP bridge adapter: off, native, or gateway=<url>,
+                             default off. native exposes /dev/wasm-host-http
+                             through direct plain HTTP; gateway=<url> posts the
+                             same bridge requests to a local HTTP gateway
   --package <name>           Logical package name, defaults to file stem
   --alias <ALIAS=COMMAND>    Expose an extra command alias from the package
   --host-command <GUEST=HOST>
@@ -800,6 +837,45 @@ mod tests {
 
         assert_eq!(options.http_bridge, HttpBridgeMode::Native);
         assert_eq!(options.command, ["tool"]);
+    }
+
+    #[test]
+    fn parse_accepts_gateway_http_bridge() {
+        let options = Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--http-bridge",
+            "gateway=http://127.0.0.1:8080/bridge",
+            "--",
+            "tool",
+        ]))
+        .expect("options should parse");
+
+        assert_eq!(
+            options.http_bridge,
+            HttpBridgeMode::Gateway {
+                endpoint: "http://127.0.0.1:8080/bridge".to_string()
+            }
+        );
+        assert_eq!(options.http_bridge.as_str(), "gateway");
+        assert_eq!(options.command, ["tool"]);
+    }
+
+    #[test]
+    fn parse_rejects_empty_gateway_http_bridge_endpoint() {
+        let error = match Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--http-bridge",
+            "gateway=",
+            "--",
+            "tool",
+        ])) {
+            Ok(_) => panic!("empty gateway endpoint should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("gateway=<url>"));
     }
 
     #[test]
@@ -905,7 +981,9 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("unknown HTTP bridge mode"));
+        assert!(error
+            .to_string()
+            .contains("expected off, native, or gateway=<url>"));
     }
 
     #[test]
@@ -943,7 +1021,9 @@ mod tests {
             profile: HostProfile::NativeFull,
             event_format: EventFormat::Json,
             module_cache_dir: Some(PathBuf::from("/cache/modules")),
-            http_bridge: HttpBridgeMode::Native,
+            http_bridge: HttpBridgeMode::Gateway {
+                endpoint: "http://gateway.test/bridge?token=secret".to_string(),
+            },
             package_name: Some("tool".to_string()),
             command_aliases: vec![PackageCommandAlias {
                 alias: "alias".to_string(),
@@ -987,7 +1067,9 @@ mod tests {
         assert_eq!(event["env_keys"], json!(["PUBLIC", "SECRET"]));
         assert_eq!(event["env_count"], 2);
         assert_eq!(event["module_cache_dir"], "/cache/modules");
-        assert_eq!(event["http_bridge"], "native");
+        assert_eq!(event["http_bridge"], "gateway");
+        assert!(!line.contains("gateway.test"));
+        assert!(!line.contains("secret"));
     }
 
     #[test]

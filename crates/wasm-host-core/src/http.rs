@@ -8,6 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use serde::{Deserialize, Serialize};
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::{
     io::{Read, Write},
@@ -18,6 +21,8 @@ use crate::{CancellationSource, CancellationToken};
 
 const HTTP_RESPONSE_EVENT_QUEUE_SIZE: usize = 1;
 const HTTP_REQUEST_BODY_EVENT_QUEUE_SIZE: usize = 1;
+const HTTP_GATEWAY_EVENT_QUEUE_SIZE: usize = 16;
+const HTTP_GATEWAY_RESPONSE_BODY_LIMIT: usize = 16 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 const NATIVE_HTTP_HEADER_LIMIT: usize = 64 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
@@ -128,6 +133,53 @@ pub enum GatewayHttpResponseBody {
 #[cfg(not(target_arch = "wasm32"))]
 pub struct NativeHttpBridgeWorker {
     _handle: thread::JoinHandle<()>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct NativeGatewayHttpTransport {
+    endpoint: String,
+    bridge: HttpBridge,
+    _worker: Arc<Mutex<NativeHttpBridgeWorker>>,
+}
+
+#[derive(Serialize)]
+struct GatewayWireRequest {
+    schema: u32,
+    id: u64,
+    method: String,
+    url: String,
+    headers: Vec<GatewayWireHeader>,
+    body_chunks_base64: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct GatewayWireHeader {
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayWireResponse {
+    ok: bool,
+    response: Option<GatewayWireSuccess>,
+    error: Option<GatewayWireError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayWireSuccess {
+    status: u16,
+    #[serde(default)]
+    headers: Vec<GatewayWireHeader>,
+    #[serde(default)]
+    body_base64: Option<String>,
+    #[serde(default)]
+    body_chunks_base64: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayWireError {
+    kind: String,
+    message: String,
 }
 
 #[derive(Debug)]
@@ -361,6 +413,211 @@ impl GatewayHttpResponse {
             headers,
             body: GatewayHttpResponseBody::Chunks(chunks),
         })
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeGatewayHttpTransport {
+    pub fn new(endpoint: impl Into<String>) -> std::result::Result<Self, HttpBridgeError> {
+        let endpoint = normalize_http_url(endpoint.into())?;
+        let _ = parse_native_http_url(&endpoint)?;
+        let (bridge, receiver) = HttpBridge::new(HTTP_GATEWAY_EVENT_QUEUE_SIZE);
+        let worker = NativeHttpBridgeWorker::spawn(receiver);
+        Ok(Self {
+            endpoint,
+            bridge,
+            _worker: Arc::new(Mutex::new(worker)),
+        })
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl GatewayHttpTransport for NativeGatewayHttpTransport {
+    fn dispatch(
+        &self,
+        request: GatewayHttpRequest,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
+        let wire_request = encode_gateway_wire_request(request)?;
+        let body = serde_json::to_vec(&wire_request).map_err(|error| {
+            HttpBridgeError::invalid_request(format!(
+                "unable to encode HTTP gateway request: {error}"
+            ))
+        })?;
+        let response = self
+            .bridge
+            .request_blocking(
+                HttpRequest::new(
+                    "POST",
+                    self.endpoint.clone(),
+                    vec![
+                        HttpHeader::new("content-type", "application/json")?,
+                        HttpHeader::new("accept", "application/json")?,
+                    ],
+                    body,
+                )?,
+                HttpRequestLimits {
+                    response_body_bytes: HTTP_GATEWAY_RESPONSE_BODY_LIMIT,
+                    wall_time: None,
+                },
+                cancellation,
+            )
+            .map_err(map_gateway_endpoint_error)?;
+
+        decode_gateway_endpoint_response(response)
+    }
+}
+
+fn encode_gateway_wire_request(
+    mut request: GatewayHttpRequest,
+) -> std::result::Result<GatewayWireRequest, HttpBridgeError> {
+    let mut body_chunks_base64 = Vec::new();
+    while let Some(chunk) = request.body.read_chunk_blocking()? {
+        body_chunks_base64.push(BASE64.encode(chunk));
+    }
+
+    Ok(GatewayWireRequest {
+        schema: 1,
+        id: request.id,
+        method: request.method,
+        url: request.url,
+        headers: request
+            .headers
+            .into_iter()
+            .map(|header| GatewayWireHeader {
+                name: header.name,
+                value: header.value,
+            })
+            .collect(),
+        body_chunks_base64,
+    })
+}
+
+fn decode_gateway_endpoint_response(
+    response: HttpResponse,
+) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
+    match response.status {
+        200..=299 => {}
+        401 | 403 => {
+            return Err(HttpBridgeError::auth_failure(
+                "HTTP gateway authentication failed",
+            ))
+        }
+        404 | 502 | 503 | 504 => {
+            return Err(HttpBridgeError::gateway_unavailable(
+                "HTTP gateway endpoint is unavailable",
+            ))
+        }
+        status => {
+            return Err(HttpBridgeError::transport(format!(
+                "HTTP gateway returned status {status}"
+            )))
+        }
+    }
+
+    let wire_response: GatewayWireResponse =
+        serde_json::from_slice(&response.body).map_err(|error| {
+            HttpBridgeError::invalid_response(format!(
+                "invalid HTTP gateway response JSON: {error}"
+            ))
+        })?;
+    decode_gateway_wire_response(wire_response)
+}
+
+fn decode_gateway_wire_response(
+    wire_response: GatewayWireResponse,
+) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
+    if !wire_response.ok {
+        let error = wire_response.error.ok_or_else(|| {
+            HttpBridgeError::invalid_response("HTTP gateway error response is missing error")
+        })?;
+        return Err(decode_gateway_wire_error(error)?);
+    }
+
+    let response = wire_response.response.ok_or_else(|| {
+        HttpBridgeError::invalid_response("HTTP gateway success response is missing response")
+    })?;
+    let headers = response
+        .headers
+        .into_iter()
+        .map(|header| HttpHeader::new(header.name, header.value))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    match (response.body_base64, response.body_chunks_base64) {
+        (Some(_), Some(_)) => Err(HttpBridgeError::invalid_response(
+            "HTTP gateway response cannot include both body_base64 and body_chunks_base64",
+        )),
+        (Some(body), None) => {
+            GatewayHttpResponse::complete(response.status, headers, decode_gateway_body(&body)?)
+        }
+        (None, Some(chunks)) => {
+            let chunks = chunks
+                .into_iter()
+                .map(|chunk| decode_gateway_body(&chunk))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            GatewayHttpResponse::chunks(response.status, headers, chunks)
+        }
+        (None, None) => GatewayHttpResponse::complete(response.status, headers, Vec::new()),
+    }
+}
+
+fn decode_gateway_body(value: &str) -> std::result::Result<Vec<u8>, HttpBridgeError> {
+    BASE64.decode(value).map_err(|error| {
+        HttpBridgeError::invalid_response(format!("invalid gateway body base64: {error}"))
+    })
+}
+
+fn decode_gateway_wire_error(
+    error: GatewayWireError,
+) -> std::result::Result<HttpBridgeError, HttpBridgeError> {
+    let message = error.message;
+    match error.kind.as_str() {
+        "invalid_request" => Ok(HttpBridgeError::invalid_request(message)),
+        "invalid_response" => Ok(HttpBridgeError::invalid_response(message)),
+        "unsupported_scheme" => Ok(HttpBridgeError::unsupported_scheme(message)),
+        "gateway_unavailable" => Ok(HttpBridgeError::gateway_unavailable(message)),
+        "auth_failure" => Ok(HttpBridgeError::auth_failure(message)),
+        "cors" => Ok(HttpBridgeError::cors(message)),
+        "timeout" => Ok(HttpBridgeError::timeout(message)),
+        "cancelled" => Ok(HttpBridgeError::cancelled(message)),
+        "transport" => Ok(HttpBridgeError::transport(message)),
+        "response_too_large" => Ok(HttpBridgeError::response_too_large(message)),
+        kind => Err(HttpBridgeError::invalid_response(format!(
+            "unknown HTTP gateway error kind: {kind}"
+        ))),
+    }
+}
+
+fn map_gateway_endpoint_error(error: HttpBridgeError) -> HttpBridgeError {
+    match error.kind {
+        HttpBridgeErrorKind::InvalidRequest => {
+            HttpBridgeError::invalid_request("invalid HTTP gateway endpoint request")
+        }
+        HttpBridgeErrorKind::InvalidResponse => {
+            HttpBridgeError::invalid_response("invalid HTTP gateway endpoint response")
+        }
+        HttpBridgeErrorKind::UnsupportedScheme => {
+            HttpBridgeError::unsupported_scheme("HTTP gateway endpoint uses an unsupported scheme")
+        }
+        HttpBridgeErrorKind::GatewayUnavailable => {
+            HttpBridgeError::gateway_unavailable("HTTP gateway endpoint is unavailable")
+        }
+        HttpBridgeErrorKind::AuthFailure => {
+            HttpBridgeError::auth_failure("HTTP gateway authentication failed")
+        }
+        HttpBridgeErrorKind::Cors => {
+            HttpBridgeError::cors("HTTP gateway endpoint blocked the request")
+        }
+        HttpBridgeErrorKind::Timeout => HttpBridgeError::timeout("HTTP gateway request timed out"),
+        HttpBridgeErrorKind::Cancelled => {
+            HttpBridgeError::cancelled("HTTP gateway request cancelled")
+        }
+        HttpBridgeErrorKind::Transport => {
+            HttpBridgeError::transport("HTTP gateway endpoint transport failed")
+        }
+        HttpBridgeErrorKind::ResponseTooLarge => {
+            HttpBridgeError::response_too_large("HTTP gateway response exceeded bridge limit")
+        }
     }
 }
 

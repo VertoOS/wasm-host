@@ -42,13 +42,19 @@ print(result.stdout.decode())
 On macOS, use `target/debug/libwasm_host_c_api.dylib`.
 
 Packages that use the HTTP bridge device can opt into the native bridge during
-terminal testing:
+terminal testing, or route through a local gateway endpoint:
 
 ```python
 RunOptions(
     webc="/path/to/package.webc",
     command=["package-command"],
     http_bridge="native",
+)
+
+RunOptions(
+    webc="/path/to/package.webc",
+    command=["package-command"],
+    http_bridge="gateway=http://127.0.0.1:8787/bridge",
 )
 ```
 

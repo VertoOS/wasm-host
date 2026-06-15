@@ -9,8 +9,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Deserialize;
 #[cfg(not(target_arch = "wasm32"))]
 use wasm_host_core::{
-    register_native_host_commands, NativeHostCommandSpec, NativeHostCommandWorker,
-    NativeHttpBridgeWorker,
+    register_native_host_commands, GatewayHttpBridgeWorker, NativeGatewayHttpTransport,
+    NativeHostCommandSpec, NativeHostCommandWorker, NativeHttpBridgeWorker,
 };
 use wasm_host_core::{
     CancellationSource, CompletedProcess, EventBus, HostMount, HostProfile, HttpBridge, Limits,
@@ -306,18 +306,43 @@ fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
 #[cfg(not(target_arch = "wasm32"))]
 fn http_bridge_for_mode(
     mode: Option<&str>,
-) -> Result<(Option<HttpBridge>, Option<NativeHttpBridgeWorker>)> {
+) -> Result<(Option<HttpBridge>, Option<HttpBridgeWorker>)> {
     match mode.unwrap_or("off") {
         "off" => Ok((None, None)),
         "native" => {
             let (bridge, receiver) = HttpBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
             let worker = NativeHttpBridgeWorker::spawn(receiver);
-            Ok((Some(bridge), Some(worker)))
+            Ok((
+                Some(bridge),
+                Some(HttpBridgeWorker::Native { _worker: worker }),
+            ))
+        }
+        value if value.starts_with("gateway=") => {
+            let endpoint = value
+                .strip_prefix("gateway=")
+                .expect("prefix should be present");
+            if endpoint.is_empty() {
+                return Err(anyhow!("HTTP gateway mode requires gateway=<url>"));
+            }
+            let (bridge, receiver) = HttpBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
+            let transport = NativeGatewayHttpTransport::new(endpoint)
+                .map_err(|error| anyhow!("unable to configure HTTP gateway bridge: {error}"))?;
+            let worker = GatewayHttpBridgeWorker::spawn(receiver, transport);
+            Ok((
+                Some(bridge),
+                Some(HttpBridgeWorker::Gateway { _worker: worker }),
+            ))
         }
         value => Err(anyhow!(
-            "unknown HTTP bridge mode: {value}; expected off or native"
+            "unknown HTTP bridge mode: {value}; expected off, native, or gateway=<url>"
         )),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum HttpBridgeWorker {
+    Native { _worker: NativeHttpBridgeWorker },
+    Gateway { _worker: GatewayHttpBridgeWorker },
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -327,8 +352,11 @@ fn http_bridge_for_mode(mode: Option<&str>) -> Result<(Option<HttpBridge>, Optio
         "native" => Err(anyhow!(
             "native HTTP bridge mode is not available on wasm32"
         )),
+        value if value.starts_with("gateway=") => Err(anyhow!(
+            "gateway HTTP bridge mode is not available on wasm32"
+        )),
         value => Err(anyhow!(
-            "unknown HTTP bridge mode: {value}; expected off or native"
+            "unknown HTTP bridge mode: {value}; expected off, native, or gateway=<url>"
         )),
     }
 }
@@ -441,7 +469,7 @@ mod tests {
         };
         assert_eq!(
             std::str::from_utf8(error).unwrap(),
-            "unknown HTTP bridge mode: bad; expected off or native"
+            "unknown HTTP bridge mode: bad; expected off, native, or gateway=<url>"
         );
         wasm_host_result_free(result);
     }
@@ -455,6 +483,19 @@ mod tests {
 
         assert_eq!(options.module_cache_dir.as_deref(), Some("/tmp/modules"));
         assert_eq!(options.http_bridge.as_deref(), Some("native"));
+    }
+
+    #[test]
+    fn gateway_http_bridge_option_decodes() {
+        let options: FfiRunOptions = serde_json::from_str(
+            r#"{"webc":"missing.webc","command":["tool"],"http_bridge":"gateway=http://127.0.0.1:8080/bridge"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            options.http_bridge.as_deref(),
+            Some("gateway=http://127.0.0.1:8080/bridge")
+        );
     }
 
     #[test]

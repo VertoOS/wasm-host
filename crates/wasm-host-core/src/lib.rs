@@ -46,14 +46,14 @@ mod http;
 pub use host_command::{
     register_native_host_commands, NativeHostCommandSpec, NativeHostCommandWorker,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use http::NativeHttpBridgeWorker;
 pub use http::{
     GatewayHttpBridgeWorker, GatewayHttpRequest, GatewayHttpRequestBodyReader, GatewayHttpResponse,
     GatewayHttpResponseBody, GatewayHttpTransport, HttpBridge, HttpBridgeError,
     HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest, HttpRequestLimits,
     HttpResponse,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use http::{NativeGatewayHttpTransport, NativeHttpBridgeWorker};
 
 const COMMAND_PATH_PREFIXES: &[&str] = &["/bin", "/usr/bin"];
 const VIRTUAL_EXEC_BRIDGE_PATH: &str = "/dev/wasm-host-virtual-exec";

@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use serde_json::{json, Value};
 use wasm_host_fixtures::{
     http_bridge_fixture_webc, http_bridge_fixture_webc_with_options,
     http_bridge_fixture_webc_with_response_body_limit,
@@ -226,7 +227,127 @@ fn native_http_bridge_invalid_device_request_is_visible_to_wasi_guest() {
     );
 }
 
+#[test]
+fn gateway_http_bridge_is_available_to_wasi_guest() {
+    let mut gateway = GatewayHttpServer::spawn(json!({
+        "ok": true,
+        "response": {
+            "status": 201,
+            "headers": [{"name": "x-gateway", "value": "yes"}],
+            "body_chunks_base64": ["Z2F0ZXdheS0=", "b2s="]
+        }
+    }));
+    let webc = http_bridge_fixture_webc("https://example.test/http-bridge-fixture")
+        .expect("build HTTP bridge fixture");
+    let output = run_http_bridge_fixture(
+        webc,
+        "http-gateway-fixture.webc",
+        &format!("gateway={}", gateway.url()),
+    );
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["response"]["status"], 201);
+    assert_eq!(response["response"]["body_base64"], "Z2F0ZXdheS1vaw==");
+
+    let events = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    assert!(
+        events.contains(r#""http_bridge":"gateway""#),
+        "runner events should include gateway bridge mode:\n{events}"
+    );
+    assert!(
+        !events.contains(&gateway.url()),
+        "runner events should not include gateway endpoint URLs:\n{events}"
+    );
+
+    let request = gateway.request();
+    assert!(
+        request.head.starts_with("POST /bridge HTTP/1.1\r\n"),
+        "unexpected gateway request line:\n{}",
+        request.head
+    );
+    assert_eq!(request.body["schema"], 1);
+    assert_eq!(request.body["method"], "GET");
+    assert_eq!(
+        request.body["url"],
+        "https://example.test/http-bridge-fixture"
+    );
+    assert_eq!(request.body["body_chunks_base64"], json!([]));
+    assert_eq!(
+        request.body["headers"],
+        json!([{"name": "x-fixture", "value": "wasm-host-runner"}])
+    );
+}
+
+#[test]
+fn gateway_http_bridge_error_is_visible_to_wasi_guest() {
+    let mut gateway = GatewayHttpServer::spawn(json!({
+        "ok": false,
+        "error": {
+            "kind": "cors",
+            "message": "request blocked by gateway policy"
+        }
+    }));
+    let webc = http_bridge_fixture_webc("https://example.test/http-bridge-fixture")
+        .expect("build HTTP bridge fixture");
+    let output = run_http_bridge_fixture(
+        webc,
+        "http-gateway-error-fixture.webc",
+        &format!("gateway={}", gateway.url()),
+    );
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["kind"], "cors");
+    assert_eq!(
+        response["error"]["message"],
+        "request blocked by gateway policy"
+    );
+
+    let request = gateway.request();
+    assert_eq!(
+        request.body["url"],
+        "https://example.test/http-bridge-fixture"
+    );
+}
+
+#[test]
+fn gateway_http_bridge_preserves_streaming_upload_chunks() {
+    let mut gateway = GatewayHttpServer::spawn(json!({
+        "ok": true,
+        "response": {
+            "status": 200,
+            "headers": [],
+            "body_base64": "dXBsb2FkLW9r"
+        }
+    }));
+    let webc = http_bridge_streaming_upload_fixture_webc("https://example.test/upload")
+        .expect("build HTTP streaming upload fixture");
+    let output = run_http_bridge_fixture(
+        webc,
+        "http-gateway-streaming-upload-fixture.webc",
+        &format!("gateway={}", gateway.url()),
+    );
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["response"]["status"], 200);
+    assert_eq!(response["response"]["body_base64"], "dXBsb2FkLW9r");
+
+    let request = gateway.request();
+    assert_eq!(request.body["method"], "POST");
+    assert_eq!(request.body["url"], "https://example.test/upload");
+    assert_eq!(
+        request.body["body_chunks_base64"],
+        json!(["Z3Vlc3Qt", "dXBsb2Fk"])
+    );
+}
+
 fn run_native_http_bridge_fixture(webc: Vec<u8>, webc_filename: &str) -> Output {
+    run_http_bridge_fixture(webc, webc_filename, "native")
+}
+
+fn run_http_bridge_fixture(webc: Vec<u8>, webc_filename: &str, http_bridge: &str) -> Output {
     let tmp = tempfile::tempdir().expect("temp dir");
     let webc_path = tmp.path().join(webc_filename);
     std::fs::write(&webc_path, webc).expect("write WebC fixture");
@@ -235,7 +356,7 @@ fn run_native_http_bridge_fixture(webc: Vec<u8>, webc_filename: &str) -> Output 
         .arg("--event-format")
         .arg("json")
         .arg("--http-bridge")
-        .arg("native")
+        .arg(http_bridge)
         .arg("--module-cache-dir")
         .arg(tmp.path().join("modules"))
         .arg("--webc")
@@ -467,6 +588,66 @@ impl StreamingUploadHttpServer {
     }
 }
 
+struct GatewayHttpServer {
+    url: String,
+    request_receiver: mpsc::Receiver<GatewayHttpRequestCapture>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+struct GatewayHttpRequestCapture {
+    head: String,
+    body: Value,
+}
+
+impl GatewayHttpServer {
+    fn spawn(response_body: Value) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind gateway HTTP server");
+        let address = listener.local_addr().expect("read gateway server address");
+        let (request_sender, request_receiver) = mpsc::sync_channel(1);
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept gateway request");
+            let (head, body) = read_test_http_request_with_body(&mut stream);
+            let body: Value = serde_json::from_slice(&body).expect("gateway body should be JSON");
+            let response_body =
+                serde_json::to_vec(&response_body).expect("gateway response should encode");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response_body.len()
+            )
+            .expect("write gateway response headers");
+            stream
+                .write_all(&response_body)
+                .expect("write gateway response body");
+            request_sender
+                .send(GatewayHttpRequestCapture { head, body })
+                .expect("send captured gateway request");
+        });
+        Self {
+            url: format!("http://{address}/bridge"),
+            request_receiver,
+            handle: Some(handle),
+        }
+    }
+
+    fn url(&self) -> String {
+        self.url.clone()
+    }
+
+    fn request(&mut self) -> GatewayHttpRequestCapture {
+        let request = self
+            .request_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("receive captured gateway HTTP request");
+        if let Some(handle) = self.handle.take() {
+            handle
+                .join()
+                .expect("gateway HTTP server should exit cleanly");
+        }
+        request
+    }
+}
+
 fn handle_test_http_request(mut stream: TcpStream, response_body: &[u8]) -> String {
     let request = read_test_http_request(&mut stream);
     write!(
@@ -479,6 +660,50 @@ fn handle_test_http_request(mut stream: TcpStream, response_body: &[u8]) -> Stri
         .write_all(response_body)
         .expect("write HTTP response body");
     request
+}
+
+fn read_test_http_request_with_body(stream: &mut TcpStream) -> (String, Vec<u8>) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("gateway read timeout should set");
+    let mut data = Vec::new();
+    let mut buffer = [0_u8; 512];
+    let header_end = loop {
+        let length = stream.read(&mut buffer).expect("read HTTP request");
+        assert!(length > 0, "HTTP request should include headers");
+        data.extend_from_slice(&buffer[..length]);
+        if let Some(index) = data.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+        assert!(data.len() < 8192, "HTTP request headers exceeded 8 KiB");
+    };
+    let mut body = data.split_off(header_end);
+    let head = String::from_utf8(data).expect("HTTP request head should be UTF-8");
+    let content_length = content_length_from_head(&head);
+    while body.len() < content_length {
+        let length = stream.read(&mut buffer).expect("read HTTP request body");
+        assert!(length > 0, "HTTP request body ended early");
+        body.extend_from_slice(&buffer[..length]);
+        assert!(
+            body.len() <= 1024 * 1024,
+            "HTTP request body exceeded 1 MiB"
+        );
+    }
+    body.truncate(content_length);
+    (head, body)
+}
+
+fn content_length_from_head(head: &str) -> usize {
+    head.lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                value.trim().parse().ok()
+            } else {
+                None
+            }
+        })
+        .expect("HTTP request should include Content-Length")
 }
 
 fn read_test_http_request(stream: &mut TcpStream) -> String {

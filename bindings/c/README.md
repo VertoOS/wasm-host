@@ -35,8 +35,9 @@ Optional fields:
 - `output_limit`: stdout/stderr byte limit
 - `timeout_seconds`: wall-time limit
 - `module_cache_dir`: directory for compiled module cache entries
-- `http_bridge`: `off` or `native`; `native` exposes `/dev/wasm-host-http`
-  through the native HTTP bridge worker
+- `http_bridge`: `off`, `native`, or `gateway=http://127.0.0.1:PORT/bridge`;
+  `native` exposes `/dev/wasm-host-http` through the native HTTP bridge worker,
+  while `gateway=<url>` posts bridge requests to a local gateway endpoint
 
 The result status reports host/API success or failure. A guest process that exits
 non-zero still has status `0`; inspect `wasm_host_result_returncode`.

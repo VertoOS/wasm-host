@@ -167,7 +167,7 @@ URLs. Concrete adapters decide how those URLs are dispatched:
 | --- | --- | --- |
 | Native `--http-bridge native` | `http://` only | Direct plain HTTP for deterministic local and terminal-runner tests. `https://` returns `unsupported_scheme` until a gateway or TLS adapter exists. |
 | Browser Fetch | Browser-allowed `http://` and `https://` | Browser security policy wins. Mixed content, CORS, credential mode, and permission failures are reported as bridge errors rather than bypassed. |
-| Gateway | `http://` and `https://` if the gateway allows them | The gateway owns DNS, TLS, auth, CORS/proxy policy, and upstream transport behavior. |
+| Gateway `--http-bridge gateway=<url>` | `http://` and `https://` if the gateway allows them | The terminal runner posts bridge requests to a configured local `http://` gateway endpoint. The gateway owns DNS, TLS, auth, CORS/proxy policy, and upstream transport behavior. |
 
 Core exposes a gateway adapter foundation for this policy. `GatewayHttpBridgeWorker`
 consumes the same `HttpBridgeRequest` stream as the native worker and delegates
@@ -178,6 +178,34 @@ worker maps those chunks back through the same response-limit and cancellation
 path used by every other HTTP bridge caller. A browser Fetch transport or local
 gateway transport should implement that trait rather than defining a separate
 HTTP contract.
+
+The initial terminal gateway wire format is JSON over `POST` to the configured
+gateway endpoint:
+
+```json
+{
+  "schema": 1,
+  "id": 1,
+  "method": "GET",
+  "url": "https://example.test/api",
+  "headers": [{"name": "x-test", "value": "yes"}],
+  "body_chunks_base64": []
+}
+```
+
+Gateway responses use the same normalized response/error vocabulary as the
+guest device:
+
+```json
+{"ok":true,"response":{"status":200,"headers":[],"body_chunks_base64":["T0s="]}}
+```
+
+```json
+{"ok":false,"error":{"kind":"cors","message":"request blocked by gateway policy"}}
+```
+
+Endpoint URLs are configuration, not telemetry. Runner events expose the bridge
+mode as `gateway` but must not include the configured gateway URL.
 
 Error mapping is part of the bridge contract:
 

@@ -49,13 +49,19 @@ func main() {
 The dynamic library must be available on the platform library path at runtime.
 
 Packages that use the HTTP bridge device can opt into the native bridge during
-terminal testing:
+terminal testing, or route through a local gateway endpoint:
 
 ```go
 _, err := wasmhost.Run(wasmhost.Options{
 	WebC:       "/path/to/package.webc",
 	Command:    []string{"package-command"},
 	HTTPBridge: "native",
+})
+
+_, err = wasmhost.Run(wasmhost.Options{
+	WebC:       "/path/to/package.webc",
+	Command:    []string{"package-command"},
+	HTTPBridge: "gateway=http://127.0.0.1:8787/bridge",
 })
 ```
 

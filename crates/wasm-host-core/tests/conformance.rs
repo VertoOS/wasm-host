@@ -378,6 +378,54 @@ fn virtual_executable_exit_code_and_stderr_are_preserved() {
     assert_eq!(result.stderr, b"tool failed\n");
 }
 
+fn virtual_command_error_for_response(
+    stdout: &'static [u8],
+    stderr: &'static [u8],
+    output_bytes: usize,
+) -> String {
+    let (state, mut virtual_process_receiver) = virtual_command_sandbox();
+    let handler = thread::spawn(move || {
+        let request = virtual_process_receiver
+            .blocking_recv()
+            .expect("virtual process request should arrive");
+        request
+            .respond(encode_virtual_process_response(0, stdout, stderr))
+            .expect("response should send");
+    });
+
+    let result = state.run_blocking(
+        RunRequest {
+            args: vec!["host-tool".to_string()],
+            input: None,
+            env: None,
+            cwd: None,
+            limits: Limits {
+                output_bytes,
+                wall_time_seconds: Some(5.0),
+            },
+        },
+        CancellationSource::new().token(),
+    );
+    handler.join().expect("handler thread should finish");
+
+    match result {
+        Ok(_) => panic!("virtual command output limit should fail"),
+        Err(error) => error.to_string(),
+    }
+}
+
+#[test]
+fn virtual_executable_stdout_respects_output_limit() {
+    let error = virtual_command_error_for_response(b"abcde", b"", 4);
+    assert_eq!(error, "process stdout output exceeded 4 bytes");
+}
+
+#[test]
+fn virtual_executable_stderr_respects_output_limit() {
+    let error = virtual_command_error_for_response(b"", b"abcde", 4);
+    assert_eq!(error, "process stderr output exceeded 4 bytes");
+}
+
 #[test]
 fn virtual_executable_wall_time_limit_cancels_pending_request() {
     let (state, mut virtual_process_receiver) = virtual_command_sandbox();

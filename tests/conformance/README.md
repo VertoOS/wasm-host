@@ -17,6 +17,7 @@ The first conformance slice covers:
 - read-only and writable host mounts
 - virtual executable dispatch through the host bridge
 - virtual process exit-code/stderr propagation
+- virtual process stdout/stderr output limits
 - virtual process wall-time timeout and external cancellation
 
 These tests should eventually run against:

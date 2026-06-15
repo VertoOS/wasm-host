@@ -2016,6 +2016,7 @@ impl PackageCatalog {
         let cwd = request.cwd.unwrap_or_else(|| state.cwd.clone());
         let cwd = normalize_path(&cwd)?;
         validate_directory(&state.fs, &cwd, "cwd")?;
+        let output_limit = request.limits.output_bytes;
         let wall_time = match request.limits.wall_time_seconds {
             Some(seconds) => Some(duration_from_seconds(seconds)?),
             None => None,
@@ -2031,6 +2032,7 @@ impl PackageCatalog {
                     target,
                     state,
                     wall_time,
+                    output_limit,
                     cancellation,
                 );
             }
@@ -2100,6 +2102,7 @@ impl PackageCatalog {
         target: ResolvedVirtualExecutable,
         state: &SandboxState,
         wall_time: Option<Duration>,
+        output_limit: usize,
         cancellation: CancellationToken,
     ) -> Result<CompletedProcess> {
         let cwd = cwd
@@ -2122,6 +2125,8 @@ impl PackageCatalog {
                 .invoke_blocking(payload, wall_time, cancellation)?;
         let response = decode_virtual_process_response(&response)
             .context("invalid virtual executable response")?;
+        ensure_process_output_within_limit("stdout", &response.stdout, output_limit)?;
+        ensure_process_output_within_limit("stderr", &response.stderr, output_limit)?;
         Ok(CompletedProcess {
             args,
             returncode: response.returncode,
@@ -2771,6 +2776,15 @@ impl VirtualFile for LimitedCaptureFile {
 
 fn output_limit_error(limit: usize) -> io::Error {
     io::Error::other(format!("process output exceeded {limit} bytes"))
+}
+
+fn ensure_process_output_within_limit(stream_name: &str, data: &[u8], limit: usize) -> Result<()> {
+    if data.len() <= limit {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "process {stream_name} output exceeded {limit} bytes"
+    ))
 }
 
 fn read_only_mount_error() -> io::Error {

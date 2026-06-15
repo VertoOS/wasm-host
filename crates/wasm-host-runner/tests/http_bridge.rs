@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     process::{Command as ProcessCommand, Output},
     sync::mpsc,
@@ -7,12 +7,14 @@ use std::{
     time::Duration,
 };
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::{json, Value};
 use wasm_host_fixtures::{
     http_bridge_fixture_webc, http_bridge_fixture_webc_with_options,
     http_bridge_fixture_webc_with_response_body_limit,
     http_bridge_invalid_stream_frame_fixture_webc, http_bridge_streaming_upload_fixture_webc,
-    HttpBridgeFixtureOptions, HTTP_BRIDGE_COMMAND,
+    http_bridge_streaming_upload_fixture_webc_with_chunks_and_options, HttpBridgeFixtureOptions,
+    HTTP_BRIDGE_COMMAND,
 };
 
 #[test]
@@ -597,6 +599,157 @@ fn gateway_http_bridge_preserves_streaming_upload_chunks() {
     );
 }
 
+#[test]
+fn gateway_http_bridge_preserves_large_streaming_upload_chunks() {
+    let chunks = (0..24)
+        .map(|index| vec![b'a' + (index % 26) as u8; 512 + index])
+        .collect::<Vec<_>>();
+    let encoded_chunks = encoded_upload_chunks(&chunks);
+    let encoded_chunk_refs = encoded_chunks
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut gateway = GatewayHttpServer::spawn(json!({
+        "ok": true,
+        "response": {
+            "status": 200,
+            "headers": [],
+            "body_base64": "bGFyZ2UtdXBsb2FkLW9r"
+        }
+    }));
+    let webc = http_bridge_streaming_upload_fixture_webc_with_chunks_and_options(
+        "https://example.test/large-upload",
+        &encoded_chunk_refs,
+        HttpBridgeFixtureOptions::default(),
+    )
+    .expect("build HTTP large streaming upload fixture");
+    let output = run_http_bridge_fixture(
+        webc,
+        "http-gateway-large-streaming-upload-fixture.webc",
+        &format!("gateway={}", gateway.url()),
+    );
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["response"]["status"], 200);
+    assert_eq!(response["response"]["body_base64"], "bGFyZ2UtdXBsb2FkLW9r");
+
+    let request = gateway.request();
+    assert_gateway_streaming_upload_head(&request.head);
+    assert_eq!(request.frames.len(), encoded_chunks.len() + 2);
+    assert_eq!(
+        request.frames.first(),
+        Some(&json!({
+            "type": "request",
+            "schema": 1,
+            "id": 1,
+            "method": "POST",
+            "url": "https://example.test/large-upload",
+            "headers": [{"name": "x-fixture", "value": "wasm-host-runner"}]
+        }))
+    );
+    for (frame, expected_chunk) in request.frames[1..=encoded_chunks.len()]
+        .iter()
+        .zip(encoded_chunks.iter())
+    {
+        assert_eq!(
+            frame,
+            &json!({"type": "body_chunk", "body_base64": expected_chunk})
+        );
+    }
+    assert_eq!(request.frames.last(), Some(&json!({"type": "body_end"})));
+}
+
+#[test]
+fn gateway_http_bridge_streaming_upload_response_limit_error_is_visible_to_wasi_guest() {
+    let mut gateway = GatewayHttpServer::spawn(json!({
+        "ok": true,
+        "response": {
+            "status": 200,
+            "headers": [],
+            "body_chunks_base64": ["MTIz", "NDU="]
+        }
+    }));
+    let webc = http_bridge_streaming_upload_fixture_webc_with_chunks_and_options(
+        "https://example.test/upload-limit",
+        &["dXBsb2Fk"],
+        HttpBridgeFixtureOptions {
+            response_body_limit: 4,
+            ..HttpBridgeFixtureOptions::default()
+        },
+    )
+    .expect("build HTTP streaming upload limit fixture");
+    let output = run_http_bridge_fixture(
+        webc,
+        "http-gateway-streaming-upload-limit-fixture.webc",
+        &format!("gateway={}", gateway.url()),
+    );
+    let response = parse_fixture_stdout(&output);
+    let events = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+
+    assert_gateway_error(
+        &response,
+        "response_too_large",
+        "HTTP response body exceeded 4 bytes",
+    );
+    assert_gateway_endpoint_not_leaked(&events, &response, &gateway.url());
+
+    let request = gateway.request();
+    assert_gateway_streaming_upload_head(&request.head);
+}
+
+#[test]
+fn gateway_http_bridge_disconnect_during_streaming_upload_is_visible_to_wasi_guest() {
+    let chunks = (0..16)
+        .map(|index| vec![b'0' + (index % 10) as u8; 1024])
+        .collect::<Vec<_>>();
+    let encoded_chunks = encoded_upload_chunks(&chunks);
+    let encoded_chunk_refs = encoded_chunks
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut gateway = GatewayHttpServer::spawn_disconnect_after_request_head();
+    let webc = http_bridge_streaming_upload_fixture_webc_with_chunks_and_options(
+        "https://example.test/disconnect-upload",
+        &encoded_chunk_refs,
+        HttpBridgeFixtureOptions::default(),
+    )
+    .expect("build HTTP disconnect streaming upload fixture");
+    let output = run_http_bridge_fixture(
+        webc,
+        "http-gateway-streaming-upload-disconnect-fixture.webc",
+        &format!("gateway={}", gateway.url()),
+    );
+    let response = parse_fixture_stdout(&output);
+    let events = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+
+    assert_gateway_error(&response, "transport", "HTTP");
+    assert_gateway_endpoint_not_leaked(&events, &response, &gateway.url());
+
+    let request = gateway.request();
+    assert_gateway_streaming_upload_head(&request.head);
+}
+
+#[test]
+fn gateway_http_bridge_invalid_upload_frame_is_rejected_before_gateway_request() {
+    let gateway_url = closed_local_http_url("/unused-gateway");
+    let webc = http_bridge_invalid_stream_frame_fixture_webc().expect("build invalid HTTP fixture");
+    let output = run_http_bridge_fixture(
+        webc,
+        "http-gateway-invalid-upload-frame-fixture.webc",
+        &format!("gateway={gateway_url}"),
+    );
+    let response = parse_fixture_stdout(&output);
+    let events = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+
+    assert_gateway_error(
+        &response,
+        "invalid_request",
+        "must start with a request frame",
+    );
+    assert_gateway_endpoint_not_leaked(&events, &response, &gateway_url);
+}
+
 fn run_native_http_bridge_fixture(webc: Vec<u8>, webc_filename: &str) -> Output {
     run_http_bridge_fixture(webc, webc_filename, "native")
 }
@@ -679,6 +832,22 @@ fn assert_gateway_endpoint_not_leaked(events: &str, response: &Value, gateway_ur
         !response.to_string().contains(gateway_url),
         "guest error should not include gateway endpoint URL: {response}"
     );
+}
+
+fn assert_gateway_streaming_upload_head(head: &str) {
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("transfer-encoding: chunked\r\n"),
+        "gateway streaming request should use chunked transfer encoding:\n{head}"
+    );
+    assert!(
+        !head.to_ascii_lowercase().contains("content-length:"),
+        "gateway streaming request should not send Content-Length:\n{head}"
+    );
+}
+
+fn encoded_upload_chunks(chunks: &[Vec<u8>]) -> Vec<String> {
+    chunks.iter().map(|chunk| BASE64.encode(chunk)).collect()
 }
 
 fn closed_local_http_url(path: &str) -> String {
@@ -913,6 +1082,28 @@ impl GatewayHttpServer {
         Self::spawn_response(GatewayHttpResponseSpec::Stream(frames))
     }
 
+    fn spawn_disconnect_after_request_head() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind gateway HTTP server");
+        let address = listener.local_addr().expect("read gateway server address");
+        let (request_sender, request_receiver) = mpsc::sync_channel(1);
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept gateway request");
+            let head = read_test_http_request(&mut stream);
+            request_sender
+                .send(GatewayHttpRequestCapture {
+                    head,
+                    body: Value::Null,
+                    frames: Vec::new(),
+                })
+                .expect("send captured gateway request");
+        });
+        Self {
+            url: format!("http://{address}/bridge"),
+            request_receiver,
+            handle: Some(handle),
+        }
+    }
+
     fn spawn_response(response: GatewayHttpResponseSpec) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind gateway HTTP server");
         let address = listener.local_addr().expect("read gateway server address");
@@ -966,50 +1157,83 @@ fn write_gateway_response(stream: &mut TcpStream, response: GatewayHttpResponseS
                 .expect("write gateway response body");
         }
         GatewayHttpResponseSpec::Stream(frames) => {
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
-                )
-                .expect("write gateway stream response headers");
+            if !gateway_write_all(
+                stream,
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                "write gateway stream response headers",
+            ) {
+                return;
+            }
             for frame in frames {
                 let mut frame = serde_json::to_vec(&frame).expect("gateway frame should encode");
                 frame.push(b'\n');
-                write!(stream, "{:x}\r\n", frame.len()).expect("write gateway chunk size");
-                stream
-                    .write_all(&frame)
-                    .expect("write gateway stream frame");
-                stream
-                    .write_all(b"\r\n")
-                    .expect("write gateway chunk terminator");
+                if !gateway_write_fmt(
+                    stream,
+                    format_args!("{:x}\r\n", frame.len()),
+                    "write gateway chunk size",
+                ) || !gateway_write_all(stream, &frame, "write gateway stream frame")
+                    || !gateway_write_all(stream, b"\r\n", "write gateway chunk terminator")
+                {
+                    return;
+                }
             }
-            stream
-                .write_all(b"0\r\n\r\n")
-                .expect("write gateway stream response end");
+            let _ = gateway_write_all(stream, b"0\r\n\r\n", "write gateway stream response end");
         }
         GatewayHttpResponseSpec::RawStream(chunks) => {
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
-                )
-                .expect("write gateway raw stream response headers");
-            for chunk in chunks {
-                stream
-                    .write_all(&http_chunk(&chunk))
-                    .expect("write gateway raw stream chunk");
+            if !gateway_write_all(
+                stream,
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                "write gateway raw stream response headers",
+            ) {
+                return;
             }
-            stream
-                .write_all(b"0\r\n\r\n")
-                .expect("write gateway raw stream response end");
+            for chunk in chunks {
+                if !gateway_write_all(
+                    stream,
+                    &http_chunk(&chunk),
+                    "write gateway raw stream chunk",
+                ) {
+                    return;
+                }
+            }
+            let _ = gateway_write_all(
+                stream,
+                b"0\r\n\r\n",
+                "write gateway raw stream response end",
+            );
         }
         GatewayHttpResponseSpec::Raw(response) => {
-            stream
-                .write_all(&response)
-                .expect("write raw gateway response");
+            let _ = gateway_write_all(stream, &response, "write raw gateway response");
         }
         GatewayHttpResponseSpec::DelayThenClose(delay) => {
             thread::sleep(delay);
         }
     }
+}
+
+fn gateway_write_all(stream: &mut TcpStream, data: &[u8], context: &str) -> bool {
+    match stream.write_all(data) {
+        Ok(()) => true,
+        Err(error) if gateway_client_closed(&error) => false,
+        Err(error) => panic!("{context}: {error}"),
+    }
+}
+
+fn gateway_write_fmt(stream: &mut TcpStream, args: std::fmt::Arguments<'_>, context: &str) -> bool {
+    match stream.write_fmt(args) {
+        Ok(()) => true,
+        Err(error) if gateway_client_closed(&error) => false,
+        Err(error) => panic!("{context}: {error}"),
+    }
+}
+
+fn gateway_client_closed(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+    )
 }
 
 fn raw_gateway_response(status: &str, content_type: &str, body: &[u8]) -> Vec<u8> {

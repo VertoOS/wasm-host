@@ -1953,6 +1953,9 @@ impl HttpBridgeDeviceFile {
 
     fn write_device_data(&mut self, buf: &[u8]) {
         if self.response.is_some() {
+            if self.reset_response_cursor {
+                return;
+            }
             self.request.clear();
             self.upload = None;
         }

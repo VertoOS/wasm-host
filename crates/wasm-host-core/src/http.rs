@@ -2608,6 +2608,11 @@ mod tests {
         error: HttpBridgeError,
     }
 
+    #[derive(Clone)]
+    struct BlockingUploadGatewayTransport {
+        first_chunk_sender: mpsc::SyncSender<Vec<u8>>,
+    }
+
     impl GatewayHttpTransport for RecordingGatewayTransport {
         fn dispatch(
             &self,
@@ -2640,6 +2645,24 @@ mod tests {
             _cancellation: CancellationToken,
         ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
             Err(self.error.clone())
+        }
+    }
+
+    impl GatewayHttpTransport for BlockingUploadGatewayTransport {
+        fn dispatch(
+            &self,
+            mut request: GatewayHttpRequest,
+            _cancellation: CancellationToken,
+        ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
+            let first_chunk = request
+                .body
+                .read_chunk_blocking()?
+                .expect("streaming upload should include a first chunk");
+            self.first_chunk_sender
+                .send(first_chunk)
+                .expect("first chunk should send");
+            while request.body.read_chunk_blocking()?.is_some() {}
+            GatewayHttpResponse::complete(200, Vec::new(), b"upload-ok".to_vec())
         }
     }
 
@@ -2723,6 +2746,82 @@ mod tests {
                 .body_chunks,
             [b"hello ".to_vec(), b"stream".to_vec()]
         );
+    }
+
+    #[test]
+    fn gateway_http_bridge_worker_times_out_while_waiting_for_stream_upload_chunk() {
+        let (first_chunk_sender, first_chunk_receiver) = mpsc::sync_channel(1);
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = GatewayHttpBridgeWorker::spawn(
+            receiver,
+            BlockingUploadGatewayTransport { first_chunk_sender },
+        );
+        let result = bridge.request_streaming_blocking(
+            HttpRequest::new("put", "https://example.test/upload", Vec::new(), Vec::new())
+                .expect("request should be valid"),
+            HttpRequestLimits {
+                response_body_bytes: 1024,
+                wall_time: Some(Duration::from_millis(50)),
+            },
+            CancellationSource::new().token(),
+            |body| {
+                body.write_chunk_blocking(b"first".to_vec())?;
+                thread::sleep(Duration::from_millis(250));
+                body.write_chunk_blocking(b"late".to_vec())
+            },
+        );
+
+        assert_eq!(
+            first_chunk_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("first upload chunk should reach transport"),
+            b"first"
+        );
+        let error = result.expect_err("streaming upload should time out");
+        assert_eq!(error.kind, HttpBridgeErrorKind::Timeout);
+        assert_eq!(error.message, "HTTP request exceeded wall time limit");
+    }
+
+    #[test]
+    fn gateway_http_bridge_worker_cancels_while_waiting_for_stream_upload_chunk() {
+        let (first_chunk_sender, first_chunk_receiver) = mpsc::sync_channel(1);
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = GatewayHttpBridgeWorker::spawn(
+            receiver,
+            BlockingUploadGatewayTransport { first_chunk_sender },
+        );
+        let cancellation = CancellationSource::new();
+        let token = cancellation.token();
+        let runner = thread::spawn(move || {
+            bridge.request_streaming_blocking(
+                HttpRequest::new("put", "https://example.test/upload", Vec::new(), Vec::new())
+                    .expect("request should be valid"),
+                HttpRequestLimits {
+                    response_body_bytes: 1024,
+                    wall_time: None,
+                },
+                token,
+                |body| {
+                    body.write_chunk_blocking(b"first".to_vec())?;
+                    thread::sleep(Duration::from_millis(250));
+                    body.write_chunk_blocking(b"late".to_vec())
+                },
+            )
+        });
+
+        assert_eq!(
+            first_chunk_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("first upload chunk should reach transport"),
+            b"first"
+        );
+        cancellation.cancel();
+        let error = runner
+            .join()
+            .expect("runner should finish")
+            .expect_err("streaming upload should be cancelled");
+        assert_eq!(error.kind, HttpBridgeErrorKind::Cancelled);
+        assert_eq!(error.message, "HTTP request cancelled");
     }
 
     #[test]

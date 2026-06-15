@@ -96,35 +96,46 @@ pub fn http_bridge_fixture_webc_with_options(
 }
 
 pub fn http_bridge_streaming_upload_fixture_webc(url: &str) -> Result<Vec<u8>> {
-    let frames = vec![
-        serde_json::json!({
-            "type": "request",
-            "method": "POST",
-            "url": url,
-            "headers": [
-                {
-                    "name": "x-fixture",
-                    "value": "wasm-host-runner"
-                }
-            ],
-            "response_body_limit": HttpBridgeFixtureOptions::default().response_body_limit
-        })
-        .to_string(),
+    http_bridge_streaming_upload_fixture_webc_with_chunks_and_options(
+        url,
+        &["Z3Vlc3Qt", "dXBsb2Fk"],
+        HttpBridgeFixtureOptions::default(),
+    )
+}
+
+pub fn http_bridge_streaming_upload_fixture_webc_with_chunks_and_options(
+    url: &str,
+    body_chunks_base64: &[&str],
+    options: HttpBridgeFixtureOptions,
+) -> Result<Vec<u8>> {
+    let mut frames = vec![serde_json::json!({
+        "type": "request",
+        "method": "POST",
+        "url": url,
+        "headers": [
+            {
+                "name": "x-fixture",
+                "value": "wasm-host-runner"
+            }
+        ],
+        "response_body_limit": options.response_body_limit
+    })];
+    if let Some(timeout_ms) = options.timeout_ms {
+        frames[0]["timeout_ms"] = serde_json::json!(timeout_ms);
+    }
+    frames.extend(body_chunks_base64.iter().map(|body_base64| {
         serde_json::json!({
             "type": "body_chunk",
-            "body_base64": "Z3Vlc3Qt"
+            "body_base64": body_base64
         })
-        .to_string(),
-        serde_json::json!({
-            "type": "body_chunk",
-            "body_base64": "dXBsb2Fk"
-        })
-        .to_string(),
-        serde_json::json!({
-            "type": "body_end"
-        })
-        .to_string(),
-    ];
+    }));
+    frames.push(serde_json::json!({
+        "type": "body_end"
+    }));
+    let frames = frames
+        .into_iter()
+        .map(|frame| frame.to_string())
+        .collect::<Vec<_>>();
     let wasm = wat::parse_str(http_bridge_fixture_wat(&frames))
         .context("compile HTTP streaming upload fixture WAT")?;
     package_wasi_fixture(
@@ -389,6 +400,20 @@ mod tests {
     #[test]
     fn http_bridge_streaming_upload_fixture_is_webc() {
         let webc = http_bridge_streaming_upload_fixture_webc("http://127.0.0.1:1/upload").unwrap();
+        assert!(webc.starts_with(b"\0webc003"));
+    }
+
+    #[test]
+    fn http_bridge_streaming_upload_fixture_with_chunks_and_options_is_webc() {
+        let webc = http_bridge_streaming_upload_fixture_webc_with_chunks_and_options(
+            "http://127.0.0.1:1/upload",
+            &["b25l", "dHdv"],
+            HttpBridgeFixtureOptions {
+                response_body_limit: 64,
+                timeout_ms: Some(50),
+            },
+        )
+        .unwrap();
         assert!(webc.starts_with(b"\0webc003"));
     }
 

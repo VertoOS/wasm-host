@@ -128,6 +128,12 @@ normalized methods, URLs, headers, status, body limits, classified errors, and
 cancellation. Guest syscall or socket integration is a later layer on top of
 that contract.
 
+Native terminal runs can expose the current bridge contract through
+`/dev/wasm-host-http` with `wasm-host-runner --http-bridge native`. The device is
+a simple JSON request/response surface for early guest-package tests; browser
+adapters should implement the same logical contract over Fetch or a gateway
+rather than depending on native sockets.
+
 ## Full CLI Target
 
 The browser-capable CLI target should be a sandboxed CLI runtime, not a native

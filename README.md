@@ -21,6 +21,8 @@ until the boundaries are stable enough to split.
 - The host profile and monorepo layout are documented.
 - Core conformance covers the first HTTP bridge contract for adapter-owned
   request dispatch, clean errors, response limits, and cancellation.
+- The native runner can expose an opt-in HTTP bridge device for guest packages
+  through `/dev/wasm-host-http`.
 - C ABI and initial Python/Go binding smoke tests are implemented.
 - Browser adapter, packaged runtime artifacts, and full language WebC e2e
   coverage are not implemented yet.
@@ -32,6 +34,7 @@ cargo run --bin wasm-host-runner -- \
   --webc /path/to/package.webc \
   --profile native-full \
   --module-cache-dir .cache/wasm-host/modules \
+  --http-bridge native \
   --mount "$PWD:/workspace:rw" \
   --cwd /workspace \
   --env HOME=/workspace \
@@ -52,6 +55,11 @@ adapter testing of process behavior; it is not available in `browser-strict`.
 The bridge streams stdout/stderr back through the same output path as package
 processes and maps guest cwd to a host cwd when it falls under a configured
 mount.
+
+Use `--http-bridge native` to expose `/dev/wasm-host-http` to guest packages.
+The device accepts a JSON request with `method`, `url`, optional `headers`,
+optional base64 `body_base64`, and optional `response_body_limit`, then returns
+JSON with either a response status/headers/base64 body or a classified error.
 
 The runner validates the package before runtime setup. Missing or invalid WebC
 inputs fail with exit code `65`; command-line usage errors fail with exit code

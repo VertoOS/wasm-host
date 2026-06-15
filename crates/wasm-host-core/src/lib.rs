@@ -49,6 +49,7 @@ pub use http::{
 
 const COMMAND_PATH_PREFIXES: &[&str] = &["/bin", "/usr/bin"];
 const VIRTUAL_EXEC_BRIDGE_PATH: &str = "/dev/wasm-host-virtual-exec";
+const HTTP_BRIDGE_PATH: &str = "/dev/wasm-host-http";
 const VIRTUAL_EXECUTABLE_WASM: &str = r#"
 (module
   (type $errno0 (func (param i32 i32) (result i32)))
@@ -253,6 +254,7 @@ pub struct PackageSpec {
 #[derive(Clone, Debug, Default)]
 pub struct SandboxOptions {
     pub module_cache_dir: Option<PathBuf>,
+    pub http_bridge: Option<HttpBridge>,
 }
 
 #[derive(Clone, Debug)]
@@ -357,6 +359,7 @@ pub struct SandboxState {
     pub catalog: Arc<PackageCatalog>,
     pub events: EventBus,
     pub virtual_executables: VirtualExecutableRegistry,
+    pub http_bridge: Option<HttpBridge>,
 }
 
 #[derive(Clone)]
@@ -441,6 +444,46 @@ struct GuestVirtualProcessPayload {
     cwd: String,
     env: HashMap<String, String>,
     stdin: String,
+}
+
+#[derive(Deserialize)]
+struct HttpBridgeDeviceRequest {
+    method: String,
+    url: String,
+    #[serde(default)]
+    headers: Vec<HttpBridgeDeviceHeader>,
+    #[serde(default)]
+    body_base64: String,
+    #[serde(default)]
+    response_body_limit: Option<usize>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct HttpBridgeDeviceHeader {
+    name: String,
+    value: String,
+}
+
+#[derive(Serialize)]
+struct HttpBridgeDeviceResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<HttpBridgeDeviceSuccess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<HttpBridgeDeviceError>,
+}
+
+#[derive(Serialize)]
+struct HttpBridgeDeviceSuccess {
+    status: u16,
+    headers: Vec<HttpBridgeDeviceHeader>,
+    body_base64: String,
+}
+
+#[derive(Serialize)]
+struct HttpBridgeDeviceError {
+    kind: String,
+    message: String,
 }
 
 struct VirtualProcessResponsePayload {
@@ -576,6 +619,7 @@ struct ObservableVirtualFile {
 struct VirtualExecutableFileSystem {
     inner: Arc<dyn FileSystem + Send + Sync>,
     registry: VirtualExecutableRegistry,
+    http_bridge: Option<HttpBridge>,
     wall_time: Option<Duration>,
     cancellation: CancellationToken,
 }
@@ -583,6 +627,16 @@ struct VirtualExecutableFileSystem {
 #[derive(Debug)]
 struct VirtualExecutableBridgeFile {
     registry: VirtualExecutableRegistry,
+    wall_time: Option<Duration>,
+    cancellation: CancellationToken,
+    request: Vec<u8>,
+    response: Option<Vec<u8>>,
+    cursor: usize,
+}
+
+#[derive(Debug)]
+struct HttpBridgeDeviceFile {
+    bridge: HttpBridge,
     wall_time: Option<Duration>,
     cancellation: CancellationToken,
     request: Vec<u8>,
@@ -1144,12 +1198,14 @@ impl VirtualExecutableFileSystem {
     fn new(
         inner: Arc<dyn FileSystem + Send + Sync>,
         registry: VirtualExecutableRegistry,
+        http_bridge: Option<HttpBridge>,
         wall_time: Option<Duration>,
         cancellation: CancellationToken,
     ) -> Self {
         Self {
             inner,
             registry,
+            http_bridge,
             wall_time,
             cancellation,
         }
@@ -1584,6 +1640,12 @@ impl FileSystem for VirtualExecutableFileSystem {
                 path: PathBuf::from(VIRTUAL_EXEC_BRIDGE_PATH),
                 metadata: Ok(virtual_exec_bridge_metadata()),
             });
+            if self.http_bridge.is_some() {
+                entries.push(DirEntry {
+                    path: PathBuf::from(HTTP_BRIDGE_PATH),
+                    metadata: Ok(host_bridge_device_metadata()),
+                });
+            }
         }
         Ok(ReadDir::new(entries))
     }
@@ -1608,6 +1670,9 @@ impl FileSystem for VirtualExecutableFileSystem {
         if path == Path::new(VIRTUAL_EXEC_BRIDGE_PATH) {
             return Ok(virtual_exec_bridge_metadata());
         }
+        if path == Path::new(HTTP_BRIDGE_PATH) && self.http_bridge.is_some() {
+            return Ok(host_bridge_device_metadata());
+        }
         self.inner.metadata(path)
     }
 
@@ -1615,11 +1680,16 @@ impl FileSystem for VirtualExecutableFileSystem {
         if path == Path::new(VIRTUAL_EXEC_BRIDGE_PATH) {
             return Ok(virtual_exec_bridge_metadata());
         }
+        if path == Path::new(HTTP_BRIDGE_PATH) && self.http_bridge.is_some() {
+            return Ok(host_bridge_device_metadata());
+        }
         self.inner.symlink_metadata(path)
     }
 
     fn remove_file(&self, path: &Path) -> virtual_fs::Result<()> {
-        if path == Path::new(VIRTUAL_EXEC_BRIDGE_PATH) {
+        if path == Path::new(VIRTUAL_EXEC_BRIDGE_PATH)
+            || (path == Path::new(HTTP_BRIDGE_PATH) && self.http_bridge.is_some())
+        {
             return Err(FsError::PermissionDenied);
         }
         self.inner.remove_file(path)
@@ -1651,6 +1721,22 @@ impl FileOpener for VirtualExecutableFileSystem {
             }
             return Ok(Box::new(VirtualExecutableBridgeFile {
                 registry: self.registry.clone(),
+                wall_time: self.wall_time,
+                cancellation: self.cancellation.clone(),
+                request: Vec::new(),
+                response: None,
+                cursor: 0,
+            }));
+        }
+        if path == Path::new(HTTP_BRIDGE_PATH) {
+            let Some(bridge) = self.http_bridge.clone() else {
+                return Err(FsError::EntryNotFound);
+            };
+            if !config.read() || !(config.write() || config.append()) {
+                return Err(FsError::PermissionDenied);
+            }
+            return Ok(Box::new(HttpBridgeDeviceFile {
+                bridge,
                 wall_time: self.wall_time,
                 cancellation: self.cancellation.clone(),
                 request: Vec::new(),
@@ -1744,6 +1830,133 @@ impl AsyncWrite for VirtualExecutableBridgeFile {
 }
 
 impl VirtualFile for VirtualExecutableBridgeFile {
+    fn last_accessed(&self) -> u64 {
+        current_time_nanos()
+    }
+
+    fn last_modified(&self) -> u64 {
+        current_time_nanos()
+    }
+
+    fn created_time(&self) -> u64 {
+        current_time_nanos()
+    }
+
+    fn size(&self) -> u64 {
+        self.response
+            .as_ref()
+            .map_or(0_u64, |response| response.len() as u64)
+    }
+
+    fn set_len(&mut self, _new_size: u64) -> virtual_fs::Result<()> {
+        Err(FsError::PermissionDenied)
+    }
+
+    fn unlink(&mut self) -> virtual_fs::Result<()> {
+        Err(FsError::PermissionDenied)
+    }
+
+    fn is_open(&self) -> bool {
+        true
+    }
+
+    fn poll_read_ready(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<usize>> {
+        Poll::Ready(Ok(1))
+    }
+
+    fn poll_write_ready(
+        self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(Ok(1))
+    }
+}
+
+impl AsyncRead for HttpBridgeDeviceFile {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.response.is_none() {
+            let response = handle_http_bridge_device_request(
+                &self.bridge,
+                &self.request,
+                self.wall_time,
+                self.cancellation.clone(),
+            );
+            self.response = Some(response);
+            self.cursor = 0;
+        }
+
+        let response = self
+            .response
+            .as_ref()
+            .expect("response should be initialized");
+        let available = &response[self.cursor.min(response.len())..];
+        if available.is_empty() {
+            return Poll::Ready(Ok(()));
+        }
+
+        let length = available.len().min(buf.remaining());
+        buf.put_slice(&available[..length]);
+        self.cursor += length;
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncSeek for HttpBridgeDeviceFile {
+    fn start_seek(mut self: Pin<&mut Self>, position: SeekFrom) -> io::Result<()> {
+        let response_len = self.response.as_ref().map_or(0_i128, |response| {
+            i128::try_from(response.len()).unwrap_or(i128::MAX)
+        });
+        let cursor = match position {
+            SeekFrom::Start(offset) => i128::from(offset),
+            SeekFrom::End(offset) => response_len + i128::from(offset),
+            SeekFrom::Current(offset) => {
+                i128::try_from(self.cursor).unwrap_or(i128::MAX) + i128::from(offset)
+            }
+        };
+        if cursor < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot seek before start",
+            ));
+        }
+        self.cursor = usize::try_from(cursor).unwrap_or(usize::MAX);
+        Ok(())
+    }
+
+    fn poll_complete(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<u64>> {
+        Poll::Ready(Ok(self.cursor as u64))
+    }
+}
+
+impl AsyncWrite for HttpBridgeDeviceFile {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.response.is_some() {
+            self.request.clear();
+        }
+        self.request.extend_from_slice(buf);
+        self.response = None;
+        self.cursor = 0;
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl VirtualFile for HttpBridgeDeviceFile {
     fn last_accessed(&self) -> u64 {
         current_time_nanos()
     }
@@ -1950,6 +2163,7 @@ impl SandboxState {
             catalog,
             events,
             virtual_executables: VirtualExecutableRegistry::new(virtual_processes),
+            http_bridge: options.http_bridge,
         };
 
         for (path, contents) in files {
@@ -2365,6 +2579,7 @@ impl PackageCatalog {
             state.fs.clone(),
             state.events.clone(),
             state.virtual_executables.clone(),
+            state.http_bridge.clone(),
             wall_time,
             cancellation,
         );
@@ -2534,6 +2749,7 @@ impl PackageCatalog {
         root_fs: TmpFileSystem,
         events: EventBus,
         virtual_executables: VirtualExecutableRegistry,
+        http_bridge: Option<HttpBridge>,
         wall_time: Option<Duration>,
         cancellation: CancellationToken,
     ) -> Result<i32> {
@@ -2583,6 +2799,7 @@ impl PackageCatalog {
             package_files,
             events,
             virtual_executables,
+            http_bridge,
             wall_time,
             cancellation.clone(),
         ));
@@ -2674,6 +2891,7 @@ fn process_filesystem(
     package_files: Option<UnionFileSystem>,
     events: EventBus,
     virtual_executables: VirtualExecutableRegistry,
+    http_bridge: Option<HttpBridge>,
     wall_time: Option<Duration>,
     cancellation: CancellationToken,
 ) -> Arc<dyn FileSystem + Send + Sync> {
@@ -2687,6 +2905,7 @@ fn process_filesystem(
     let filesystem = Arc::new(VirtualExecutableFileSystem::new(
         filesystem,
         virtual_executables,
+        http_bridge,
         wall_time,
         cancellation,
     ));
@@ -3464,6 +3683,91 @@ fn decode_virtual_process_response(data: &[u8]) -> Result<VirtualProcessResponse
     })
 }
 
+fn handle_http_bridge_device_request(
+    bridge: &HttpBridge,
+    data: &[u8],
+    wall_time: Option<Duration>,
+    cancellation: CancellationToken,
+) -> Vec<u8> {
+    let response = match dispatch_http_bridge_device_request(bridge, data, wall_time, cancellation)
+    {
+        Ok(response) => HttpBridgeDeviceResponse {
+            ok: true,
+            response: Some(response),
+            error: None,
+        },
+        Err(error) => HttpBridgeDeviceResponse {
+            ok: false,
+            response: None,
+            error: Some(HttpBridgeDeviceError {
+                kind: http_bridge_error_kind_name(error.kind).to_string(),
+                message: error.message,
+            }),
+        },
+    };
+    serde_json::to_vec(&response).unwrap_or_else(|error| {
+        format!(
+            r#"{{"ok":false,"error":{{"kind":"transport","message":"unable to encode HTTP bridge response: {error}"}}}}"#
+        )
+        .into_bytes()
+    })
+}
+
+fn dispatch_http_bridge_device_request(
+    bridge: &HttpBridge,
+    data: &[u8],
+    wall_time: Option<Duration>,
+    cancellation: CancellationToken,
+) -> std::result::Result<HttpBridgeDeviceSuccess, HttpBridgeError> {
+    let request: HttpBridgeDeviceRequest = serde_json::from_slice(data).map_err(|error| {
+        HttpBridgeError::invalid_request(format!("invalid HTTP bridge device request: {error}"))
+    })?;
+    let response_body_bytes = request
+        .response_body_limit
+        .unwrap_or_else(|| HttpRequestLimits::default().response_body_bytes);
+    let headers = request
+        .headers
+        .into_iter()
+        .map(|header| HttpHeader::new(header.name, header.value))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let body = BASE64.decode(request.body_base64).map_err(|error| {
+        HttpBridgeError::invalid_request(format!("invalid HTTP bridge request body: {error}"))
+    })?;
+    let request = HttpRequest::new(request.method, request.url, headers, body)?;
+    let limits = HttpRequestLimits {
+        response_body_bytes,
+        wall_time,
+    };
+    let response = bridge.request_blocking(request, limits, cancellation)?;
+    Ok(HttpBridgeDeviceSuccess {
+        status: response.status,
+        headers: response
+            .headers
+            .into_iter()
+            .map(|header| HttpBridgeDeviceHeader {
+                name: header.name,
+                value: header.value,
+            })
+            .collect(),
+        body_base64: BASE64.encode(response.body),
+    })
+}
+
+fn http_bridge_error_kind_name(kind: HttpBridgeErrorKind) -> &'static str {
+    match kind {
+        HttpBridgeErrorKind::InvalidRequest => "invalid_request",
+        HttpBridgeErrorKind::InvalidResponse => "invalid_response",
+        HttpBridgeErrorKind::UnsupportedScheme => "unsupported_scheme",
+        HttpBridgeErrorKind::GatewayUnavailable => "gateway_unavailable",
+        HttpBridgeErrorKind::AuthFailure => "auth_failure",
+        HttpBridgeErrorKind::Cors => "cors",
+        HttpBridgeErrorKind::Timeout => "timeout",
+        HttpBridgeErrorKind::Cancelled => "cancelled",
+        HttpBridgeErrorKind::Transport => "transport",
+        HttpBridgeErrorKind::ResponseTooLarge => "response_too_large",
+    }
+}
+
 fn parse_guest_virtual_process_payload(data: &[u8]) -> Result<GuestVirtualProcessPayload> {
     let mut cursor = BinaryCursor::new(data);
     cursor.expect_magic(b"UXV1")?;
@@ -3497,6 +3801,10 @@ fn parse_guest_virtual_process_payload(data: &[u8]) -> Result<GuestVirtualProces
 }
 
 fn virtual_exec_bridge_metadata() -> Metadata {
+    host_bridge_device_metadata()
+}
+
+fn host_bridge_device_metadata() -> Metadata {
     let time = current_time_nanos();
     Metadata {
         ft: FileType::new_file(),
@@ -3726,7 +4034,7 @@ fn normalize_command_path(command: &str, cwd: &Path) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
 
@@ -3799,6 +4107,78 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn http_bridge_device_dispatches_json_request() {
+        let root = TmpFileSystem::new();
+        create_dir_all(&root, Path::new("/dev")).expect("/dev should be created");
+        let (events, _event_receiver) = EventBus::new(4);
+        let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(4);
+        let (bridge, mut http_receiver) = HttpBridge::new(4);
+        let handler = std::thread::spawn(move || {
+            let request = http_receiver
+                .blocking_recv()
+                .expect("HTTP request should arrive");
+            assert_eq!(request.request.method, "POST");
+            assert_eq!(request.request.url, "https://example.test/device");
+            assert_eq!(
+                request.request.headers,
+                [HttpHeader::new("x-test", "yes").expect("header should be valid")]
+            );
+            assert_eq!(request.request.body, b"request-body");
+            request
+                .respond(
+                    HttpResponse::new(
+                        206,
+                        vec![HttpHeader::new("x-reply", "ok").expect("header should be valid")],
+                        b"response-body".to_vec(),
+                    )
+                    .expect("response should be valid"),
+                )
+                .expect("response should send");
+        });
+        let filesystem = process_filesystem(
+            root,
+            None,
+            events,
+            VirtualExecutableRegistry::new(virtual_processes),
+            Some(bridge),
+            Some(Duration::from_secs(5)),
+            CancellationSource::new().token(),
+        );
+        let mut file = filesystem
+            .new_open_options()
+            .read(true)
+            .write(true)
+            .open(Path::new(HTTP_BRIDGE_PATH))
+            .expect("HTTP bridge device should open");
+        let payload = serde_json::json!({
+            "method": "post",
+            "url": "https://example.test/device",
+            "headers": [{"name": "x-test", "value": "yes"}],
+            "body_base64": BASE64.encode(b"request-body"),
+        });
+        file.write_all(&serde_json::to_vec(&payload).expect("payload should encode"))
+            .await
+            .expect("HTTP bridge request should write");
+
+        let mut output = Vec::new();
+        file.read_to_end(&mut output)
+            .await
+            .expect("HTTP bridge response should read");
+        handler.join().expect("handler should finish");
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&output).expect("response should be JSON");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["response"]["status"], 206);
+        assert_eq!(value["response"]["headers"][0]["name"], "x-reply");
+        assert_eq!(value["response"]["headers"][0]["value"], "ok");
+        assert_eq!(
+            value["response"]["body_base64"],
+            BASE64.encode(b"response-body")
+        );
+    }
+
     #[test]
     fn command_path_normalization_uses_cwd_for_relative_paths() {
         let path = normalize_command_path("./tool", Path::new("/work")).unwrap();
@@ -3836,6 +4216,7 @@ mod tests {
     fn module_cache_dir_uses_explicit_option() {
         let options = SandboxOptions {
             module_cache_dir: Some(PathBuf::from("/tmp/wasm-host-modules")),
+            http_bridge: None,
         };
 
         assert_eq!(

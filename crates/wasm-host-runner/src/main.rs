@@ -13,9 +13,10 @@ use std::{
 use anyhow::Context;
 use serde_json::{json, Map, Value};
 use wasm_host_core::{
-    CancellationSource, EventBus, HostMount, HostProfile, Limits, OutputSink, OutputSinks,
-    PackageCommandAlias, PackageSpec, RunError, RunErrorKind, RunRequest, SandboxOptions,
-    SandboxState, VirtualExecutableBridge, VirtualProcessInvocation, VirtualProcessRequest,
+    CancellationSource, EventBus, HostMount, HostProfile, HttpBridge, Limits,
+    NativeHttpBridgeWorker, OutputSink, OutputSinks, PackageCommandAlias, PackageSpec, RunError,
+    RunErrorKind, RunRequest, SandboxOptions, SandboxState, VirtualExecutableBridge,
+    VirtualProcessInvocation, VirtualProcessRequest,
 };
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
@@ -69,6 +70,14 @@ fn run() -> Result<i32, RunnerError> {
     let (events, _event_receiver) = EventBus::new(DEFAULT_EVENT_QUEUE_SIZE);
     let (virtual_executables, virtual_process_receiver) =
         VirtualExecutableBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
+    let (http_bridge, _http_bridge_worker) = match options.http_bridge {
+        HttpBridgeMode::Off => (None, None),
+        HttpBridgeMode::Native => {
+            let (bridge, receiver) = HttpBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
+            let worker = NativeHttpBridgeWorker::spawn(receiver);
+            (Some(bridge), Some(worker))
+        }
+    };
     let package = PackageSpec {
         name: package_name.clone(),
         webc_path: options.webc.to_string_lossy().to_string(),
@@ -77,6 +86,7 @@ fn run() -> Result<i32, RunnerError> {
     };
     let sandbox_options = SandboxOptions {
         module_cache_dir: options.module_cache_dir.clone(),
+        http_bridge,
     };
     let state = match SandboxState::new_with_profile_and_options(
         options.profile,
@@ -220,6 +230,7 @@ struct Options {
     profile: HostProfile,
     event_format: EventFormat,
     module_cache_dir: Option<PathBuf>,
+    http_bridge: HttpBridgeMode,
     package_name: Option<String>,
     command_aliases: Vec<PackageCommandAlias>,
     host_commands: Vec<HostCommandSpec>,
@@ -274,6 +285,12 @@ enum EventFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HttpBridgeMode {
+    Off,
+    Native,
+}
+
 impl EventFormat {
     fn parse(value: &str) -> anyhow::Result<Self> {
         match value {
@@ -282,6 +299,25 @@ impl EventFormat {
             _ => Err(anyhow::anyhow!(
                 "unknown event format: {value}; expected none or json"
             )),
+        }
+    }
+}
+
+impl HttpBridgeMode {
+    fn parse(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "off" => Ok(Self::Off),
+            "native" => Ok(Self::Native),
+            _ => Err(anyhow::anyhow!(
+                "unknown HTTP bridge mode: {value}; expected off or native"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Native => "native",
         }
     }
 }
@@ -374,6 +410,7 @@ fn runner_started_event(options: &Options, package_name: &str) -> Value {
             .module_cache_dir
             .as_ref()
             .map(|path| path.to_string_lossy().to_string()),
+        "http_bridge": options.http_bridge.as_str(),
         "output_limit": options.output_limit,
         "timeout_seconds": options.timeout_seconds,
     })
@@ -428,6 +465,7 @@ impl Options {
         let mut profile = HostProfile::default();
         let mut event_format = EventFormat::None;
         let mut module_cache_dir = None;
+        let mut http_bridge = HttpBridgeMode::Off;
         let mut package_name = None;
         let mut command_aliases = Vec::new();
         let mut host_commands = Vec::new();
@@ -466,6 +504,9 @@ impl Options {
                 "--module-cache-dir" => {
                     module_cache_dir =
                         Some(PathBuf::from(next_value(&mut args, "--module-cache-dir")?));
+                }
+                "--http-bridge" => {
+                    http_bridge = HttpBridgeMode::parse(&next_value(&mut args, "--http-bridge")?)?;
                 }
                 "--package" => package_name = Some(next_value(&mut args, "--package")?),
                 "--alias" => {
@@ -522,6 +563,7 @@ impl Options {
             profile,
             event_format,
             module_cache_dir,
+            http_bridge,
             package_name,
             command_aliases,
             host_commands,
@@ -913,6 +955,8 @@ Options:
                              JSON events are written to stderr as JSON lines
   --module-cache-dir <path>  Directory for compiled module cache artifacts.
                              Defaults to XDG_CACHE_HOME/HOME/temp fallback
+  --http-bridge <mode>       HTTP bridge adapter: off or native, default off.
+                             native exposes /dev/wasm-host-http to guest packages
   --package <name>           Logical package name, defaults to file stem
   --alias <ALIAS=COMMAND>    Expose an extra command alias from the package
   --host-command <GUEST=HOST>
@@ -944,6 +988,7 @@ mod tests {
         assert_eq!(options.profile, HostProfile::BrowserStrict);
         assert_eq!(options.event_format, EventFormat::None);
         assert_eq!(options.module_cache_dir, None);
+        assert_eq!(options.http_bridge, HttpBridgeMode::Off);
         assert_eq!(options.command, ["tool"]);
         assert_eq!(options.cwd, "/work");
     }
@@ -980,6 +1025,22 @@ mod tests {
             options.module_cache_dir,
             Some(PathBuf::from(".cache/modules"))
         );
+        assert_eq!(options.command, ["tool"]);
+    }
+
+    #[test]
+    fn parse_accepts_native_http_bridge() {
+        let options = Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--http-bridge",
+            "native",
+            "--",
+            "tool",
+        ]))
+        .expect("options should parse");
+
+        assert_eq!(options.http_bridge, HttpBridgeMode::Native);
         assert_eq!(options.command, ["tool"]);
     }
 
@@ -1170,6 +1231,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_unknown_http_bridge_mode() {
+        let error = match Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--http-bridge",
+            "fetch",
+            "--",
+            "tool",
+        ])) {
+            Ok(_) => panic!("unknown HTTP bridge mode should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("unknown HTTP bridge mode"));
+    }
+
+    #[test]
     fn parse_mounts_and_env_pass_without_putting_secret_in_command() {
         let key = "WASM_HOST_RUNNER_TEST_SECRET";
         env::set_var(key, "secret-value");
@@ -1204,6 +1282,7 @@ mod tests {
             profile: HostProfile::NativeFull,
             event_format: EventFormat::Json,
             module_cache_dir: Some(PathBuf::from("/cache/modules")),
+            http_bridge: HttpBridgeMode::Native,
             package_name: Some("tool".to_string()),
             command_aliases: vec![PackageCommandAlias {
                 alias: "alias".to_string(),
@@ -1248,6 +1327,7 @@ mod tests {
         assert_eq!(event["env_keys"], json!(["PUBLIC", "SECRET"]));
         assert_eq!(event["env_count"], 2);
         assert_eq!(event["module_cache_dir"], "/cache/modules");
+        assert_eq!(event["http_bridge"], "native");
     }
 
     #[test]

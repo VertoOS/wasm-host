@@ -417,10 +417,7 @@ fn parse_native_http_url(url: &str) -> std::result::Result<NativeHttpUrl, HttpBr
             "native HTTP bridge supports http:// URLs only, got {scheme}"
         )));
     };
-    let (authority, request_target) = match rest.split_once('/') {
-        Some((authority, path)) => (authority, format!("/{path}")),
-        None => (rest, "/".to_string()),
-    };
+    let (authority, request_target) = split_native_http_authority_and_target(rest);
     if authority.is_empty() || authority.contains('@') {
         return Err(HttpBridgeError::invalid_request(
             "HTTP request URL must include a host without userinfo",
@@ -437,6 +434,26 @@ fn parse_native_http_url(url: &str) -> std::result::Result<NativeHttpUrl, HttpBr
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn split_native_http_authority_and_target(rest: &str) -> (&str, String) {
+    let authority_end = rest
+        .find(|character| matches!(character, '/' | '?' | '#'))
+        .unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let suffix = &rest[authority_end..];
+    let target = suffix
+        .split_once('#')
+        .map_or(suffix, |(before_fragment, _)| before_fragment);
+    let request_target = if target.is_empty() {
+        "/".to_string()
+    } else if target.starts_with('?') {
+        format!("/{target}")
+    } else {
+        target.to_string()
+    };
+    (authority, request_target)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_native_http_authority(
     authority: &str,
 ) -> std::result::Result<(String, u16), HttpBridgeError> {
@@ -446,6 +463,11 @@ fn parse_native_http_authority(
                 "IPv6 HTTP URL host must include a closing bracket",
             ));
         };
+        if host.is_empty() {
+            return Err(HttpBridgeError::invalid_request(
+                "HTTP request URL host cannot be empty",
+            ));
+        }
         let port = match suffix.strip_prefix(':') {
             Some(value) => parse_native_http_port(value)?,
             None if suffix.is_empty() => 80,
@@ -460,6 +482,11 @@ fn parse_native_http_authority(
 
     match authority.rsplit_once(':') {
         Some((host, port)) if !host.contains(':') => {
+            if host.is_empty() {
+                return Err(HttpBridgeError::invalid_request(
+                    "HTTP request URL host cannot be empty",
+                ));
+            }
             Ok((host.to_string(), parse_native_http_port(port)?))
         }
         _ if authority.contains(':') => Err(HttpBridgeError::invalid_request(
@@ -1050,6 +1077,59 @@ mod tests {
             &HttpHeader::new("transfer-encoding", "chunked")
                 .expect("response header should be valid")
         ));
+    }
+
+    #[test]
+    fn native_http_bridge_handles_query_only_url_and_strips_fragment() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener should bind");
+        let address = listener.local_addr().expect("listener address should read");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("connection should arrive");
+            let request = read_test_http_request(&mut stream);
+            assert!(request.starts_with("GET /?token=yes HTTP/1.1\r\n"));
+            assert!(!request.contains("client-fragment"));
+
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .expect("response should write");
+        });
+
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let response = bridge
+            .request_blocking(
+                HttpRequest::new(
+                    "get",
+                    format!("http://{address}?token=yes#client-fragment"),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect("HTTP request should complete");
+        server.join().expect("server should finish");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"ok");
+    }
+
+    #[test]
+    fn native_http_bridge_rejects_empty_host_as_invalid_request() {
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let error = bridge
+            .request_blocking(
+                HttpRequest::new("GET", "http://:80/", Vec::new(), Vec::new())
+                    .expect("request should be syntactically valid for bridge dispatch"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect_err("native worker should reject empty host");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::InvalidRequest);
+        assert!(error.message.contains("host cannot be empty"));
     }
 
     #[test]

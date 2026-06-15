@@ -344,6 +344,210 @@ fn gateway_http_bridge_streams_response_chunks_to_wasi_guest() {
 }
 
 #[test]
+fn gateway_http_bridge_stream_response_limit_error_is_visible_to_wasi_guest() {
+    let (mut gateway, response, events) = run_gateway_response_fixture(
+        GatewayHttpResponseSpec::Stream(vec![
+            json!({
+                "type": "response",
+                "status": 200,
+                "headers": []
+            }),
+            json!({"type": "body_chunk", "body_base64": "MTIz"}),
+            json!({"type": "body_chunk", "body_base64": "NDU="}),
+            json!({"type": "body_end"}),
+        ]),
+        "http-gateway-stream-response-limit-fixture.webc",
+        HttpBridgeFixtureOptions {
+            response_body_limit: 4,
+            ..HttpBridgeFixtureOptions::default()
+        },
+    );
+
+    assert_gateway_error(
+        &response,
+        "response_too_large",
+        "HTTP response body exceeded 4 bytes",
+    );
+    assert_gateway_endpoint_not_leaked(&events, &response, &gateway.url());
+    gateway.request();
+}
+
+#[test]
+fn gateway_http_bridge_stream_error_frame_is_visible_to_wasi_guest() {
+    let (mut gateway, response, events) = run_gateway_response_fixture(
+        GatewayHttpResponseSpec::Stream(vec![json!({
+            "type": "error",
+            "kind": "cors",
+            "message": "request blocked by gateway policy"
+        })]),
+        "http-gateway-stream-error-frame-fixture.webc",
+        HttpBridgeFixtureOptions::default(),
+    );
+
+    assert_gateway_error(&response, "cors", "request blocked by gateway policy");
+    assert_gateway_endpoint_not_leaked(&events, &response, &gateway.url());
+    gateway.request();
+}
+
+#[test]
+fn gateway_http_bridge_invalid_stream_response_frames_are_visible_to_wasi_guest() {
+    for (name, response_spec, expected_message) in [
+        (
+            "malformed-json",
+            GatewayHttpResponseSpec::RawStream(vec![b"{not json}\n".to_vec()]),
+            "invalid HTTP gateway stream frame",
+        ),
+        (
+            "invalid-base64",
+            GatewayHttpResponseSpec::Stream(vec![
+                json!({"type": "response", "status": 200, "headers": []}),
+                json!({"type": "body_chunk", "body_base64": "!!!"}),
+                json!({"type": "body_end"}),
+            ]),
+            "invalid gateway body base64",
+        ),
+        (
+            "partial-final-frame",
+            GatewayHttpResponseSpec::RawStream(vec![
+                br#"{"type":"response","status":200,"headers":[]}"#.to_vec(),
+            ]),
+            "HTTP gateway stream ended with a partial frame",
+        ),
+        (
+            "missing-body-end",
+            GatewayHttpResponseSpec::Stream(vec![json!({
+                "type": "response",
+                "status": 200,
+                "headers": []
+            })]),
+            "HTTP gateway stream did not send body_end",
+        ),
+        (
+            "body-chunk-before-response",
+            GatewayHttpResponseSpec::Stream(vec![
+                json!({"type": "body_chunk", "body_base64": "b2s="}),
+                json!({"type": "body_end"}),
+            ]),
+            "HTTP gateway stream body_chunk arrived before response",
+        ),
+        (
+            "multiple-response-frames",
+            GatewayHttpResponseSpec::Stream(vec![
+                json!({"type": "response", "status": 200, "headers": []}),
+                json!({"type": "response", "status": 201, "headers": []}),
+                json!({"type": "body_end"}),
+            ]),
+            "HTTP gateway stream sent multiple response frames",
+        ),
+        (
+            "frame-after-body-end",
+            GatewayHttpResponseSpec::Stream(vec![
+                json!({"type": "response", "status": 200, "headers": []}),
+                json!({"type": "body_end"}),
+                json!({"type": "body_chunk", "body_base64": "b2s="}),
+            ]),
+            "HTTP gateway stream sent a frame after body_end",
+        ),
+    ] {
+        let fixture_name = format!("http-gateway-stream-invalid-{name}-fixture.webc");
+        let (mut gateway, response, events) = run_gateway_response_fixture(
+            response_spec,
+            &fixture_name,
+            HttpBridgeFixtureOptions::default(),
+        );
+
+        assert_gateway_error(&response, "invalid_response", expected_message);
+        assert_gateway_endpoint_not_leaked(&events, &response, &gateway.url());
+        gateway.request();
+    }
+}
+
+#[test]
+fn gateway_http_bridge_stream_transport_errors_are_visible_to_wasi_guest() {
+    let response_frame = br#"{"type":"response","status":200,"headers":[]}
+"#;
+    let body_end_frame = br#"{"type":"body_end"}
+"#;
+    for (name, response_spec, expected_kind, expected_message) in [
+        (
+            "early-body-eof",
+            GatewayHttpResponseSpec::Raw(raw_gateway_response(
+                "200 OK",
+                "application/x-ndjson",
+                b"20\r\n{\"type\":\"response\"",
+            )),
+            "transport",
+            "HTTP connection closed before chunked response body completed",
+        ),
+        (
+            "invalid-chunk-size",
+            GatewayHttpResponseSpec::Raw(raw_gateway_response(
+                "200 OK",
+                "application/x-ndjson",
+                b"zz\r\n",
+            )),
+            "invalid_response",
+            "invalid chunked HTTP response chunk size",
+        ),
+        (
+            "early-trailer-eof",
+            GatewayHttpResponseSpec::Raw(raw_gateway_response(
+                "200 OK",
+                "application/x-ndjson",
+                &[
+                    http_chunk(response_frame),
+                    http_chunk(body_end_frame),
+                    b"0\r\nx-trailer: missing-end".to_vec(),
+                ]
+                .concat(),
+            )),
+            "transport",
+            "HTTP connection closed before chunked HTTP response trailers",
+        ),
+        (
+            "non-2xx-status",
+            GatewayHttpResponseSpec::Raw(
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+            ),
+            "gateway_unavailable",
+            "HTTP gateway endpoint is unavailable",
+        ),
+    ] {
+        let fixture_name = format!("http-gateway-stream-transport-{name}-fixture.webc");
+        let (mut gateway, response, events) = run_gateway_response_fixture(
+            response_spec,
+            &fixture_name,
+            HttpBridgeFixtureOptions::default(),
+        );
+
+        assert_gateway_error(&response, expected_kind, expected_message);
+        assert_gateway_endpoint_not_leaked(&events, &response, &gateway.url());
+        gateway.request();
+    }
+}
+
+#[test]
+fn gateway_http_bridge_timeout_waiting_for_stream_response_is_visible_to_wasi_guest() {
+    let (mut gateway, response, events) = run_gateway_response_fixture(
+        GatewayHttpResponseSpec::DelayThenClose(Duration::from_millis(250)),
+        "http-gateway-stream-timeout-fixture.webc",
+        HttpBridgeFixtureOptions {
+            timeout_ms: Some(50),
+            ..HttpBridgeFixtureOptions::default()
+        },
+    );
+
+    assert_gateway_error(
+        &response,
+        "timeout",
+        "HTTP request exceeded wall time limit",
+    );
+    assert_gateway_endpoint_not_leaked(&events, &response, &gateway.url());
+    gateway.request();
+}
+
+#[test]
 fn gateway_http_bridge_preserves_streaming_upload_chunks() {
     let mut gateway = GatewayHttpServer::spawn(json!({
         "ok": true,
@@ -417,6 +621,22 @@ fn run_http_bridge_fixture(webc: Vec<u8>, webc_filename: &str, http_bridge: &str
         .expect("run fixture package")
 }
 
+fn run_gateway_response_fixture(
+    response: GatewayHttpResponseSpec,
+    webc_filename: &str,
+    options: HttpBridgeFixtureOptions,
+) -> (GatewayHttpServer, Value, String) {
+    let gateway = GatewayHttpServer::spawn_response(response);
+    let webc =
+        http_bridge_fixture_webc_with_options("https://example.test/http-bridge-fixture", options)
+            .expect("build HTTP bridge fixture");
+    let output =
+        run_http_bridge_fixture(webc, webc_filename, &format!("gateway={}", gateway.url()));
+    let response = parse_fixture_stdout(&output);
+    let events = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    (gateway, response, events)
+}
+
 fn parse_fixture_stdout(output: &Output) -> serde_json::Value {
     assert!(
         output.status.success(),
@@ -433,6 +653,32 @@ fn parse_fixture_stdout(output: &Output) -> serde_json::Value {
             String::from_utf8_lossy(&output.stderr)
         )
     })
+}
+
+fn assert_gateway_error(response: &Value, kind: &str, message_contains: &str) {
+    assert_eq!(response["ok"], false, "guest response: {response}");
+    assert_eq!(
+        response["error"]["kind"], kind,
+        "guest response: {response}"
+    );
+    let message = response["error"]["message"]
+        .as_str()
+        .expect("error message should be a string");
+    assert!(
+        message.contains(message_contains),
+        "expected error message to contain {message_contains:?}, got {message:?}"
+    );
+}
+
+fn assert_gateway_endpoint_not_leaked(events: &str, response: &Value, gateway_url: &str) {
+    assert!(
+        !events.contains(gateway_url),
+        "runner events should not include gateway endpoint URLs:\n{events}"
+    );
+    assert!(
+        !response.to_string().contains(gateway_url),
+        "guest error should not include gateway endpoint URL: {response}"
+    );
 }
 
 fn closed_local_http_url(path: &str) -> String {
@@ -647,6 +893,9 @@ struct GatewayHttpServer {
 enum GatewayHttpResponseSpec {
     Json(Value),
     Stream(Vec<Value>),
+    RawStream(Vec<Vec<u8>>),
+    Raw(Vec<u8>),
+    DelayThenClose(Duration),
 }
 
 struct GatewayHttpRequestCapture {
@@ -737,7 +986,50 @@ fn write_gateway_response(stream: &mut TcpStream, response: GatewayHttpResponseS
                 .write_all(b"0\r\n\r\n")
                 .expect("write gateway stream response end");
         }
+        GatewayHttpResponseSpec::RawStream(chunks) => {
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .expect("write gateway raw stream response headers");
+            for chunk in chunks {
+                stream
+                    .write_all(&http_chunk(&chunk))
+                    .expect("write gateway raw stream chunk");
+            }
+            stream
+                .write_all(b"0\r\n\r\n")
+                .expect("write gateway raw stream response end");
+        }
+        GatewayHttpResponseSpec::Raw(response) => {
+            stream
+                .write_all(&response)
+                .expect("write raw gateway response");
+        }
+        GatewayHttpResponseSpec::DelayThenClose(delay) => {
+            thread::sleep(delay);
+        }
     }
+}
+
+fn raw_gateway_response(status: &str, content_type: &str, body: &[u8]) -> Vec<u8> {
+    [
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        )
+        .into_bytes(),
+        body.to_vec(),
+    ]
+    .concat()
+}
+
+fn http_chunk(body: &[u8]) -> Vec<u8> {
+    [
+        format!("{:x}\r\n", body.len()).into_bytes(),
+        body.to_vec(),
+        b"\r\n".to_vec(),
+    ]
+    .concat()
 }
 
 fn handle_test_http_request(mut stream: TcpStream, response_body: &[u8]) -> String {

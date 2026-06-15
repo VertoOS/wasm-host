@@ -934,13 +934,13 @@ impl GatewayStreamResponseDecoder {
                     .write_body_chunk(decode_gateway_body(&body_base64)?)
             }
             GatewayStreamWireResponseFrame::BodyEnd => {
-                let Some((status, headers)) = self.response.take() else {
+                if self.response.is_none() {
                     return Err(HttpBridgeError::invalid_response(
                         "HTTP gateway stream body_end arrived before response",
                     ));
-                };
+                }
                 self.completed = true;
-                self.writer.finish(status, headers, Vec::new())
+                Ok(())
             }
             GatewayStreamWireResponseFrame::Error { kind, message } => {
                 Err(decode_gateway_wire_error(GatewayWireError {
@@ -951,7 +951,7 @@ impl GatewayStreamResponseDecoder {
         }
     }
 
-    fn finish(self) -> std::result::Result<(), HttpBridgeError> {
+    fn finish(mut self) -> std::result::Result<(), HttpBridgeError> {
         if self.buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
             return Err(HttpBridgeError::invalid_response(
                 "HTTP gateway stream ended with a partial frame",
@@ -962,7 +962,12 @@ impl GatewayStreamResponseDecoder {
                 "HTTP gateway stream did not send body_end",
             ));
         }
-        Ok(())
+        let Some((status, headers)) = self.response.take() else {
+            return Err(HttpBridgeError::invalid_response(
+                "HTTP gateway stream body_end arrived before response",
+            ));
+        };
+        self.writer.finish(status, headers, Vec::new())
     }
 }
 
@@ -2740,6 +2745,71 @@ mod tests {
 
         assert_eq!(error.kind, HttpBridgeErrorKind::Cors);
         assert_eq!(error.message, "request blocked by gateway policy");
+    }
+
+    #[test]
+    fn native_gateway_http_transport_cancels_while_waiting_for_stream_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener should bind");
+        let address = listener.local_addr().expect("listener address should read");
+        let (request_sender, request_receiver) = mpsc::sync_channel(1);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("gateway connection should arrive");
+            let request = read_test_http_request(&mut stream);
+            request_sender.send(request).expect("request should send");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .expect("gateway response headers should write");
+            let frame = br#"{"type":"response","status":200,"headers":[]}
+"#;
+            write!(stream, "{:x}\r\n", frame.len()).expect("gateway chunk size should write");
+            stream
+                .write_all(frame)
+                .expect("gateway response frame should write");
+            stream
+                .write_all(b"\r\n")
+                .expect("gateway chunk terminator should write");
+            thread::sleep(Duration::from_millis(250));
+        });
+
+        let (bridge, receiver) = HttpBridge::new(4);
+        let transport = NativeGatewayHttpTransport::new(format!("http://{address}/bridge"))
+            .expect("gateway transport should initialize");
+        let _worker = GatewayHttpBridgeWorker::spawn(receiver, transport);
+        let cancellation = CancellationSource::new();
+        let token = cancellation.token();
+        let runner = thread::spawn(move || {
+            bridge.request_blocking(
+                HttpRequest::new(
+                    "get",
+                    "https://example.test/gateway-cancel",
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("request should be valid"),
+                HttpRequestLimits {
+                    response_body_bytes: 1024,
+                    wall_time: None,
+                },
+                token,
+            )
+        });
+
+        let request = request_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("gateway request should arrive");
+        assert!(request.starts_with("POST /bridge HTTP/1.1\r\n"));
+
+        cancellation.cancel();
+        let error = runner
+            .join()
+            .expect("runner should finish")
+            .expect_err("request should be cancelled");
+        server.join().expect("gateway server should finish");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::Cancelled);
+        assert_eq!(error.message, "HTTP request cancelled");
     }
 
     #[test]

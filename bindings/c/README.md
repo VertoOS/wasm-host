@@ -32,6 +32,9 @@ Optional fields:
 - `stdin_base64`: base64-encoded stdin bytes
 - `output_limit`: stdout/stderr byte limit
 - `timeout_seconds`: wall-time limit
+- `module_cache_dir`: directory for compiled module cache entries
+- `http_bridge`: `off` or `native`; `native` exposes `/dev/wasm-host-http`
+  through the native HTTP bridge worker
 
 The result status reports host/API success or failure. A guest process that exits
 non-zero still has status `0`; inspect `wasm_host_result_returncode`.

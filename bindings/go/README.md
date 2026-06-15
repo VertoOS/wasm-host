@@ -33,8 +33,9 @@ import (
 
 func main() {
 	result, err := wasmhost.Run(wasmhost.Options{
-		WebC:    "/path/to/package.webc",
-		Command: []string{"package-command", "--version"},
+		WebC:           "/path/to/package.webc",
+		Command:        []string{"package-command", "--version"},
+		ModuleCacheDir: "/tmp/wasm-host-modules",
 	})
 	if err != nil {
 		panic(err)
@@ -46,3 +47,14 @@ func main() {
 ```
 
 The dynamic library must be available on the platform library path at runtime.
+
+Packages that use the HTTP bridge device can opt into the native bridge during
+terminal testing:
+
+```go
+_, err := wasmhost.Run(wasmhost.Options{
+	WebC:       "/path/to/package.webc",
+	Command:    []string{"package-command"},
+	HTTPBridge: "native",
+})
+```

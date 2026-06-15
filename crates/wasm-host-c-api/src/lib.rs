@@ -1,15 +1,18 @@
 use std::{
     collections::HashMap,
     ffi::{c_char, CStr},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Deserialize;
+#[cfg(not(target_arch = "wasm32"))]
+use wasm_host_core::NativeHttpBridgeWorker;
 use wasm_host_core::{
-    CancellationSource, CompletedProcess, EventBus, HostMount, HostProfile, Limits,
-    PackageCommandAlias, PackageSpec, RunRequest, SandboxState, VirtualExecutableBridge,
+    CancellationSource, CompletedProcess, EventBus, HostMount, HostProfile, HttpBridge, Limits,
+    PackageCommandAlias, PackageSpec, RunRequest, SandboxOptions, SandboxState,
+    VirtualExecutableBridge,
 };
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
@@ -48,6 +51,10 @@ struct FfiRunOptions {
     output_limit: Option<usize>,
     #[serde(default)]
     timeout_seconds: Option<f64>,
+    #[serde(default)]
+    module_cache_dir: Option<String>,
+    #[serde(default)]
+    http_bridge: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -217,10 +224,15 @@ fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
         content_sha256: "0".repeat(64),
         command_aliases: aliases,
     };
+    let (http_bridge, _http_bridge_worker) = http_bridge_for_mode(options.http_bridge.as_deref())?;
+    let sandbox_options = SandboxOptions {
+        module_cache_dir: options.module_cache_dir.map(PathBuf::from),
+        http_bridge,
+    };
     let (events, _event_receiver) = EventBus::new(DEFAULT_EVENT_QUEUE_SIZE);
     let (virtual_executables, _virtual_process_receiver) =
         VirtualExecutableBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
-    let state = SandboxState::new_with_profile(
+    let state = SandboxState::new_with_profile_and_options(
         profile,
         HashMap::new(),
         host_mounts,
@@ -229,6 +241,7 @@ fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
         options.env,
         events,
         virtual_executables,
+        sandbox_options,
     )?;
     let cancellation = CancellationSource::new();
     state.run_blocking(
@@ -244,6 +257,36 @@ fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
         },
         cancellation.token(),
     )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn http_bridge_for_mode(
+    mode: Option<&str>,
+) -> Result<(Option<HttpBridge>, Option<NativeHttpBridgeWorker>)> {
+    match mode.unwrap_or("off") {
+        "off" => Ok((None, None)),
+        "native" => {
+            let (bridge, receiver) = HttpBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
+            let worker = NativeHttpBridgeWorker::spawn(receiver);
+            Ok((Some(bridge), Some(worker)))
+        }
+        value => Err(anyhow!(
+            "unknown HTTP bridge mode: {value}; expected off or native"
+        )),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn http_bridge_for_mode(mode: Option<&str>) -> Result<(Option<HttpBridge>, Option<()>)> {
+    match mode.unwrap_or("off") {
+        "off" => Ok((None, None)),
+        "native" => Err(anyhow!(
+            "native HTTP bridge mode is not available on wasm32"
+        )),
+        value => Err(anyhow!(
+            "unknown HTTP bridge mode: {value}; expected off or native"
+        )),
+    }
 }
 
 fn package_name(webc: &str) -> String {
@@ -336,5 +379,37 @@ mod tests {
         .unwrap();
 
         assert!(options.mounts[0].read_only);
+    }
+
+    #[test]
+    fn unknown_http_bridge_mode_is_rejected_before_runtime_setup() {
+        let options = std::ffi::CString::new(
+            r#"{"webc":"missing.webc","command":["tool"],"http_bridge":"bad"}"#,
+        )
+        .unwrap();
+        let result = wasm_host_run_json(options.as_ptr());
+        assert_eq!(wasm_host_result_status(result), WASM_HOST_STATUS_ERROR);
+        let error = unsafe {
+            std::slice::from_raw_parts(
+                wasm_host_result_error_ptr(result),
+                wasm_host_result_error_len(result),
+            )
+        };
+        assert_eq!(
+            std::str::from_utf8(error).unwrap(),
+            "unknown HTTP bridge mode: bad; expected off or native"
+        );
+        wasm_host_result_free(result);
+    }
+
+    #[test]
+    fn module_cache_dir_and_http_bridge_options_decode() {
+        let options: FfiRunOptions = serde_json::from_str(
+            r#"{"webc":"missing.webc","command":["tool"],"module_cache_dir":"/tmp/modules","http_bridge":"native"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(options.module_cache_dir.as_deref(), Some("/tmp/modules"));
+        assert_eq!(options.http_bridge.as_deref(), Some("native"));
     }
 }

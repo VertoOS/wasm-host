@@ -30,6 +30,7 @@ result = run(
     RunOptions(
         webc="/path/to/package.webc",
         command=["package-command", "--version"],
+        module_cache_dir="/tmp/wasm-host-modules",
     ),
     library,
 )
@@ -39,3 +40,14 @@ print(result.stdout.decode())
 ```
 
 On macOS, use `target/debug/libwasm_host_c_api.dylib`.
+
+Packages that use the HTTP bridge device can opt into the native bridge during
+terminal testing:
+
+```python
+RunOptions(
+    webc="/path/to/package.webc",
+    command=["package-command"],
+    http_bridge="native",
+)
+```

@@ -44,6 +44,8 @@ type Options struct {
 	Stdin          []byte            `json:"-"`
 	OutputLimit    *int              `json:"output_limit,omitempty"`
 	TimeoutSeconds *float64          `json:"timeout_seconds,omitempty"`
+	ModuleCacheDir string            `json:"module_cache_dir,omitempty"`
+	HTTPBridge     string            `json:"http_bridge,omitempty"`
 }
 
 type Result struct {

@@ -52,6 +52,8 @@ class RunOptions:
     stdin: Optional[bytes] = None
     output_limit: Optional[int] = None
     timeout_seconds: Optional[float] = None
+    module_cache_dir: Optional[str] = None
+    http_bridge: Optional[str] = None
 
     def to_json(self) -> str:
         payload = {
@@ -73,6 +75,10 @@ class RunOptions:
             payload["output_limit"] = self.output_limit
         if self.timeout_seconds is not None:
             payload["timeout_seconds"] = self.timeout_seconds
+        if self.module_cache_dir is not None:
+            payload["module_cache_dir"] = self.module_cache_dir
+        if self.http_bridge is not None:
+            payload["http_bridge"] = self.http_bridge
         return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 

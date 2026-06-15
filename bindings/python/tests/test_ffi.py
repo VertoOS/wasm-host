@@ -28,11 +28,26 @@ class PythonBindingTests(unittest.TestCase):
             command=["tool"],
             stdin=b"hello",
             mounts=[Mount(source=".", target="/workspace")],
+            module_cache_dir="/tmp/wasm-host-modules",
+            http_bridge="native",
         )
 
         encoded = options.to_json()
         self.assertIn('"stdin_base64":"aGVsbG8="', encoded)
         self.assertIn('"read_only":true', encoded)
+        self.assertIn('"module_cache_dir":"/tmp/wasm-host-modules"', encoded)
+        self.assertIn('"http_bridge":"native"', encoded)
+
+    def test_unknown_http_bridge_returns_error_result(self):
+        result = self.library.run_json(
+            '{"webc":"missing.webc","command":["tool"],"http_bridge":"bad"}'
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.returncode, 125)
+        self.assertEqual(
+            result.error_text, "unknown HTTP bridge mode: bad; expected off or native"
+        )
 
 
 if __name__ == "__main__":

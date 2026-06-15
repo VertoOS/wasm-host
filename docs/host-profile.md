@@ -169,6 +169,16 @@ URLs. Concrete adapters decide how those URLs are dispatched:
 | Browser Fetch | Browser-allowed `http://` and `https://` | Browser security policy wins. Mixed content, CORS, credential mode, and permission failures are reported as bridge errors rather than bypassed. |
 | Gateway | `http://` and `https://` if the gateway allows them | The gateway owns DNS, TLS, auth, CORS/proxy policy, and upstream transport behavior. |
 
+Core exposes a gateway adapter foundation for this policy. `GatewayHttpBridgeWorker`
+consumes the same `HttpBridgeRequest` stream as the native worker and delegates
+dispatch to a `GatewayHttpTransport`. The transport receives normalized request
+metadata plus a bounded body reader that works for both buffered and streaming
+uploads. It returns either a complete response body or response chunks, and the
+worker maps those chunks back through the same response-limit and cancellation
+path used by every other HTTP bridge caller. A browser Fetch transport or local
+gateway transport should implement that trait rather than defining a separate
+HTTP contract.
+
 Error mapping is part of the bridge contract:
 
 | Failure | Bridge error kind |

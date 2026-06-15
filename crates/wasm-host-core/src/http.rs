@@ -85,6 +85,46 @@ pub struct HttpRequestBodyWriter {
     closed: bool,
 }
 
+pub struct GatewayHttpBridgeWorker {
+    _handle: thread::JoinHandle<()>,
+}
+
+pub trait GatewayHttpTransport: Send + Sync + 'static {
+    fn dispatch(
+        &self,
+        request: GatewayHttpRequest,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError>;
+}
+
+#[derive(Debug)]
+pub struct GatewayHttpRequest {
+    pub id: u64,
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<HttpHeader>,
+    pub body: GatewayHttpRequestBodyReader,
+}
+
+#[derive(Debug)]
+pub struct GatewayHttpRequestBodyReader {
+    buffered: Option<Vec<u8>>,
+    stream_request: Option<HttpBridgeRequest>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GatewayHttpResponse {
+    pub status: u16,
+    pub headers: Vec<HttpHeader>,
+    pub body: GatewayHttpResponseBody,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GatewayHttpResponseBody {
+    Complete(Vec<u8>),
+    Chunks(Vec<Vec<u8>>),
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub struct NativeHttpBridgeWorker {
     _handle: thread::JoinHandle<()>,
@@ -258,6 +298,71 @@ impl fmt::Display for HttpBridgeError {
 }
 
 impl std::error::Error for HttpBridgeError {}
+
+impl GatewayHttpRequestBodyReader {
+    fn new(request: &HttpBridgeRequest) -> Self {
+        let buffered = (!request.request.body.is_empty()).then(|| request.request.body.clone());
+        let stream_request = request.has_streaming_body().then(|| request.clone());
+        Self {
+            buffered,
+            stream_request,
+        }
+    }
+
+    pub fn read_chunk_blocking(&mut self) -> std::result::Result<Option<Vec<u8>>, HttpBridgeError> {
+        if let Some(chunk) = self.buffered.take() {
+            return Ok(Some(chunk));
+        }
+        let Some(request) = &self.stream_request else {
+            return Ok(None);
+        };
+        request.read_streaming_body_chunk_blocking()
+    }
+
+    pub fn read_to_end_blocking(&mut self) -> std::result::Result<Vec<u8>, HttpBridgeError> {
+        let mut body = Vec::new();
+        while let Some(chunk) = self.read_chunk_blocking()? {
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+}
+
+impl GatewayHttpResponse {
+    pub fn complete(
+        status: u16,
+        headers: Vec<HttpHeader>,
+        body: Vec<u8>,
+    ) -> std::result::Result<Self, HttpBridgeError> {
+        if !(100..=599).contains(&status) {
+            return Err(HttpBridgeError::invalid_response(format!(
+                "HTTP response status must be between 100 and 599, got {status}"
+            )));
+        }
+        Ok(Self {
+            status,
+            headers,
+            body: GatewayHttpResponseBody::Complete(body),
+        })
+    }
+
+    pub fn chunks(
+        status: u16,
+        headers: Vec<HttpHeader>,
+        chunks: Vec<Vec<u8>>,
+    ) -> std::result::Result<Self, HttpBridgeError> {
+        if !(100..=599).contains(&status) {
+            return Err(HttpBridgeError::invalid_response(format!(
+                "HTTP response status must be between 100 and 599, got {status}"
+            )));
+        }
+        Ok(Self {
+            status,
+            headers,
+            body: GatewayHttpResponseBody::Chunks(chunks),
+        })
+    }
+}
 
 impl HttpRequestBodyWriter {
     pub fn write_chunk_blocking(
@@ -580,6 +685,64 @@ impl HttpBridge {
                     return Err(HttpBridgeError::transport("HTTP response channel closed"));
                 }
             }
+        }
+    }
+}
+
+impl GatewayHttpBridgeWorker {
+    pub fn spawn<T>(
+        mut receiver: tokio::sync::mpsc::Receiver<HttpBridgeRequest>,
+        transport: T,
+    ) -> Self
+    where
+        T: GatewayHttpTransport,
+    {
+        let transport = Arc::new(transport);
+        Self {
+            _handle: thread::spawn(move || {
+                while let Some(request) = receiver.blocking_recv() {
+                    if request.cancellation_token().is_cancelled() {
+                        continue;
+                    }
+                    let transport = Arc::clone(&transport);
+                    if let Err(error) = dispatch_gateway_http_request(&request, transport.as_ref())
+                    {
+                        let _ = request.fail(error);
+                    }
+                }
+            }),
+        }
+    }
+}
+
+fn dispatch_gateway_http_request(
+    request: &HttpBridgeRequest,
+    transport: &dyn GatewayHttpTransport,
+) -> std::result::Result<(), HttpBridgeError> {
+    let response = transport.dispatch(
+        GatewayHttpRequest {
+            id: request.id,
+            method: request.request.method.clone(),
+            url: request.request.url.clone(),
+            headers: request.request.headers.clone(),
+            body: GatewayHttpRequestBodyReader::new(request),
+        },
+        request.cancellation_token(),
+    )?;
+    let GatewayHttpResponse {
+        status,
+        headers,
+        body,
+    } = response;
+    match body {
+        GatewayHttpResponseBody::Complete(body) => {
+            request.respond(HttpResponse::new(status, headers, body)?)
+        }
+        GatewayHttpResponseBody::Chunks(chunks) => {
+            for chunk in chunks {
+                request.write_body_chunk(chunk)?;
+            }
+            request.respond(HttpResponse::new(status, headers, Vec::new())?)
         }
     }
 }
@@ -1398,6 +1561,165 @@ fn is_http_token_byte(byte: u8) -> bool {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[derive(Clone)]
+    struct RecordingGatewayTransport {
+        records: Arc<Mutex<Vec<GatewayRecord>>>,
+        response: GatewayHttpResponse,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct GatewayRecord {
+        id: u64,
+        method: String,
+        url: String,
+        headers: Vec<HttpHeader>,
+        body_chunks: Vec<Vec<u8>>,
+    }
+
+    #[derive(Clone)]
+    struct FailingGatewayTransport {
+        error: HttpBridgeError,
+    }
+
+    impl GatewayHttpTransport for RecordingGatewayTransport {
+        fn dispatch(
+            &self,
+            mut request: GatewayHttpRequest,
+            cancellation: CancellationToken,
+        ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
+            assert!(!cancellation.is_cancelled());
+            let mut body_chunks = Vec::new();
+            while let Some(chunk) = request.body.read_chunk_blocking()? {
+                body_chunks.push(chunk);
+            }
+            self.records
+                .lock()
+                .expect("gateway records should lock")
+                .push(GatewayRecord {
+                    id: request.id,
+                    method: request.method,
+                    url: request.url,
+                    headers: request.headers,
+                    body_chunks,
+                });
+            Ok(self.response.clone())
+        }
+    }
+
+    impl GatewayHttpTransport for FailingGatewayTransport {
+        fn dispatch(
+            &self,
+            _request: GatewayHttpRequest,
+            _cancellation: CancellationToken,
+        ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
+            Err(self.error.clone())
+        }
+    }
+
+    #[test]
+    fn gateway_http_bridge_worker_dispatches_buffered_request_and_response_chunks() {
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let transport = RecordingGatewayTransport {
+            records: Arc::clone(&records),
+            response: GatewayHttpResponse::chunks(
+                207,
+                vec![HttpHeader::new("x-gateway", "yes").expect("header should be valid")],
+                vec![b"hello ".to_vec(), b"gateway".to_vec()],
+            )
+            .expect("response should be valid"),
+        };
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = GatewayHttpBridgeWorker::spawn(receiver, transport);
+        let response = bridge
+            .request_blocking(
+                HttpRequest::new(
+                    "post",
+                    "https://example.test/gateway",
+                    vec![HttpHeader::new("x-test", "yes").expect("header should be valid")],
+                    b"request-body".to_vec(),
+                )
+                .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect("gateway request should complete");
+
+        assert_eq!(response.status, 207);
+        assert_eq!(response.body, b"hello gateway");
+        assert_eq!(
+            response.headers,
+            [HttpHeader::new("x-gateway", "yes").expect("header should be valid")]
+        );
+        assert_eq!(
+            *records.lock().expect("gateway records should lock"),
+            [GatewayRecord {
+                id: 1,
+                method: "POST".to_string(),
+                url: "https://example.test/gateway".to_string(),
+                headers: vec![HttpHeader::new("x-test", "yes").expect("header should be valid")],
+                body_chunks: vec![b"request-body".to_vec()],
+            }]
+        );
+    }
+
+    #[test]
+    fn gateway_http_bridge_worker_dispatches_streaming_request_body() {
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let transport = RecordingGatewayTransport {
+            records: Arc::clone(&records),
+            response: GatewayHttpResponse::complete(200, Vec::new(), b"streamed".to_vec())
+                .expect("response should be valid"),
+        };
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = GatewayHttpBridgeWorker::spawn(receiver, transport);
+        let response = bridge
+            .request_streaming_blocking(
+                HttpRequest::new("put", "https://example.test/upload", Vec::new(), Vec::new())
+                    .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+                |body| {
+                    body.write_chunk_blocking(b"hello ".to_vec())?;
+                    body.write_chunk_blocking(b"stream".to_vec())
+                },
+            )
+            .expect("gateway streaming request should complete");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"streamed");
+        assert_eq!(
+            records
+                .lock()
+                .expect("gateway records should lock")
+                .first()
+                .expect("gateway request should be recorded")
+                .body_chunks,
+            [b"hello ".to_vec(), b"stream".to_vec()]
+        );
+    }
+
+    #[test]
+    fn gateway_http_bridge_worker_preserves_transport_errors() {
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = GatewayHttpBridgeWorker::spawn(
+            receiver,
+            FailingGatewayTransport {
+                error: HttpBridgeError::cors("request blocked by gateway policy"),
+            },
+        );
+        let error = bridge
+            .request_blocking(
+                HttpRequest::new("get", "https://example.test/api", Vec::new(), Vec::new())
+                    .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect_err("gateway transport error should be returned");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::Cors);
+        assert_eq!(error.message, "request blocked by gateway policy");
+    }
 
     #[test]
     fn native_http_bridge_dispatches_local_response() {

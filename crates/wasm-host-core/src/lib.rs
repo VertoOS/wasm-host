@@ -49,8 +49,10 @@ pub use host_command::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::NativeHttpBridgeWorker;
 pub use http::{
-    HttpBridge, HttpBridgeError, HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest,
-    HttpRequestLimits, HttpResponse,
+    GatewayHttpBridgeWorker, GatewayHttpRequest, GatewayHttpRequestBodyReader, GatewayHttpResponse,
+    GatewayHttpResponseBody, GatewayHttpTransport, HttpBridge, HttpBridgeError,
+    HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest, HttpRequestLimits,
+    HttpResponse,
 };
 
 const COMMAND_PATH_PREFIXES: &[&str] = &["/bin", "/usr/bin"];

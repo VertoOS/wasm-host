@@ -16,6 +16,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: Install LLVM build dependencies
+        run: scripts/install_llvm_build_deps.sh
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Check workspace

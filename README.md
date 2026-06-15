@@ -49,6 +49,10 @@ The runner validates the package before runtime setup. Missing or invalid WebC
 inputs fail with exit code `65`; command-line usage errors fail with exit code
 `2`; guest process exits preserve the guest return code.
 
+Use `--event-format json` to emit structured runner lifecycle events to stderr
+as JSON lines. Event payloads include package, profile, command counts, output
+byte counts, exit status, and failure stage; environment values are not emitted.
+
 ## Project Shape
 
 ```text
@@ -71,6 +75,7 @@ tests/
   conformance/         # host behavior tests shared by adapters
   e2e/                 # full runtime/language/application e2e tests
   fixtures/            # fixture manifest and resolver checks
+  runner/              # native runner CLI behavior checks
 vendor/
   wasmer-*             # backend patches required by the current runtime
 ```

@@ -6,8 +6,10 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::ExitCode,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use serde_json::{json, Map, Value};
 use wasm_host_core::{
     CancellationSource, EventBus, HostMount, HostProfile, Limits, PackageCommandAlias, PackageSpec,
     RunRequest, SandboxState, VirtualExecutableBridge,
@@ -24,7 +26,9 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(exit_code(code)),
         Err(error) => {
-            eprintln!("wasm-host-runner: {error}");
+            if !error.suppress_plain_error {
+                eprintln!("wasm-host-runner: {error}");
+            }
             ExitCode::from(error.exit_code)
         }
     }
@@ -32,12 +36,9 @@ fn main() -> ExitCode {
 
 fn run() -> Result<i32, RunnerError> {
     let options = Options::parse(std::env::args_os().skip(1)).map_err(RunnerError::usage)?;
-    validate_webc_package(&options.webc).map_err(RunnerError::package)?;
-
-    let (events, _event_receiver) = EventBus::new(DEFAULT_EVENT_QUEUE_SIZE);
-    let (virtual_executables, _virtual_process_receiver) =
-        VirtualExecutableBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
-    let package_name = options.package_name.unwrap_or_else(|| {
+    let reporter = EventReporter::new(options.event_format);
+    let started_at = Instant::now();
+    let package_name = options.package_name.clone().unwrap_or_else(|| {
         options
             .webc
             .file_stem()
@@ -45,13 +46,30 @@ fn run() -> Result<i32, RunnerError> {
             .unwrap_or("package")
             .to_string()
     });
+
+    reporter
+        .runner_started(&options, &package_name)
+        .map_err(RunnerError::host)?;
+    if let Err(error) = validate_webc_package(&options.webc) {
+        reporter
+            .runner_failed("package", EXIT_PACKAGE, &error, started_at.elapsed())
+            .map_err(RunnerError::host)?;
+        return Err(RunnerError::package_reported(error, options.event_format));
+    }
+    reporter
+        .package_validated(&options.webc, &package_name)
+        .map_err(RunnerError::host)?;
+
+    let (events, _event_receiver) = EventBus::new(DEFAULT_EVENT_QUEUE_SIZE);
+    let (virtual_executables, _virtual_process_receiver) =
+        VirtualExecutableBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
     let package = PackageSpec {
-        name: package_name,
+        name: package_name.clone(),
         webc_path: options.webc.to_string_lossy().to_string(),
         content_sha256: "0".repeat(64),
         command_aliases: options.command_aliases,
     };
-    let state = SandboxState::new_with_profile(
+    let state = match SandboxState::new_with_profile(
         options.profile,
         HashMap::new(),
         options.host_mounts,
@@ -60,24 +78,40 @@ fn run() -> Result<i32, RunnerError> {
         options.env,
         events,
         virtual_executables,
-    )
-    .map_err(RunnerError::host)?;
-    let cancellation = CancellationSource::new();
-    let result = state
-        .run_blocking(
-            RunRequest {
-                args: options.command,
-                input: options.stdin,
-                env: None,
-                cwd: None,
-                limits: Limits {
-                    output_bytes: options.output_limit,
-                    wall_time_seconds: options.timeout_seconds,
-                },
-            },
-            cancellation.token(),
-        )
+    ) {
+        Ok(state) => state,
+        Err(error) => {
+            reporter
+                .runner_failed("sandbox", EXIT_HOST, &error, started_at.elapsed())
+                .map_err(RunnerError::host)?;
+            return Err(RunnerError::host_reported(error, options.event_format));
+        }
+    };
+    reporter
+        .sandbox_initialized(&package_name)
         .map_err(RunnerError::host)?;
+    let cancellation = CancellationSource::new();
+    let result = match state.run_blocking(
+        RunRequest {
+            args: options.command,
+            input: options.stdin,
+            env: None,
+            cwd: None,
+            limits: Limits {
+                output_bytes: options.output_limit,
+                wall_time_seconds: options.timeout_seconds,
+            },
+        },
+        cancellation.token(),
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            reporter
+                .runner_failed("run", EXIT_HOST, &error, started_at.elapsed())
+                .map_err(RunnerError::host)?;
+            return Err(RunnerError::host_reported(error, options.event_format));
+        }
+    };
 
     io::stdout()
         .write_all(&result.stdout)
@@ -85,6 +119,9 @@ fn run() -> Result<i32, RunnerError> {
     io::stderr()
         .write_all(&result.stderr)
         .map_err(|error| RunnerError::host(anyhow::Error::new(error)))?;
+    reporter
+        .command_completed(&result, started_at.elapsed())
+        .map_err(RunnerError::host)?;
     Ok(result.returncode)
 }
 
@@ -92,6 +129,7 @@ fn run() -> Result<i32, RunnerError> {
 struct RunnerError {
     exit_code: u8,
     error: anyhow::Error,
+    suppress_plain_error: bool,
 }
 
 impl RunnerError {
@@ -99,6 +137,7 @@ impl RunnerError {
         Self {
             exit_code: EXIT_USAGE,
             error,
+            suppress_plain_error: false,
         }
     }
 
@@ -106,6 +145,14 @@ impl RunnerError {
         Self {
             exit_code: EXIT_PACKAGE,
             error,
+            suppress_plain_error: false,
+        }
+    }
+
+    fn package_reported(error: anyhow::Error, event_format: EventFormat) -> Self {
+        Self {
+            suppress_plain_error: event_format == EventFormat::Json,
+            ..Self::package(error)
         }
     }
 
@@ -113,6 +160,14 @@ impl RunnerError {
         Self {
             exit_code: EXIT_HOST,
             error,
+            suppress_plain_error: false,
+        }
+    }
+
+    fn host_reported(error: anyhow::Error, event_format: EventFormat) -> Self {
+        Self {
+            suppress_plain_error: event_format == EventFormat::Json,
+            ..Self::host(error)
         }
     }
 }
@@ -128,6 +183,7 @@ impl std::error::Error for RunnerError {}
 struct Options {
     webc: PathBuf,
     profile: HostProfile,
+    event_format: EventFormat,
     package_name: Option<String>,
     command_aliases: Vec<PackageCommandAlias>,
     host_mounts: Vec<HostMount>,
@@ -137,6 +193,130 @@ struct Options {
     output_limit: usize,
     timeout_seconds: Option<f64>,
     command: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EventFormat {
+    None,
+    Json,
+}
+
+impl EventFormat {
+    fn parse(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "none" => Ok(Self::None),
+            "json" => Ok(Self::Json),
+            _ => Err(anyhow::anyhow!(
+                "unknown event format: {value}; expected none or json"
+            )),
+        }
+    }
+}
+
+struct EventReporter {
+    format: EventFormat,
+}
+
+impl EventReporter {
+    fn new(format: EventFormat) -> Self {
+        Self { format }
+    }
+
+    fn runner_started(&self, options: &Options, package_name: &str) -> anyhow::Result<()> {
+        self.emit(runner_started_event(options, package_name))
+    }
+
+    fn package_validated(&self, webc: &Path, package_name: &str) -> anyhow::Result<()> {
+        self.emit(json!({
+            "event": "package.validated",
+            "package": package_name,
+            "webc": webc.to_string_lossy(),
+            "magic": display_bytes(WEBC_MAGIC),
+        }))
+    }
+
+    fn sandbox_initialized(&self, package_name: &str) -> anyhow::Result<()> {
+        self.emit(json!({
+            "event": "sandbox.initialized",
+            "package": package_name,
+        }))
+    }
+
+    fn command_completed(
+        &self,
+        result: &wasm_host_core::CompletedProcess,
+        elapsed: Duration,
+    ) -> anyhow::Result<()> {
+        self.emit(json!({
+            "event": "command.completed",
+            "returncode": result.returncode,
+            "stdout_bytes": result.stdout.len(),
+            "stderr_bytes": result.stderr.len(),
+            "elapsed_ms": duration_ms(elapsed),
+        }))
+    }
+
+    fn runner_failed(
+        &self,
+        stage: &str,
+        exit_code: u8,
+        error: &anyhow::Error,
+        elapsed: Duration,
+    ) -> anyhow::Result<()> {
+        self.emit(json!({
+            "event": "runner.failed",
+            "stage": stage,
+            "exit_code": exit_code,
+            "error": error.to_string(),
+            "elapsed_ms": duration_ms(elapsed),
+        }))
+    }
+
+    fn emit(&self, value: Value) -> anyhow::Result<()> {
+        if self.format == EventFormat::Json {
+            let mut stderr = io::stderr();
+            write_event_json_line(&mut stderr, value)?;
+        }
+        Ok(())
+    }
+}
+
+fn runner_started_event(options: &Options, package_name: &str) -> Value {
+    let mut env_keys = options.env.keys().cloned().collect::<Vec<_>>();
+    env_keys.sort();
+    json!({
+        "event": "runner.started",
+        "profile": host_profile_name(options.profile),
+        "package": package_name,
+        "webc": options.webc.to_string_lossy(),
+        "cwd": options.cwd,
+        "argv0": options.command.first().map(String::as_str),
+        "argc": options.command.len(),
+        "alias_count": options.command_aliases.len(),
+        "mount_count": options.host_mounts.len(),
+        "env_keys": env_keys,
+        "env_count": options.env.len(),
+        "output_limit": options.output_limit,
+        "timeout_seconds": options.timeout_seconds,
+    })
+}
+
+fn write_event_json_line(writer: &mut impl Write, value: Value) -> anyhow::Result<()> {
+    let mut event = match value {
+        Value::Object(map) => map,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "runner event payload must be a JSON object"
+            ))
+        }
+    };
+    let mut envelope = Map::new();
+    envelope.insert("schema".to_string(), Value::from(1));
+    envelope.insert("time_unix_ms".to_string(), Value::from(unix_time_ms()));
+    envelope.append(&mut event);
+    serde_json::to_writer(&mut *writer, &Value::Object(envelope))?;
+    writeln!(writer)?;
+    Ok(())
 }
 
 fn validate_webc_package(path: &Path) -> anyhow::Result<()> {
@@ -168,6 +348,7 @@ impl Options {
         let mut args = args.into_iter().peekable();
         let mut webc = None;
         let mut profile = HostProfile::default();
+        let mut event_format = EventFormat::None;
         let mut package_name = None;
         let mut command_aliases = Vec::new();
         let mut host_mounts = Vec::new();
@@ -198,6 +379,9 @@ impl Options {
                 "--webc" => webc = Some(PathBuf::from(next_value(&mut args, "--webc")?)),
                 "--profile" => {
                     profile = HostProfile::parse(&next_value(&mut args, "--profile")?)?;
+                }
+                "--event-format" => {
+                    event_format = EventFormat::parse(&next_value(&mut args, "--event-format")?)?;
                 }
                 "--package" => package_name = Some(next_value(&mut args, "--package")?),
                 "--alias" => {
@@ -248,6 +432,7 @@ impl Options {
         Ok(Self {
             webc,
             profile,
+            event_format,
             package_name,
             command_aliases,
             host_mounts,
@@ -352,6 +537,24 @@ fn exit_code(code: i32) -> u8 {
     1
 }
 
+fn host_profile_name(profile: HostProfile) -> &'static str {
+    match profile {
+        HostProfile::BrowserStrict => "browser-strict",
+        HostProfile::NativeFull => "native-full",
+    }
+}
+
+fn unix_time_ms() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration_ms(duration),
+        Err(_) => 0,
+    }
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().min(u64::MAX as u128) as u64
+}
+
 fn print_usage() {
     println!(
         "\
@@ -364,6 +567,8 @@ Options:
   --webc <path>              Local WebC package to load
   --profile <name>           Host profile: browser-strict or native-full,
                              default browser-strict
+  --event-format <name>      Runner event format: none or json, default none.
+                             JSON events are written to stderr as JSON lines
   --package <name>           Logical package name, defaults to file stem
   --alias <ALIAS=COMMAND>    Expose an extra command alias from the package
   --mount <HOST:GUEST[:ro|rw]>
@@ -390,8 +595,25 @@ mod tests {
 
         assert_eq!(options.webc, PathBuf::from("tool.webc"));
         assert_eq!(options.profile, HostProfile::BrowserStrict);
+        assert_eq!(options.event_format, EventFormat::None);
         assert_eq!(options.command, ["tool"]);
         assert_eq!(options.cwd, "/work");
+    }
+
+    #[test]
+    fn parse_accepts_json_event_format() {
+        let options = Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--event-format",
+            "json",
+            "--",
+            "tool",
+        ]))
+        .expect("options should parse");
+
+        assert_eq!(options.event_format, EventFormat::Json);
+        assert_eq!(options.command, ["tool"]);
     }
 
     #[test]
@@ -409,6 +631,23 @@ mod tests {
         };
 
         assert!(error.to_string().contains("unknown host profile"));
+    }
+
+    #[test]
+    fn parse_rejects_unknown_event_format() {
+        let error = match Options::parse(args([
+            "--webc",
+            "tool.webc",
+            "--event-format",
+            "pretty",
+            "--",
+            "tool",
+        ])) {
+            Ok(_) => panic!("unknown event format should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("unknown event format"));
     }
 
     #[test]
@@ -437,6 +676,52 @@ mod tests {
             Some("secret-value")
         );
         assert_eq!(options.command, ["tool"]);
+    }
+
+    #[test]
+    fn runner_started_event_omits_environment_values() {
+        let options = Options {
+            webc: PathBuf::from("/packages/tool.webc"),
+            profile: HostProfile::NativeFull,
+            event_format: EventFormat::Json,
+            package_name: Some("tool".to_string()),
+            command_aliases: vec![PackageCommandAlias {
+                alias: "alias".to_string(),
+                command: "tool".to_string(),
+            }],
+            host_mounts: vec![HostMount {
+                source: ".".to_string(),
+                target: "/workspace".to_string(),
+                read_only: true,
+            }],
+            cwd: "/workspace".to_string(),
+            env: HashMap::from([
+                ("PUBLIC".to_string(), "visible-value".to_string()),
+                ("SECRET".to_string(), "secret-value".to_string()),
+            ]),
+            stdin: None,
+            output_limit: 4096,
+            timeout_seconds: Some(1.5),
+            command: vec!["tool".to_string(), "--flag".to_string()],
+        };
+        let mut output = Vec::new();
+        write_event_json_line(&mut output, runner_started_event(&options, "tool"))
+            .expect("event should write");
+
+        let line = String::from_utf8(output).expect("event should be utf8");
+        assert!(!line.contains("secret-value"));
+        assert!(!line.contains("visible-value"));
+        let event: Value = serde_json::from_str(&line).expect("event should parse");
+        assert_eq!(event["schema"], 1);
+        assert!(event["time_unix_ms"].as_u64().is_some());
+        assert_eq!(event["event"], "runner.started");
+        assert_eq!(event["profile"], "native-full");
+        assert_eq!(event["argv0"], "tool");
+        assert_eq!(event["argc"], 2);
+        assert_eq!(event["alias_count"], 1);
+        assert_eq!(event["mount_count"], 1);
+        assert_eq!(event["env_keys"], json!(["PUBLIC", "SECRET"]));
+        assert_eq!(event["env_count"], 2);
     }
 
     #[test]

@@ -16,6 +16,8 @@ The first conformance slice covers:
 - filesystem event emission for create/modify/rename/delete
 - read-only and writable host mounts
 - virtual executable dispatch through the host bridge
+- virtual process exit-code/stderr propagation
+- virtual process wall-time timeout and external cancellation
 
 These tests should eventually run against:
 

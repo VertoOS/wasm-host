@@ -1,11 +1,17 @@
-use std::{collections::HashMap, fs, thread};
+use std::{
+    collections::HashMap,
+    fs,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::Value;
 use tempfile::tempdir;
 use wasm_host_core::{
     CancellationSource, EventBus, HostMount, Limits, RunRequest, SandboxState,
-    VirtualExecutableBridge,
+    VirtualExecutableBridge, VirtualProcessRequest,
 };
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -45,6 +51,28 @@ fn encode_virtual_process_response(returncode: i32, stdout: &[u8], stderr: &[u8]
     data.extend_from_slice(stdout);
     data.extend_from_slice(stderr);
     data
+}
+
+fn virtual_command_sandbox() -> (
+    SandboxState,
+    tokio::sync::mpsc::Receiver<VirtualProcessRequest>,
+) {
+    let (events, _event_receiver) = EventBus::new(64);
+    let (virtual_processes, virtual_process_receiver) = VirtualExecutableBridge::new(64);
+    let state = SandboxState::new(
+        HashMap::new(),
+        Vec::new(),
+        Vec::new(),
+        "/work".to_string(),
+        HashMap::from([("PATH".to_string(), "/tools:/bin:/usr/bin".to_string())]),
+        events,
+        virtual_processes,
+    )
+    .expect("sandbox should initialize");
+    state
+        .register_virtual_executable(42, vec!["/tools/host-tool".to_string()], false)
+        .expect("virtual executable should register");
+    (state, virtual_process_receiver)
 }
 
 #[test]
@@ -267,21 +295,7 @@ fn host_mounts_can_be_read_only_or_writable() {
 
 #[test]
 fn virtual_executables_dispatch_through_the_host_bridge() {
-    let (events, _event_receiver) = EventBus::new(64);
-    let (virtual_processes, mut virtual_process_receiver) = VirtualExecutableBridge::new(64);
-    let state = SandboxState::new(
-        HashMap::new(),
-        Vec::new(),
-        Vec::new(),
-        "/work".to_string(),
-        HashMap::from([("PATH".to_string(), "/tools:/bin:/usr/bin".to_string())]),
-        events,
-        virtual_processes,
-    )
-    .expect("sandbox should initialize");
-    state
-        .register_virtual_executable(42, vec!["/tools/host-tool".to_string()], false)
-        .expect("virtual executable should register");
+    let (state, mut virtual_process_receiver) = virtual_command_sandbox();
 
     let handler = thread::spawn(move || {
         let request = virtual_process_receiver
@@ -331,4 +345,137 @@ fn virtual_executables_dispatch_through_the_host_bridge() {
     assert_eq!(result.returncode, 7);
     assert_eq!(result.stdout, b"bridge-out");
     assert_eq!(result.stderr, b"bridge-err");
+}
+
+#[test]
+fn virtual_executable_exit_code_and_stderr_are_preserved() {
+    let (state, mut virtual_process_receiver) = virtual_command_sandbox();
+    let handler = thread::spawn(move || {
+        let request = virtual_process_receiver
+            .blocking_recv()
+            .expect("virtual process request should arrive");
+        request
+            .respond(encode_virtual_process_response(23, b"", b"tool failed\n"))
+            .expect("response should send");
+    });
+
+    let result = state
+        .run_blocking(
+            RunRequest {
+                args: vec!["host-tool".to_string()],
+                input: None,
+                env: None,
+                cwd: None,
+                limits: limits(),
+            },
+            CancellationSource::new().token(),
+        )
+        .expect("virtual command should run");
+    handler.join().expect("handler thread should finish");
+
+    assert_eq!(result.returncode, 23);
+    assert_eq!(result.stdout, b"");
+    assert_eq!(result.stderr, b"tool failed\n");
+}
+
+#[test]
+fn virtual_executable_wall_time_limit_cancels_pending_request() {
+    let (state, mut virtual_process_receiver) = virtual_command_sandbox();
+    let (handler_ready_sender, handler_ready_receiver) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let request = virtual_process_receiver
+            .blocking_recv()
+            .expect("virtual process request should arrive");
+        handler_ready_sender
+            .send(())
+            .expect("ready signal should send");
+
+        let started = Instant::now();
+        while !request.cancellation_token().is_cancelled() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "request cancellation should be delivered after timeout"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    let result = state.run_blocking(
+        RunRequest {
+            args: vec!["host-tool".to_string()],
+            input: None,
+            env: None,
+            cwd: None,
+            limits: Limits {
+                output_bytes: OUTPUT_LIMIT,
+                wall_time_seconds: Some(0.05),
+            },
+        },
+        CancellationSource::new().token(),
+    );
+    handler_ready_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("handler should receive request");
+    handler.join().expect("handler thread should finish");
+
+    let error = match result {
+        Ok(_) => panic!("timeout should fail the virtual command"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("wall time limit"),
+        "unexpected timeout error: {error:#}"
+    );
+}
+
+#[test]
+fn virtual_executable_external_cancellation_cancels_pending_request() {
+    let (state, mut virtual_process_receiver) = virtual_command_sandbox();
+    let cancellation = CancellationSource::new();
+    let (handler_ready_sender, handler_ready_receiver) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let request = virtual_process_receiver
+            .blocking_recv()
+            .expect("virtual process request should arrive");
+        handler_ready_sender
+            .send(())
+            .expect("ready signal should send");
+
+        let started = Instant::now();
+        while !request.cancellation_token().is_cancelled() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "request cancellation should be delivered after external cancel"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    let token = cancellation.token();
+    let runner = thread::spawn(move || {
+        state.run_blocking(
+            RunRequest {
+                args: vec!["host-tool".to_string()],
+                input: None,
+                env: None,
+                cwd: None,
+                limits: limits(),
+            },
+            token,
+        )
+    });
+    handler_ready_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("handler should receive request");
+    cancellation.cancel();
+    handler.join().expect("handler thread should finish");
+
+    let error = match runner.join().expect("runner thread should finish") {
+        Ok(_) => panic!("external cancellation should fail the virtual command"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("process cancelled"),
+        "unexpected cancellation error: {error:#}"
+    );
 }

@@ -101,6 +101,21 @@ fn shared_output_sink() -> (OutputSink, Arc<Mutex<Vec<u8>>>) {
     (OutputSink::new(SharedOutput(Arc::clone(&output))), output)
 }
 
+fn wait_for_shared_output(output: &Arc<Mutex<Vec<u8>>>, expected: &[u8]) {
+    let started = Instant::now();
+    loop {
+        let actual = output.lock().expect("shared output should lock").clone();
+        if actual == expected {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "timed out waiting for streamed output; got {actual:?}, expected {expected:?}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn virtual_command_sandbox() -> (
     SandboxState,
     tokio::sync::mpsc::Receiver<VirtualProcessRequest>,
@@ -648,6 +663,87 @@ fn run_blocking_with_output_streams_and_captures_virtual_output() {
             .expect("stderr stream should lock")
             .as_slice(),
         b"streamed stderr"
+    );
+}
+
+#[test]
+fn virtual_executable_output_chunks_stream_before_final_response() {
+    let (state, mut virtual_process_receiver) = virtual_command_sandbox();
+    let (chunk_sent_sender, chunk_sent_receiver) = mpsc::channel();
+    let (allow_final_sender, allow_final_receiver) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let request = virtual_process_receiver
+            .blocking_recv()
+            .expect("virtual process request should arrive");
+        request
+            .write_stdout(b"chunk-out".to_vec())
+            .expect("stdout chunk should send");
+        request
+            .write_stderr(b"chunk-err".to_vec())
+            .expect("stderr chunk should send");
+        chunk_sent_sender
+            .send(())
+            .expect("chunk signal should send");
+        allow_final_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("final response should be allowed");
+        request
+            .respond(encode_virtual_process_response(
+                0,
+                b"-final-out",
+                b"-final-err",
+            ))
+            .expect("response should send");
+    });
+    let (stdout_sink, streamed_stdout) = shared_output_sink();
+    let (stderr_sink, streamed_stderr) = shared_output_sink();
+
+    let runner = thread::spawn(move || {
+        state.run_blocking_with_output(
+            RunRequest {
+                args: vec!["host-tool".to_string()],
+                input: None,
+                env: None,
+                cwd: None,
+                limits: limits(),
+            },
+            OutputSinks {
+                stdout: Some(stdout_sink),
+                stderr: Some(stderr_sink),
+            },
+            CancellationSource::new().token(),
+        )
+    });
+    chunk_sent_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("handler should send chunks");
+    wait_for_shared_output(&streamed_stdout, b"chunk-out");
+    wait_for_shared_output(&streamed_stderr, b"chunk-err");
+    allow_final_sender
+        .send(())
+        .expect("final response signal should send");
+
+    let result = runner
+        .join()
+        .expect("runner thread should finish")
+        .expect("virtual command should run");
+    handler.join().expect("handler thread should finish");
+
+    assert_eq!(result.stdout, b"chunk-out-final-out");
+    assert_eq!(result.stderr, b"chunk-err-final-err");
+    assert_eq!(
+        streamed_stdout
+            .lock()
+            .expect("stdout stream should lock")
+            .as_slice(),
+        b"chunk-out-final-out"
+    );
+    assert_eq!(
+        streamed_stderr
+            .lock()
+            .expect("stderr stream should lock")
+            .as_slice(),
+        b"chunk-err-final-err"
     );
 }
 

@@ -368,7 +368,14 @@ pub struct VirtualProcessRequest {
     pub id: u64,
     pub payload: Vec<u8>,
     cancellation: CancellationToken,
-    response_sender: mpsc::Sender<Vec<u8>>,
+    response_sender: mpsc::Sender<VirtualProcessResponseEvent>,
+}
+
+#[derive(Debug)]
+enum VirtualProcessResponseEvent {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+    Complete(Vec<u8>),
 }
 
 #[derive(Clone, Debug)]
@@ -428,6 +435,12 @@ struct VirtualProcessResponsePayload {
     returncode: i32,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct VirtualProcessOutput {
+    stdout: CapturedOutput,
+    stderr: CapturedOutput,
 }
 
 struct BinaryCursor<'a> {
@@ -720,7 +733,19 @@ impl VirtualProcessRequest {
 
     pub fn respond(&self, response: Vec<u8>) -> Result<()> {
         self.response_sender
-            .send(response)
+            .send(VirtualProcessResponseEvent::Complete(response))
+            .map_err(|_| anyhow!("virtual process response receiver closed"))
+    }
+
+    pub fn write_stdout(&self, data: Vec<u8>) -> Result<()> {
+        self.response_sender
+            .send(VirtualProcessResponseEvent::Stdout(data))
+            .map_err(|_| anyhow!("virtual process response receiver closed"))
+    }
+
+    pub fn write_stderr(&self, data: Vec<u8>) -> Result<()> {
+        self.response_sender
+            .send(VirtualProcessResponseEvent::Stderr(data))
             .map_err(|_| anyhow!("virtual process response receiver closed"))
     }
 }
@@ -744,6 +769,16 @@ impl VirtualExecutableBridge {
         payload: Vec<u8>,
         wall_time: Option<Duration>,
         cancellation: CancellationToken,
+    ) -> Result<Vec<u8>> {
+        self.invoke_blocking_with_output(payload, wall_time, cancellation, None)
+    }
+
+    fn invoke_blocking_with_output(
+        &self,
+        payload: Vec<u8>,
+        wall_time: Option<Duration>,
+        cancellation: CancellationToken,
+        output: Option<VirtualProcessOutput>,
     ) -> Result<Vec<u8>> {
         let id = self.inner.sequence.fetch_add(1, Ordering::AcqRel) + 1;
         let (response_sender, response_receiver) = mpsc::channel();
@@ -802,7 +837,23 @@ impl VirtualExecutableBridge {
                     .min(Duration::from_millis(10))
             });
             match response_receiver.recv_timeout(wait_time) {
-                Ok(response) => {
+                Ok(VirtualProcessResponseEvent::Stdout(data)) => {
+                    if let Some(output) = &output {
+                        if let Err(error) = output.stdout.write_all("stdout", &data) {
+                            request_cancellation.cancel();
+                            return Err(error);
+                        }
+                    }
+                }
+                Ok(VirtualProcessResponseEvent::Stderr(data)) => {
+                    if let Some(output) = &output {
+                        if let Err(error) = output.stderr.write_all("stderr", &data) {
+                            request_cancellation.cancel();
+                            return Err(error);
+                        }
+                    }
+                }
+                Ok(VirtualProcessResponseEvent::Complete(response)) => {
                     request_cancellation.cancel();
                     return Ok(response);
                 }
@@ -2333,11 +2384,14 @@ impl PackageCatalog {
             stdin: BASE64.encode(input),
         };
         let payload = serde_json::to_vec(&request)?;
-        let response =
-            state
-                .virtual_executables
-                .bridge()
-                .invoke_blocking(payload, wall_time, cancellation)?;
+        let output = VirtualProcessOutput {
+            stdout: stdout.clone(),
+            stderr: stderr.clone(),
+        };
+        let response = state
+            .virtual_executables
+            .bridge()
+            .invoke_blocking_with_output(payload, wall_time, cancellation, Some(output))?;
         let response = decode_virtual_process_response(&response)
             .context("invalid virtual executable response")?;
         stdout.write_all("stdout", &response.stdout)?;

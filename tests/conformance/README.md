@@ -30,7 +30,8 @@ The first conformance slice covers:
 - read-only and writable host mounts
 - virtual executable dispatch through the host bridge
 - virtual process exit-code/stderr propagation
-- process stdout/stderr streaming while preserving captured output
+- process stdout/stderr streaming while preserving captured output, including
+  host-backed virtual process output chunks before final response
 - virtual process stdout/stderr output limits
 - virtual process wall-time timeout and external cancellation
 - HTTP bridge request/response normalization, clean errors, response limits,

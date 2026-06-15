@@ -1,46 +1,23 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    process::Command as ProcessCommand,
+    process::{Command as ProcessCommand, Output},
     sync::mpsc,
     thread,
     time::Duration,
 };
 
-use wasm_host_fixtures::{http_bridge_fixture_webc, HTTP_BRIDGE_COMMAND};
+use wasm_host_fixtures::{
+    http_bridge_fixture_webc, http_bridge_fixture_webc_with_response_body_limit,
+    HTTP_BRIDGE_COMMAND,
+};
 
 #[test]
 fn native_http_bridge_is_available_to_wasi_guest() {
     let mut server = TestHttpServer::spawn();
     let webc = http_bridge_fixture_webc(&server.url()).expect("build HTTP bridge fixture");
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let webc_path = tmp.path().join("http-fixture.webc");
-    std::fs::write(&webc_path, webc).expect("write WebC fixture");
-
-    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_wasm-host-runner"))
-        .arg("--event-format")
-        .arg("json")
-        .arg("--http-bridge")
-        .arg("native")
-        .arg("--module-cache-dir")
-        .arg(tmp.path().join("modules"))
-        .arg("--webc")
-        .arg(&webc_path)
-        .arg("--")
-        .arg(HTTP_BRIDGE_COMMAND)
-        .output()
-        .expect("run fixture package");
-
-    assert!(
-        output.status.success(),
-        "runner failed with status {:?}\nstdout:\n{}\nstderr:\n{}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let response: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("fixture stdout should be JSON");
+    let output = run_native_http_bridge_fixture(webc, "http-fixture.webc");
+    let response = parse_fixture_stdout(&output);
     assert_eq!(response["ok"], true);
     assert_eq!(response["response"]["status"], 200);
     assert_eq!(response["response"]["body_base64"], "YnJpZGdlLW9r");
@@ -70,34 +47,8 @@ fn native_http_bridge_is_available_to_wasi_guest() {
 fn native_http_bridge_redirect_is_visible_to_wasi_guest() {
     let mut server = RedirectHttpServer::spawn();
     let webc = http_bridge_fixture_webc(&server.url()).expect("build HTTP bridge fixture");
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let webc_path = tmp.path().join("http-redirect-fixture.webc");
-    std::fs::write(&webc_path, webc).expect("write WebC fixture");
-
-    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_wasm-host-runner"))
-        .arg("--event-format")
-        .arg("json")
-        .arg("--http-bridge")
-        .arg("native")
-        .arg("--module-cache-dir")
-        .arg(tmp.path().join("modules"))
-        .arg("--webc")
-        .arg(&webc_path)
-        .arg("--")
-        .arg(HTTP_BRIDGE_COMMAND)
-        .output()
-        .expect("run fixture package");
-
-    assert!(
-        output.status.success(),
-        "runner failed with status {:?}\nstdout:\n{}\nstderr:\n{}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let response: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("fixture stdout should be JSON");
+    let output = run_native_http_bridge_fixture(webc, "http-redirect-fixture.webc");
+    let response = parse_fixture_stdout(&output);
     assert_eq!(response["ok"], true);
     assert_eq!(response["response"]["status"], 200);
     assert_eq!(
@@ -128,6 +79,78 @@ fn native_http_bridge_redirect_is_visible_to_wasi_guest() {
     );
 }
 
+#[test]
+fn native_http_bridge_unsupported_scheme_error_is_visible_to_wasi_guest() {
+    let webc = http_bridge_fixture_webc("https://example.test/http-bridge-fixture")
+        .expect("build HTTP bridge fixture");
+    let output = run_native_http_bridge_fixture(webc, "http-unsupported-scheme-fixture.webc");
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["kind"], "unsupported_scheme");
+    let message = response["error"]["message"]
+        .as_str()
+        .expect("error message should be a string");
+    assert!(
+        message.contains("supports http:// URLs only"),
+        "unexpected unsupported scheme error: {message}"
+    );
+}
+
+#[test]
+fn native_http_bridge_response_limit_error_is_visible_to_wasi_guest() {
+    let mut server =
+        TestHttpServer::spawn_with_response("/http-bridge-too-large", b"response-body-too-large");
+    let webc = http_bridge_fixture_webc_with_response_body_limit(&server.url(), 4)
+        .expect("build HTTP bridge fixture");
+    let output = run_native_http_bridge_fixture(webc, "http-response-limit-fixture.webc");
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["kind"], "response_too_large");
+    assert_eq!(
+        response["error"]["message"],
+        "HTTP response body exceeded 4 bytes"
+    );
+
+    let request = server.request();
+    assert!(
+        request.starts_with("GET /http-bridge-too-large HTTP/1.1\r\n"),
+        "unexpected request line:\n{request}"
+    );
+}
+
+fn run_native_http_bridge_fixture(webc: Vec<u8>, webc_filename: &str) -> Output {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let webc_path = tmp.path().join(webc_filename);
+    std::fs::write(&webc_path, webc).expect("write WebC fixture");
+
+    ProcessCommand::new(env!("CARGO_BIN_EXE_wasm-host-runner"))
+        .arg("--event-format")
+        .arg("json")
+        .arg("--http-bridge")
+        .arg("native")
+        .arg("--module-cache-dir")
+        .arg(tmp.path().join("modules"))
+        .arg("--webc")
+        .arg(&webc_path)
+        .arg("--")
+        .arg(HTTP_BRIDGE_COMMAND)
+        .output()
+        .expect("run fixture package")
+}
+
+fn parse_fixture_stdout(output: &Output) -> serde_json::Value {
+    assert!(
+        output.status.success(),
+        "runner failed with status {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("fixture stdout should be JSON")
+}
+
 struct TestHttpServer {
     url: String,
     request_receiver: mpsc::Receiver<String>,
@@ -136,16 +159,21 @@ struct TestHttpServer {
 
 impl TestHttpServer {
     fn spawn() -> Self {
+        Self::spawn_with_response("/http-bridge-fixture", b"bridge-ok")
+    }
+
+    fn spawn_with_response(path: &str, response_body: &[u8]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test HTTP server");
         let address = listener.local_addr().expect("read server address");
+        let response_body = response_body.to_vec();
         let (request_sender, request_receiver) = mpsc::sync_channel(1);
         let handle = thread::spawn(move || {
             let (stream, _) = listener.accept().expect("accept test request");
-            let request = handle_test_http_request(stream);
+            let request = handle_test_http_request(stream, &response_body);
             request_sender.send(request).expect("send captured request");
         });
         Self {
-            url: format!("http://{address}/http-bridge-fixture"),
+            url: format!("http://{address}{path}"),
             request_receiver,
             handle: Some(handle),
         }
@@ -223,11 +251,17 @@ impl RedirectHttpServer {
     }
 }
 
-fn handle_test_http_request(mut stream: TcpStream) -> String {
+fn handle_test_http_request(mut stream: TcpStream, response_body: &[u8]) -> String {
     let request = read_test_http_request(&mut stream);
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        response_body.len()
+    )
+    .expect("write HTTP response headers");
     stream
-        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nbridge-ok")
-        .expect("write HTTP response");
+        .write_all(response_body)
+        .expect("write HTTP response body");
     request
 }
 

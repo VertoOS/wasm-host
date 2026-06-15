@@ -34,6 +34,13 @@ pub fn stdout_fixture_webc(stdout: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn http_bridge_fixture_webc(url: &str) -> Result<Vec<u8>> {
+    http_bridge_fixture_webc_with_response_body_limit(url, 4096)
+}
+
+pub fn http_bridge_fixture_webc_with_response_body_limit(
+    url: &str,
+    response_body_limit: usize,
+) -> Result<Vec<u8>> {
     let request = serde_json::json!({
         "method": "GET",
         "url": url,
@@ -43,7 +50,7 @@ pub fn http_bridge_fixture_webc(url: &str) -> Result<Vec<u8>> {
                 "value": "wasm-host-runner"
             }
         ],
-        "response_body_limit": 4096
+        "response_body_limit": response_body_limit
     })
     .to_string();
     let wasm =
@@ -256,6 +263,13 @@ mod tests {
     #[test]
     fn http_bridge_fixture_is_webc() {
         let webc = http_bridge_fixture_webc("http://127.0.0.1:1/test").unwrap();
+        assert!(webc.starts_with(b"\0webc003"));
+    }
+
+    #[test]
+    fn http_bridge_fixture_with_response_body_limit_is_webc() {
+        let webc = http_bridge_fixture_webc_with_response_body_limit("http://127.0.0.1:1/test", 4)
+            .unwrap();
         assert!(webc.starts_with(b"\0webc003"));
     }
 }

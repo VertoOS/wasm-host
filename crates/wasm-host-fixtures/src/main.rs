@@ -1,7 +1,10 @@
 use std::{env, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
-use wasm_host_fixtures::{http_bridge_fixture_webc, stdout_fixture_webc};
+use wasm_host_fixtures::{
+    http_bridge_fixture_webc, http_bridge_fixture_webc_with_response_body_limit,
+    stdout_fixture_webc,
+};
 
 fn main() -> Result<()> {
     let mut args = env::args().skip(1);
@@ -19,10 +22,17 @@ fn main() -> Result<()> {
             write_output(output, &webc)
         }
         "http-bridge" => {
-            let options = CliOptions::parse(args, &["--output", "--url"])?;
+            let options = CliOptions::parse(args, &["--output", "--url", "--response-body-limit"])?;
             let output = options.required("--output")?;
             let url = options.required("--url")?;
-            let webc = http_bridge_fixture_webc(url)?;
+            let webc = if let Some(limit) = options.optional("--response-body-limit") {
+                let limit = limit
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --response-body-limit: {limit}"))?;
+                http_bridge_fixture_webc_with_response_body_limit(url, limit)?
+            } else {
+                http_bridge_fixture_webc(url)?
+            };
             write_output(output, &webc)
         }
         "-h" | "--help" => {
@@ -58,11 +68,15 @@ impl CliOptions {
     }
 
     fn required(&self, name: &str) -> Result<&str> {
+        self.optional(name)
+            .with_context(|| format!("missing required {name}"))
+    }
+
+    fn optional(&self, name: &str) -> Option<&str> {
         self.values
             .iter()
             .rev()
             .find_map(|(key, value)| (key == name).then_some(value.as_str()))
-            .with_context(|| format!("missing required {name}"))
     }
 }
 
@@ -77,6 +91,6 @@ fn write_output(path: &str, data: &[u8]) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  wasm-host-fixtures stdout --output PATH --stdout TEXT\n  wasm-host-fixtures http-bridge --output PATH --url URL"
+        "usage:\n  wasm-host-fixtures stdout --output PATH --stdout TEXT\n  wasm-host-fixtures http-bridge --output PATH --url URL [--response-body-limit BYTES]"
     );
 }

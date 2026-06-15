@@ -10,8 +10,10 @@ tests/conformance/run.sh
 
 The first conformance slice covers:
 
-- virtual filesystem read/write/list behavior
-- filesystem event emission
+- virtual filesystem read/write/list/rename/delete behavior
+- directory creation and removal
+- symlink creation and readlink behavior
+- filesystem event emission for create/modify/rename/delete
 - read-only and writable host mounts
 - virtual executable dispatch through the host bridge
 

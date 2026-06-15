@@ -96,6 +96,126 @@ fn virtual_filesystem_supports_read_write_list_and_events() {
 }
 
 #[test]
+fn virtual_filesystem_supports_rename_delete_symlink_and_events() {
+    let (events, mut event_receiver) = EventBus::new(64);
+    let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(64);
+    events.set_enabled(true);
+    let state = SandboxState::new(
+        HashMap::new(),
+        Vec::new(),
+        Vec::new(),
+        "/work".to_string(),
+        HashMap::new(),
+        events,
+        virtual_processes,
+    )
+    .expect("sandbox should initialize");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime should initialize");
+
+    state
+        .create_directory("/work/nested/child")
+        .expect("directory creation should succeed");
+    let nested = runtime
+        .block_on(event_receiver.recv())
+        .expect("nested directory event should be emitted");
+    assert_eq!(nested.kind.as_str(), "directory_created");
+    assert_eq!(nested.path, "/work/nested");
+    let child = runtime
+        .block_on(event_receiver.recv())
+        .expect("child directory event should be emitted");
+    assert_eq!(child.kind.as_str(), "directory_created");
+    assert_eq!(child.path, "/work/nested/child");
+    assert_eq!(
+        state
+            .listdir("/work/nested")
+            .expect("nested listdir should succeed"),
+        ["child"]
+    );
+
+    runtime
+        .block_on(state.write_file("/work/nested/child/source.txt", b"rename-data".to_vec()))
+        .expect("source write should succeed");
+    let source_created = runtime
+        .block_on(event_receiver.recv())
+        .expect("source file event should be emitted");
+    assert_eq!(source_created.kind.as_str(), "file_created");
+    assert_eq!(source_created.path, "/work/nested/child/source.txt");
+
+    state
+        .create_symlink(
+            "/work/nested/child/source.txt",
+            "/work/nested/child/source.link",
+        )
+        .expect("symlink creation should succeed");
+    assert_eq!(
+        state
+            .readlink("/work/nested/child/source.link")
+            .expect("readlink should succeed"),
+        "/work/nested/child/source.txt"
+    );
+    let link_created = runtime
+        .block_on(event_receiver.recv())
+        .expect("symlink creation event should be emitted");
+    assert_eq!(link_created.kind.as_str(), "file_created");
+    assert_eq!(link_created.path, "/work/nested/child/source.link");
+
+    runtime
+        .block_on(state.rename_path(
+            "/work/nested/child/source.txt",
+            "/work/nested/child/renamed.txt",
+        ))
+        .expect("rename should succeed");
+    assert!(!state
+        .exists("/work/nested/child/source.txt")
+        .expect("old path existence check should succeed"));
+    assert_eq!(
+        runtime
+            .block_on(state.read_file("/work/nested/child/renamed.txt"))
+            .expect("renamed file should be readable"),
+        b"rename-data"
+    );
+    let renamed = runtime
+        .block_on(event_receiver.recv())
+        .expect("rename event should be emitted");
+    assert_eq!(renamed.kind.as_str(), "path_renamed");
+    assert_eq!(renamed.path, "/work/nested/child/source.txt");
+    assert_eq!(
+        renamed.target_path.as_deref(),
+        Some("/work/nested/child/renamed.txt")
+    );
+
+    state
+        .remove_file("/work/nested/child/renamed.txt")
+        .expect("file removal should succeed");
+    let removed_file = runtime
+        .block_on(event_receiver.recv())
+        .expect("file removal event should be emitted");
+    assert_eq!(removed_file.kind.as_str(), "file_removed");
+    assert_eq!(removed_file.path, "/work/nested/child/renamed.txt");
+
+    state
+        .remove_file("/work/nested/child/source.link")
+        .expect("symlink removal should succeed");
+    let removed_link = runtime
+        .block_on(event_receiver.recv())
+        .expect("symlink removal event should be emitted");
+    assert_eq!(removed_link.kind.as_str(), "file_removed");
+    assert_eq!(removed_link.path, "/work/nested/child/source.link");
+
+    state
+        .remove_directory("/work/nested/child")
+        .expect("directory removal should succeed");
+    let removed_directory = runtime
+        .block_on(event_receiver.recv())
+        .expect("directory removal event should be emitted");
+    assert_eq!(removed_directory.kind.as_str(), "directory_removed");
+    assert_eq!(removed_directory.path, "/work/nested/child");
+}
+
+#[test]
 fn host_mounts_can_be_read_only_or_writable() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

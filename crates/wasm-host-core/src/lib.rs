@@ -1723,6 +1723,84 @@ impl SandboxState {
         Ok(())
     }
 
+    pub fn create_directory(&self, path: &str) -> Result<()> {
+        let path = normalize_path(path)?;
+        for created_path in create_directories(&self.fs, &path)? {
+            self.events.emit(
+                FileSystemEventKind::DirectoryCreated,
+                event_path(&created_path),
+                None,
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn rename_path(&self, from: &str, to: &str) -> Result<()> {
+        let from = normalize_path(from)?;
+        let to = normalize_path(to)?;
+        self.create_parent_directories(&to)?;
+        self.fs
+            .rename(&from, &to)
+            .await
+            .with_context(|| format!("unable to rename {} to {}", from.display(), to.display()))?;
+        self.events.emit(
+            FileSystemEventKind::PathRenamed,
+            event_path(&from),
+            Some(event_path(&to)),
+        );
+        Ok(())
+    }
+
+    pub fn remove_file(&self, path: &str) -> Result<()> {
+        let path = normalize_path(path)?;
+        self.fs
+            .remove_file(&path)
+            .with_context(|| format!("unable to remove {}", path.display()))?;
+        self.events
+            .emit(FileSystemEventKind::FileRemoved, event_path(&path), None);
+        Ok(())
+    }
+
+    pub fn remove_directory(&self, path: &str) -> Result<()> {
+        let path = normalize_path(path)?;
+        self.fs
+            .remove_dir(&path)
+            .with_context(|| format!("unable to remove {}", path.display()))?;
+        self.events.emit(
+            FileSystemEventKind::DirectoryRemoved,
+            event_path(&path),
+            None,
+        );
+        Ok(())
+    }
+
+    pub fn create_symlink(&self, target: &str, link_path: &str) -> Result<()> {
+        let target = symlink_target(target)?;
+        let link_path = normalize_path(link_path)?;
+        self.create_parent_directories(&link_path)?;
+        self.fs
+            .create_symlink(&target, &link_path)
+            .with_context(|| format!("unable to create symlink {}", link_path.display()))?;
+        self.events.emit(
+            FileSystemEventKind::FileCreated,
+            event_path(&link_path),
+            None,
+        );
+        Ok(())
+    }
+
+    pub fn readlink(&self, path: &str) -> Result<String> {
+        let path = normalize_path(path)?;
+        let target = self
+            .fs
+            .readlink(&path)
+            .with_context(|| format!("unable to readlink {}", path.display()))?;
+        target
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("symlink target must be valid UTF-8"))
+    }
+
     fn write_file_silent_blocking(&self, path: &str, data: Vec<u8>) -> Result<()> {
         self.catalog.block_on(self.write_file_silent(path, data))
     }
@@ -3193,6 +3271,19 @@ fn normalize_path(path: &str) -> Result<PathBuf> {
     }
 
     Ok(normalized)
+}
+
+fn symlink_target(target: &str) -> Result<PathBuf> {
+    if target.is_empty() {
+        return Err(anyhow!("symlink target cannot be empty"));
+    }
+    if target.as_bytes().contains(&0) {
+        return Err(anyhow!("symlink target cannot contain NUL bytes"));
+    }
+    if target.starts_with('/') {
+        return normalize_path(target);
+    }
+    Ok(PathBuf::from(target))
 }
 
 fn event_path(path: &Path) -> String {

@@ -1050,6 +1050,74 @@ mod tests {
     }
 
     #[test]
+    fn host_command_bridge_runs_native_process_with_stdio_and_mapped_cwd() {
+        let host_shell = PathBuf::from("/bin/sh");
+        if !host_shell.is_file() {
+            return;
+        }
+
+        let workspace = temp_dir("host-command-workspace");
+        fs::create_dir_all(&workspace).expect("workspace should be created");
+        let host_mounts = vec![HostMount {
+            source: workspace.to_string_lossy().to_string(),
+            target: "/workspace".to_string(),
+            read_only: false,
+        }];
+        let (events, _event_receiver) = EventBus::new(4);
+        let (virtual_executables, virtual_process_receiver) = VirtualExecutableBridge::new(4);
+        let state = SandboxState::new_with_profile(
+            HostProfile::NativeFull,
+            HashMap::new(),
+            host_mounts.clone(),
+            Vec::new(),
+            "/workspace".to_string(),
+            HashMap::from([("PATH".to_string(), "/tools:/bin:/usr/bin".to_string())]),
+            events,
+            virtual_executables,
+        )
+        .expect("sandbox should initialize");
+        let spec = HostCommandSpec {
+            guest_path: "/tools/host-sh".to_string(),
+            host_command: host_shell,
+        };
+        register_host_commands(&state, std::slice::from_ref(&spec))
+            .expect("host command should register");
+        let _worker = HostCommandWorker::spawn(vec![spec], host_mounts, virtual_process_receiver)
+            .expect("host command worker should start");
+
+        let result = state
+            .run_blocking(
+                RunRequest {
+                    args: vec![
+                        "host-sh".to_string(),
+                        "-c".to_string(),
+                        "cat > host-command-output.txt; printf 'arg=%s\\n' \"$1\"; printf 'stderr-line\\n' >&2".to_string(),
+                        "script-name".to_string(),
+                        "arg1".to_string(),
+                    ],
+                    input: Some(b"stdin-data".to_vec()),
+                    env: None,
+                    cwd: None,
+                    limits: Limits {
+                        output_bytes: 1024,
+                        wall_time_seconds: Some(5.0),
+                    },
+                },
+                CancellationSource::new().token(),
+            )
+            .expect("host command should run");
+
+        assert_eq!(result.returncode, 0);
+        assert_eq!(result.stdout, b"arg=arg1\n");
+        assert_eq!(result.stderr, b"stderr-line\n");
+        assert_eq!(
+            fs::read(workspace.join("host-command-output.txt")).expect("output file should exist"),
+            b"stdin-data"
+        );
+        fs::remove_dir_all(workspace).expect("workspace should be removed");
+    }
+
+    #[test]
     fn parse_accepts_positive_timeout_and_none() {
         assert_eq!(
             parse_timeout("1.25").expect("positive timeout should parse"),
@@ -1291,6 +1359,16 @@ mod tests {
         path.push(format!(
             "wasm-host-runner-test-{}-{name}",
             std::process::id()
+        ));
+        path
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let mut path = env::temp_dir();
+        path.push(format!(
+            "wasm-host-runner-test-{}-{}-{name}",
+            std::process::id(),
+            unix_time_ms()
         ));
         path
     }

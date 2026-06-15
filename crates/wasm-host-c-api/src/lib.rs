@@ -8,7 +8,10 @@ use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Deserialize;
 #[cfg(not(target_arch = "wasm32"))]
-use wasm_host_core::NativeHttpBridgeWorker;
+use wasm_host_core::{
+    register_native_host_commands, NativeHostCommandSpec, NativeHostCommandWorker,
+    NativeHttpBridgeWorker,
+};
 use wasm_host_core::{
     CancellationSource, CompletedProcess, EventBus, HostMount, HostProfile, HttpBridge, Limits,
     PackageCommandAlias, PackageSpec, RunRequest, SandboxOptions, SandboxState,
@@ -42,6 +45,8 @@ struct FfiRunOptions {
     #[serde(default)]
     mounts: Vec<FfiMount>,
     #[serde(default)]
+    host_commands: Vec<FfiHostCommand>,
+    #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
     env: HashMap<String, String>,
@@ -69,6 +74,12 @@ struct FfiMount {
     target: String,
     #[serde(default = "default_read_only")]
     read_only: bool,
+}
+
+#[derive(Deserialize)]
+struct FfiHostCommand {
+    guest_path: String,
+    host_command: String,
 }
 
 #[no_mangle]
@@ -190,6 +201,26 @@ fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
         Some(profile) => HostProfile::parse(&profile)?,
         None => HostProfile::default(),
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    let host_commands = {
+        if !options.host_commands.is_empty() && profile != HostProfile::NativeFull {
+            return Err(anyhow!(
+                "host_commands require the native-full profile, current profile is {}",
+                profile.as_str()
+            ));
+        }
+        options
+            .host_commands
+            .into_iter()
+            .map(|command| NativeHostCommandSpec::new(command.guest_path, command.host_command))
+            .collect::<Result<Vec<_>>>()?
+    };
+    #[cfg(target_arch = "wasm32")]
+    if !options.host_commands.is_empty() {
+        return Err(anyhow!(
+            "native host command bridge is not available on wasm32"
+        ));
+    }
     let package_name = options
         .package
         .unwrap_or_else(|| package_name(&options.webc));
@@ -210,6 +241,8 @@ fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
             read_only: mount.read_only,
         })
         .collect::<Vec<_>>();
+    #[cfg(not(target_arch = "wasm32"))]
+    let host_mounts_for_worker = host_mounts.clone();
     let stdin = options
         .stdin_base64
         .map(|stdin| {
@@ -230,7 +263,7 @@ fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
         http_bridge,
     };
     let (events, _event_receiver) = EventBus::new(DEFAULT_EVENT_QUEUE_SIZE);
-    let (virtual_executables, _virtual_process_receiver) =
+    let (virtual_executables, virtual_process_receiver) =
         VirtualExecutableBridge::new(DEFAULT_EVENT_QUEUE_SIZE);
     let state = SandboxState::new_with_profile_and_options(
         profile,
@@ -243,6 +276,17 @@ fn run_options(options: FfiRunOptions) -> Result<CompletedProcess> {
         virtual_executables,
         sandbox_options,
     )?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let _host_command_worker = {
+        register_native_host_commands(&state, &host_commands)?;
+        NativeHostCommandWorker::spawn(
+            host_commands,
+            host_mounts_for_worker,
+            virtual_process_receiver,
+        )
+    };
+    #[cfg(target_arch = "wasm32")]
+    let _virtual_process_receiver = virtual_process_receiver;
     let cancellation = CancellationSource::new();
     state.run_blocking(
         RunRequest {
@@ -411,5 +455,97 @@ mod tests {
 
         assert_eq!(options.module_cache_dir.as_deref(), Some("/tmp/modules"));
         assert_eq!(options.http_bridge.as_deref(), Some("native"));
+    }
+
+    #[test]
+    fn host_commands_decode() {
+        let options: FfiRunOptions = serde_json::from_str(
+            r#"{"webc":"missing.webc","command":["tool"],"host_commands":[{"guest_path":"/tools/echo","host_command":"/bin/echo"}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(options.host_commands.len(), 1);
+        assert_eq!(options.host_commands[0].guest_path, "/tools/echo");
+        assert_eq!(options.host_commands[0].host_command, "/bin/echo");
+    }
+
+    #[test]
+    fn host_commands_require_native_full_profile() {
+        let options = std::ffi::CString::new(
+            r#"{"webc":"missing.webc","command":["tool"],"host_commands":[{"guest_path":"/tools/echo","host_command":"/bin/echo"}]}"#,
+        )
+        .unwrap();
+        let result = wasm_host_run_json(options.as_ptr());
+        assert_eq!(wasm_host_result_status(result), WASM_HOST_STATUS_ERROR);
+        let error = unsafe {
+            std::slice::from_raw_parts(
+                wasm_host_result_error_ptr(result),
+                wasm_host_result_error_len(result),
+            )
+        };
+        assert_eq!(
+            std::str::from_utf8(error).unwrap(),
+            "host_commands require the native-full profile, current profile is browser-strict"
+        );
+        wasm_host_result_free(result);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_host_command_bridge_runs_with_stdio_and_mapped_cwd() {
+        let host_shell = PathBuf::from("/bin/sh");
+        if !host_shell.is_file() {
+            return;
+        }
+
+        let package = tempfile::NamedTempFile::new().expect("package file should create");
+        std::fs::write(
+            package.path(),
+            wasm_host_fixtures::stdout_fixture_webc(b"unused\n")
+                .expect("fixture package should build"),
+        )
+        .expect("package should write");
+        let workspace = tempfile::tempdir().expect("workspace should create");
+
+        let result = run_options(FfiRunOptions {
+            webc: package.path().to_string_lossy().to_string(),
+            command: vec![
+                "host-sh".to_string(),
+                "-c".to_string(),
+                "cat > host-command-output.txt; printf 'arg=%s\\n' \"$1\"; printf 'stderr-line\\n' >&2"
+                    .to_string(),
+                "script-name".to_string(),
+                "arg1".to_string(),
+            ],
+            profile: Some("native-full".to_string()),
+            package: Some("fixture".to_string()),
+            aliases: Vec::new(),
+            mounts: vec![FfiMount {
+                source: workspace.path().to_string_lossy().to_string(),
+                target: "/workspace".to_string(),
+                read_only: false,
+            }],
+            host_commands: vec![FfiHostCommand {
+                guest_path: "/tools/host-sh".to_string(),
+                host_command: host_shell.to_string_lossy().to_string(),
+            }],
+            cwd: Some("/workspace".to_string()),
+            env: HashMap::from([("PATH".to_string(), "/tools:/bin:/usr/bin".to_string())]),
+            stdin_base64: Some(BASE64.encode(b"stdin-data")),
+            output_limit: Some(1024),
+            timeout_seconds: Some(5.0),
+            module_cache_dir: None,
+            http_bridge: None,
+        })
+        .expect("host command should run");
+
+        assert_eq!(result.returncode, 0);
+        assert_eq!(result.stdout, b"arg=arg1\n");
+        assert_eq!(result.stderr, b"stderr-line\n");
+        assert_eq!(
+            std::fs::read(workspace.path().join("host-command-output.txt"))
+                .expect("output file should exist"),
+            b"stdin-data"
+        );
     }
 }

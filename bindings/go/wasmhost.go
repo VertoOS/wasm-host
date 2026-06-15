@@ -32,6 +32,11 @@ type Mount struct {
 	ReadOnly *bool  `json:"read_only,omitempty"`
 }
 
+type HostCommand struct {
+	GuestPath   string `json:"guest_path"`
+	HostCommand string `json:"host_command"`
+}
+
 type Options struct {
 	WebC           string            `json:"webc"`
 	Command        []string          `json:"command"`
@@ -39,6 +44,7 @@ type Options struct {
 	Package        string            `json:"package,omitempty"`
 	Aliases        []Alias           `json:"aliases,omitempty"`
 	Mounts         []Mount           `json:"mounts,omitempty"`
+	HostCommands   []HostCommand     `json:"host_commands,omitempty"`
 	CWD            string            `json:"cwd,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	Stdin          []byte            `json:"-"`

@@ -1,5 +1,6 @@
 from ._ffi import (
     Alias,
+    HostCommand,
     HostLibrary,
     Mount,
     Result,
@@ -11,6 +12,7 @@ from ._ffi import (
 
 __all__ = [
     "Alias",
+    "HostCommand",
     "HostLibrary",
     "Mount",
     "Result",

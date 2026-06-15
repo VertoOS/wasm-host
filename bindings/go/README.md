@@ -58,3 +58,22 @@ _, err := wasmhost.Run(wasmhost.Options{
 	HTTPBridge: "native",
 })
 ```
+
+Native host commands can be exposed for terminal e2e tests through the
+`native-full` profile:
+
+```go
+_, err := wasmhost.Run(wasmhost.Options{
+	WebC:    "/path/to/package.webc",
+	Profile: "native-full",
+	Command: []string{"host-sh", "-c", "pwd"},
+	CWD:     "/workspace",
+	Mounts: []wasmhost.Mount{
+		wasmhost.ReadWriteMount("/host/project", "/workspace"),
+	},
+	HostCommands: []wasmhost.HostCommand{
+		{GuestPath: "/tools/host-sh", HostCommand: "/bin/sh"},
+	},
+	Env: map[string]string{"PATH": "/tools:/bin:/usr/bin"},
+})
+```

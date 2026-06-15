@@ -29,6 +29,8 @@ Optional fields:
 - `aliases`: `[{"alias":"python","command":"python"}]`
 - `mounts`: `[{"source":"/host/path","target":"/workspace","read_only":true}]`
   where `read_only` defaults to `true`
+- `host_commands`: `[{"guest_path":"/tools/host-sh","host_command":"/bin/sh"}]`;
+  requires `profile` set to `native-full`
 - `stdin_base64`: base64-encoded stdin bytes
 - `output_limit`: stdout/stderr byte limit
 - `timeout_seconds`: wall-time limit

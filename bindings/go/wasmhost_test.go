@@ -37,6 +37,9 @@ func TestOptionsEncodeStdin(t *testing.T) {
 		WebC:           "missing.webc",
 		Command:        []string{"tool"},
 		Stdin:          []byte("hello"),
+		HostCommands: []HostCommand{
+			{GuestPath: "/tools/echo", HostCommand: "/bin/echo"},
+		},
 		ModuleCacheDir: "/tmp/wasm-host-modules",
 		HTTPBridge:     "native",
 	}).marshal()
@@ -46,6 +49,9 @@ func TestOptionsEncodeStdin(t *testing.T) {
 
 	if !bytes.Contains(payload, []byte(`"stdin_base64":"aGVsbG8="`)) {
 		t.Fatalf("payload did not include base64 stdin: %s", payload)
+	}
+	if !bytes.Contains(payload, []byte(`"host_commands":[{"guest_path":"/tools/echo","host_command":"/bin/echo"}]`)) {
+		t.Fatalf("payload did not include host command bridge: %s", payload)
 	}
 	if !bytes.Contains(payload, []byte(`"module_cache_dir":"/tmp/wasm-host-modules"`)) {
 		t.Fatalf("payload did not include module cache dir: %s", payload)
@@ -68,6 +74,29 @@ func TestUnknownHTTPBridgeReturnsErrorResult(t *testing.T) {
 		t.Fatalf("return code = %d, want 125", result.ReturnCode)
 	}
 	if string(result.Error) != "unknown HTTP bridge mode: bad; expected off or native" {
+		t.Fatalf("error = %q", result.Error)
+	}
+}
+
+func TestHostCommandWithoutNativeFullReturnsErrorResult(t *testing.T) {
+	result, err := Run(Options{
+		WebC:    "missing.webc",
+		Command: []string{"tool"},
+		HostCommands: []HostCommand{
+			{GuestPath: "/tools/echo", HostCommand: "/bin/echo"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run should return ABI result, got error: %v", err)
+	}
+
+	if result.OK() {
+		t.Fatal("host command without native-full should fail")
+	}
+	if result.ReturnCode != 125 {
+		t.Fatalf("return code = %d, want 125", result.ReturnCode)
+	}
+	if string(result.Error) != "host_commands require the native-full profile, current profile is browser-strict" {
 		t.Fatalf("error = %q", result.Error)
 	}
 }

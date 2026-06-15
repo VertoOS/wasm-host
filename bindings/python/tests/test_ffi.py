@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from wasm_host import Mount, RunOptions, load_library, run
+from wasm_host import HostCommand, Mount, RunOptions, load_library, run
 
 
 @unittest.skipUnless(os.environ.get("WASM_HOST_LIBRARY"), "WASM_HOST_LIBRARY is not set")
@@ -28,6 +28,9 @@ class PythonBindingTests(unittest.TestCase):
             command=["tool"],
             stdin=b"hello",
             mounts=[Mount(source=".", target="/workspace")],
+            host_commands=[
+                HostCommand(guest_path="/tools/echo", host_command="/bin/echo")
+            ],
             module_cache_dir="/tmp/wasm-host-modules",
             http_bridge="native",
         )
@@ -35,6 +38,10 @@ class PythonBindingTests(unittest.TestCase):
         encoded = options.to_json()
         self.assertIn('"stdin_base64":"aGVsbG8="', encoded)
         self.assertIn('"read_only":true', encoded)
+        self.assertIn(
+            '"host_commands":[{"guest_path":"/tools/echo","host_command":"/bin/echo"}]',
+            encoded,
+        )
         self.assertIn('"module_cache_dir":"/tmp/wasm-host-modules"', encoded)
         self.assertIn('"http_bridge":"native"', encoded)
 
@@ -47,6 +54,25 @@ class PythonBindingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 125)
         self.assertEqual(
             result.error_text, "unknown HTTP bridge mode: bad; expected off or native"
+        )
+
+    def test_host_command_without_native_full_returns_error_result(self):
+        result = run(
+            RunOptions(
+                webc="missing.webc",
+                command=["tool"],
+                host_commands=[
+                    HostCommand(guest_path="/tools/echo", host_command="/bin/echo")
+                ],
+            ),
+            self.library,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.returncode, 125)
+        self.assertEqual(
+            result.error_text,
+            "host_commands require the native-full profile, current profile is browser-strict",
         )
 
     def test_runs_generated_fixture_package(self):

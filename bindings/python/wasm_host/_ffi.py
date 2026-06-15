@@ -40,6 +40,18 @@ class Mount:
 
 
 @dataclass(frozen=True)
+class HostCommand:
+    guest_path: str
+    host_command: str
+
+    def to_json(self) -> dict:
+        return {
+            "guest_path": self.guest_path,
+            "host_command": self.host_command,
+        }
+
+
+@dataclass(frozen=True)
 class RunOptions:
     webc: str
     command: Sequence[str]
@@ -47,6 +59,7 @@ class RunOptions:
     package: Optional[str] = None
     aliases: Sequence[Alias] = field(default_factory=tuple)
     mounts: Sequence[Mount] = field(default_factory=tuple)
+    host_commands: Sequence[HostCommand] = field(default_factory=tuple)
     cwd: str = "/work"
     env: Mapping[str, str] = field(default_factory=dict)
     stdin: Optional[bytes] = None
@@ -69,6 +82,10 @@ class RunOptions:
             payload["aliases"] = [alias.to_json() for alias in self.aliases]
         if self.mounts:
             payload["mounts"] = [mount.to_json() for mount in self.mounts]
+        if self.host_commands:
+            payload["host_commands"] = [
+                host_command.to_json() for host_command in self.host_commands
+            ]
         if self.stdin is not None:
             payload["stdin_base64"] = base64.b64encode(self.stdin).decode("ascii")
         if self.output_limit is not None:

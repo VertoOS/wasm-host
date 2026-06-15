@@ -39,7 +39,13 @@ use wasmer_wasix::{
 };
 use webc::metadata::annotations::Wasi;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod host_command;
 mod http;
+#[cfg(not(target_arch = "wasm32"))]
+pub use host_command::{
+    register_native_host_commands, NativeHostCommandSpec, NativeHostCommandWorker,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::NativeHttpBridgeWorker;
 pub use http::{

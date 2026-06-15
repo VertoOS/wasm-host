@@ -51,3 +51,20 @@ RunOptions(
     http_bridge="native",
 )
 ```
+
+Native host commands can be exposed for terminal e2e tests through the
+`native-full` profile:
+
+```python
+from wasm_host import HostCommand, Mount, RunOptions
+
+RunOptions(
+    webc="/path/to/package.webc",
+    profile="native-full",
+    command=["host-sh", "-c", "pwd"],
+    cwd="/workspace",
+    mounts=[Mount(source="/host/project", target="/workspace", read_only=False)],
+    host_commands=[HostCommand(guest_path="/tools/host-sh", host_command="/bin/sh")],
+    env={"PATH": "/tools:/bin:/usr/bin"},
+)
+```

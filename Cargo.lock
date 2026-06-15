@@ -3937,7 +3937,9 @@ dependencies = [
  "base64",
  "serde",
  "serde_json",
+ "tempfile",
  "wasm-host-core",
+ "wasm-host-fixtures",
 ]
 
 [[package]]

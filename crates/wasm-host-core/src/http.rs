@@ -564,21 +564,10 @@ fn read_native_http_response(
                 "HTTP response headers exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
             )));
         }
-        let mut chunk = [0_u8; 4096];
-        match stream.read(&mut chunk) {
-            Ok(0) => {
-                return Err(HttpBridgeError::transport(
-                    "HTTP connection closed before response headers",
-                ))
-            }
-            Ok(count) => buffer.extend_from_slice(&chunk[..count]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(error) => {
-                return Err(HttpBridgeError::transport(format!(
-                    "unable to read HTTP response: {error}"
-                )))
-            }
+        if read_more_native_http(stream, request, &mut buffer, "HTTP response headers")? == 0 {
+            return Err(HttpBridgeError::transport(
+                "HTTP connection closed before response headers",
+            ));
         }
     };
 
@@ -588,12 +577,8 @@ fn read_native_http_response(
     let (status, headers, content_length, chunked) =
         parse_native_http_response_headers(header_bytes)?;
     if chunked {
-        return Err(HttpBridgeError::invalid_response(
-            "native HTTP bridge does not support chunked responses yet",
-        ));
-    }
-
-    if let Some(length) = content_length {
+        read_chunked_native_http_body(stream, request, body_prefix)?;
+    } else if let Some(length) = content_length {
         let accepted = body_prefix.len().min(length);
         write_native_http_body_chunk(request, body_prefix[..accepted].to_vec())?;
         read_fixed_native_http_body(stream, request, length.saturating_sub(accepted))?;
@@ -637,12 +622,19 @@ fn parse_native_http_response_headers(
                 ))
             })?);
         }
-        if header.name == "transfer-encoding" && header.value.eq_ignore_ascii_case("chunked") {
+        if header.name == "transfer-encoding" && is_chunked_transfer_encoding(&header.value) {
             chunked = true;
         }
         headers.push(header);
     }
     Ok((status, headers, content_length, chunked))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_chunked_transfer_encoding(value: &str) -> bool {
+    value
+        .split(',')
+        .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -658,6 +650,166 @@ fn parse_native_http_status(status_line: &str) -> std::result::Result<u16, HttpB
     status.parse::<u16>().map_err(|_| {
         HttpBridgeError::invalid_response(format!("invalid HTTP response status: {status}"))
     })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_chunked_native_http_body(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+    mut buffer: Vec<u8>,
+) -> std::result::Result<(), HttpBridgeError> {
+    loop {
+        let size_line = read_native_http_line(
+            stream,
+            request,
+            &mut buffer,
+            "chunked HTTP response chunk size",
+        )?;
+        let mut remaining = parse_native_http_chunk_size(&size_line)?;
+        if remaining == 0 {
+            read_native_http_trailers(stream, request, &mut buffer)?;
+            return Ok(());
+        }
+
+        while remaining > 0 {
+            if buffer.is_empty()
+                && read_more_native_http(
+                    stream,
+                    request,
+                    &mut buffer,
+                    "chunked HTTP response body",
+                )? == 0
+            {
+                return Err(HttpBridgeError::transport(
+                    "HTTP connection closed before chunked response body completed",
+                ));
+            }
+
+            let accepted = buffer.len().min(remaining);
+            write_native_http_body_chunk(request, buffer[..accepted].to_vec())?;
+            buffer.drain(..accepted);
+            remaining -= accepted;
+        }
+
+        ensure_native_http_buffer(
+            stream,
+            request,
+            &mut buffer,
+            2,
+            "chunked HTTP response chunk terminator",
+        )?;
+        if &buffer[..2] != b"\r\n" {
+            return Err(HttpBridgeError::invalid_response(
+                "chunked HTTP response chunk missing CRLF terminator",
+            ));
+        }
+        buffer.drain(..2);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_native_http_chunk_size(line: &[u8]) -> std::result::Result<usize, HttpBridgeError> {
+    let line = std::str::from_utf8(line).map_err(|_| {
+        HttpBridgeError::invalid_response("chunked HTTP response chunk size must be UTF-8")
+    })?;
+    let size = line.split_once(';').map_or(line, |(size, _)| size).trim();
+    if size.is_empty() {
+        return Err(HttpBridgeError::invalid_response(
+            "chunked HTTP response chunk size cannot be empty",
+        ));
+    }
+    usize::from_str_radix(size, 16).map_err(|_| {
+        HttpBridgeError::invalid_response(format!(
+            "invalid chunked HTTP response chunk size: {size}"
+        ))
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_http_trailers(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+    buffer: &mut Vec<u8>,
+) -> std::result::Result<(), HttpBridgeError> {
+    loop {
+        let line =
+            read_native_http_line(stream, request, buffer, "chunked HTTP response trailers")?;
+        if line.is_empty() {
+            return Ok(());
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_http_line(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+    buffer: &mut Vec<u8>,
+    context: &str,
+) -> std::result::Result<Vec<u8>, HttpBridgeError> {
+    loop {
+        if let Some(index) = find_crlf(buffer) {
+            let line = buffer[..index].to_vec();
+            buffer.drain(..index + 2);
+            return Ok(line);
+        }
+        if buffer.len() > NATIVE_HTTP_HEADER_LIMIT {
+            return Err(HttpBridgeError::invalid_response(format!(
+                "{context} exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
+            )));
+        }
+        if read_more_native_http(stream, request, buffer, context)? == 0 {
+            return Err(HttpBridgeError::transport(format!(
+                "HTTP connection closed before {context}"
+            )));
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn ensure_native_http_buffer(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+    buffer: &mut Vec<u8>,
+    length: usize,
+    context: &str,
+) -> std::result::Result<(), HttpBridgeError> {
+    while buffer.len() < length {
+        if read_more_native_http(stream, request, buffer, context)? == 0 {
+            return Err(HttpBridgeError::transport(format!(
+                "HTTP connection closed before {context}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_more_native_http(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+    buffer: &mut Vec<u8>,
+    context: &str,
+) -> std::result::Result<usize, HttpBridgeError> {
+    let mut chunk = [0_u8; 4096];
+    loop {
+        if request.cancellation_token().is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        match stream.read(&mut chunk) {
+            Ok(count) => {
+                buffer.extend_from_slice(&chunk[..count]);
+                return Ok(count);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(error) => {
+                return Err(HttpBridgeError::transport(format!(
+                    "unable to read {context}: {error}"
+                )))
+            }
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -728,6 +880,11 @@ fn write_native_http_body_chunk(
 #[cfg(not(target_arch = "wasm32"))]
 fn find_header_end(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_crlf(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(2).position(|window| window == b"\r\n")
 }
 
 fn append_response_body(
@@ -849,6 +1006,50 @@ mod tests {
         assert!(response
             .headers
             .contains(&HttpHeader::new("x-reply", "ok").expect("response header should be valid")));
+    }
+
+    #[test]
+    fn native_http_bridge_decodes_chunked_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener should bind");
+        let address = listener.local_addr().expect("listener address should read");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("connection should arrive");
+            let request = read_test_http_request(&mut stream);
+            assert!(request.starts_with("GET /chunked HTTP/1.1\r\n"));
+
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nX-Reply: chunked\r\n\r\n5\r\nhello\r\n",
+                )
+                .expect("response prefix should write");
+            stream
+                .write_all(b"1; ext=value\r\n \r\n5\r\nworld\r\n0\r\nTrailer-Name: ignored\r\n\r\n")
+                .expect("response suffix should write");
+        });
+
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let response = bridge
+            .request_blocking(
+                HttpRequest::new(
+                    "get",
+                    format!("http://{address}/chunked"),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect("HTTP request should complete");
+        server.join().expect("server should finish");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"hello world");
+        assert!(response.headers.contains(
+            &HttpHeader::new("transfer-encoding", "chunked")
+                .expect("response header should be valid")
+        ));
     }
 
     #[test]

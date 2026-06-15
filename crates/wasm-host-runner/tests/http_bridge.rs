@@ -120,6 +120,24 @@ fn native_http_bridge_response_limit_error_is_visible_to_wasi_guest() {
     );
 }
 
+#[test]
+fn native_http_bridge_gateway_unavailable_error_is_visible_to_wasi_guest() {
+    let webc = http_bridge_fixture_webc(&closed_local_http_url("/http-bridge-unavailable"))
+        .expect("build HTTP bridge fixture");
+    let output = run_native_http_bridge_fixture(webc, "http-gateway-unavailable-fixture.webc");
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["kind"], "gateway_unavailable");
+    let message = response["error"]["message"]
+        .as_str()
+        .expect("error message should be a string");
+    assert!(
+        message.contains("unable to connect to HTTP host 127.0.0.1:"),
+        "unexpected gateway unavailable error: {message}"
+    );
+}
+
 fn run_native_http_bridge_fixture(webc: Vec<u8>, webc_filename: &str) -> Output {
     let tmp = tempfile::tempdir().expect("temp dir");
     let webc_path = tmp.path().join(webc_filename);
@@ -149,6 +167,13 @@ fn parse_fixture_stdout(output: &Output) -> serde_json::Value {
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("fixture stdout should be JSON")
+}
+
+fn closed_local_http_url(path: &str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind closed local port");
+    let address = listener.local_addr().expect("read closed local address");
+    drop(listener);
+    format!("http://{address}{path}")
 }
 
 struct TestHttpServer {

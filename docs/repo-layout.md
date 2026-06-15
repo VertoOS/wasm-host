@@ -15,6 +15,7 @@ bindings/
   python/              # Python package surface
 crates/
   wasm-host-core/      # Rust host runtime
+  wasm-host-fixtures/  # generated WebC fixtures for tests and examples
   wasm-host-runner/    # native terminal runner
 docs/                  # host profile and layout
 packages/

@@ -24,9 +24,11 @@ Run all binding checks with:
 tests/bindings/run.sh
 ```
 
-The harness builds the C ABI library, compiles a C consumer against the public
-header when `cc` is installed, validates Python package metadata, runs Python
-wrapper tests, and runs Go tests when Go is installed.
+The harness builds the C ABI library and fixture generator, emits a small WebC
+package, compiles a C consumer against the public header when `cc` is installed,
+validates Python package metadata, runs Python wrapper tests, and runs Go tests
+when Go is installed. The C, Python, and Go checks all execute the generated
+package through the C ABI.
 
 ## Split Criteria
 

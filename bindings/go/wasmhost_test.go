@@ -2,6 +2,7 @@ package wasmhost
 
 import (
 	"bytes"
+	"os"
 	"testing"
 )
 
@@ -68,5 +69,33 @@ func TestUnknownHTTPBridgeReturnsErrorResult(t *testing.T) {
 	}
 	if string(result.Error) != "unknown HTTP bridge mode: bad; expected off or native" {
 		t.Fatalf("error = %q", result.Error)
+	}
+}
+
+func TestRunsGeneratedFixturePackage(t *testing.T) {
+	fixture := os.Getenv("WASM_HOST_BINDING_FIXTURE_WEBC")
+	if fixture == "" {
+		t.Skip("WASM_HOST_BINDING_FIXTURE_WEBC is not set")
+	}
+
+	result, err := Run(Options{
+		WebC:    fixture,
+		Command: []string{"stdout-fixture"},
+	})
+	if err != nil {
+		t.Fatalf("run should return ABI result, got error: %v", err)
+	}
+
+	if !result.OK() {
+		t.Fatalf("fixture run failed: %s", result.Error)
+	}
+	if result.ReturnCode != 0 {
+		t.Fatalf("return code = %d, want 0", result.ReturnCode)
+	}
+	if string(result.Stdout) != "BINDING_FIXTURE_OK\n" {
+		t.Fatalf("stdout = %q", result.Stdout)
+	}
+	if len(result.Stderr) != 0 {
+		t.Fatalf("stderr should be empty: %q", result.Stderr)
 	}
 }

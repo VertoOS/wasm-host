@@ -18,8 +18,5 @@ tokio.workspace = true
 wasm-host-core.workspace = true
 
 [dev-dependencies]
-ciborium = "0.2.2"
-sha2 = "0.10.8"
 tempfile = "3.15.0"
-wat.workspace = true
-webc.workspace = true
+wasm-host-fixtures.workspace = true

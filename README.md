@@ -23,7 +23,8 @@ until the boundaries are stable enough to split.
   request dispatch, clean errors, response limits, and cancellation.
 - The native runner can expose an opt-in HTTP bridge device for guest packages
   through `/dev/wasm-host-http`.
-- C ABI and initial Python/Go binding smoke tests are implemented.
+- C ABI and initial Python/Go binding smoke tests are implemented, including
+  generated WebC success-path fixtures.
 - Browser adapter, packaged runtime artifacts, and full language WebC e2e
   coverage are not implemented yet.
 
@@ -92,6 +93,7 @@ bindings/
 crates/
   wasm-host-c-api/     # C ABI over the core host contract
   wasm-host-core/      # core host runtime and Wasmer/WASIX backend
+  wasm-host-fixtures/  # generated WebC fixtures for tests and examples
   wasm-host-runner/    # native terminal runner
 docs/
   host-profile.md      # browser-compatible host contract
@@ -148,9 +150,11 @@ Python and Go bindings wrap the shared C ABI. Run their smoke tests with:
 tests/bindings/run.sh
 ```
 
-The harness builds `wasm-host-c-api`, points Python at the produced dynamic
-library, compiles and runs a C header/link smoke test when `cc` is installed,
-validates Python package metadata, and runs Go tests when Go is installed.
+The harness builds `wasm-host-c-api` and `wasm-host-fixtures`, generates a small
+WebC package, points Python at the produced dynamic library, compiles and runs a
+C header/link smoke test when `cc` is installed, validates Python package
+metadata, and runs Go tests when Go is installed. The C, Python, and Go checks
+all run the generated package through the shared C ABI.
 
 ## Planning
 

@@ -2,8 +2,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TMP_ROOT="$(mktemp -d)"
+trap 'rm -rf "$TMP_ROOT"' EXIT
 
-cargo build --manifest-path "$ROOT/Cargo.toml" -p wasm-host-c-api --locked
+cargo build --manifest-path "$ROOT/Cargo.toml" \
+  -p wasm-host-c-api \
+  -p wasm-host-fixtures \
+  --locked
+
+FIXTURE_WEBC="$TMP_ROOT/stdout-fixture.webc"
+"$ROOT/target/debug/wasm-host-fixtures" stdout \
+  --output "$FIXTURE_WEBC" \
+  --stdout $'BINDING_FIXTURE_OK\n'
+export WASM_HOST_BINDING_FIXTURE_WEBC="$FIXTURE_WEBC"
 
 case "$(uname -s)" in
   Darwin)
@@ -27,8 +38,6 @@ fi
 
 if command -v cc >/dev/null 2>&1; then
   echo "c abi"
-  TMP_ROOT="$(mktemp -d)"
-  trap 'rm -rf "$TMP_ROOT"' EXIT
   cc \
     -std=c11 \
     -Wall \
@@ -40,7 +49,7 @@ if command -v cc >/dev/null 2>&1; then
     -lwasm_host_c_api \
     -Wl,-rpath,"$ROOT/target/debug" \
     -o "$TMP_ROOT/c-abi-smoke"
-  "$TMP_ROOT/c-abi-smoke"
+  "$TMP_ROOT/c-abi-smoke" "$FIXTURE_WEBC"
 else
   echo "c abi: skipped; cc is not installed"
 fi

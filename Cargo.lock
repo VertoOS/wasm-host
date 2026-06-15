@@ -3959,18 +3959,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-host-runner"
+name = "wasm-host-fixtures"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ciborium",
  "serde_json",
  "sha2 0.10.9",
+ "wat",
+ "webc",
+]
+
+[[package]]
+name = "wasm-host-runner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
  "tempfile",
  "tokio",
  "wasm-host-core",
- "wat",
- "webc",
+ "wasm-host-fixtures",
 ]
 
 [[package]]

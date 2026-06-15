@@ -58,7 +58,54 @@ static int expect_error_result(WasmHostRunResult *result,
   return 0;
 }
 
-int main(void) {
+static int expect_success_result(WasmHostRunResult *result,
+                                 const char *expected_stdout) {
+  if (result == NULL) {
+    return fail("run returned null result");
+  }
+  if (wasm_host_result_status(result) != WASM_HOST_STATUS_OK) {
+    fprintf(stderr, "c abi smoke: expected ok status, got error: %.*s\n",
+            (int)wasm_host_result_error_len(result),
+            (const char *)wasm_host_result_error_ptr(result));
+    return 1;
+  }
+  if (wasm_host_result_returncode(result) != 0) {
+    return fail("expected guest return code 0");
+  }
+  if (!bytes_equal(wasm_host_result_stdout_ptr(result),
+                   wasm_host_result_stdout_len(result), expected_stdout)) {
+    fprintf(stderr, "c abi smoke: unexpected stdout payload: %.*s\n",
+            (int)wasm_host_result_stdout_len(result),
+            (const char *)wasm_host_result_stdout_ptr(result));
+    return 1;
+  }
+  if (expect_empty_buffer(wasm_host_result_stderr_ptr(result),
+                          wasm_host_result_stderr_len(result), "stderr") != 0) {
+    return 1;
+  }
+  if (expect_empty_buffer(wasm_host_result_error_ptr(result),
+                          wasm_host_result_error_len(result), "error") != 0) {
+    return 1;
+  }
+  return 0;
+}
+
+static int run_fixture(const char *fixture_path) {
+  char options[4096];
+  int written = snprintf(options, sizeof(options),
+                         "{\"webc\":\"%s\",\"command\":[\"stdout-fixture\"]}",
+                         fixture_path);
+  if (written < 0 || (size_t)written >= sizeof(options)) {
+    return fail("fixture options JSON exceeded buffer");
+  }
+
+  WasmHostRunResult *fixture = wasm_host_run_json(options);
+  int status = expect_success_result(fixture, "BINDING_FIXTURE_OK\n");
+  wasm_host_result_free(fixture);
+  return status;
+}
+
+int main(int argc, char **argv) {
   const char *version = wasm_host_version();
   if (version == NULL || version[0] == '\0') {
     return fail("version should be non-empty");
@@ -80,5 +127,8 @@ int main(void) {
   wasm_host_result_free(empty_command);
 
   wasm_host_result_free(NULL);
+  if (argc > 1 && run_fixture(argv[1]) != 0) {
+    return 1;
+  }
   return 0;
 }

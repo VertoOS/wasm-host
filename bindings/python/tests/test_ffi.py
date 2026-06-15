@@ -49,6 +49,24 @@ class PythonBindingTests(unittest.TestCase):
             result.error_text, "unknown HTTP bridge mode: bad; expected off or native"
         )
 
+    def test_runs_generated_fixture_package(self):
+        fixture = os.environ.get("WASM_HOST_BINDING_FIXTURE_WEBC")
+        if fixture is None:
+            self.skipTest("WASM_HOST_BINDING_FIXTURE_WEBC is not set")
+
+        result = run(
+            RunOptions(
+                webc=fixture,
+                command=["stdout-fixture"],
+            ),
+            self.library,
+        )
+
+        self.assertTrue(result.ok, result.error_text)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"BINDING_FIXTURE_OK\n")
+        self.assertEqual(result.stderr, b"")
+
 
 if __name__ == "__main__":
     unittest.main()

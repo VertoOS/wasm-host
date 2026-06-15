@@ -10,3 +10,7 @@ surface, and cache/download settings. The first language manifest lives at
 Pinned artifacts should be stored outside git, fetched by URL or supplied by a
 local path, and verified with sha256 before the e2e harness is made required in
 CI. Source fixtures should stay small and readable.
+
+Small generated WebC packages used by CI live in `crates/wasm-host-fixtures`.
+That crate emits deterministic test fixtures on demand so binding and runner
+tests can exercise success paths without committing binary WebC artifacts.

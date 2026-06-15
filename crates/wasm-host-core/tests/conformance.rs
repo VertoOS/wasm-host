@@ -479,6 +479,253 @@ fn http_bridge_preserves_handler_errors() {
 }
 
 #[test]
+fn http_bridge_streams_request_body_chunks() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        assert!(request.has_streaming_body());
+        assert!(request.request.body.is_empty());
+
+        let mut chunks = Vec::new();
+        while let Some(chunk) = request
+            .read_streaming_body_chunk_blocking()
+            .expect("HTTP request body chunk should read")
+        {
+            chunks.push(chunk);
+        }
+        assert_eq!(chunks, [b"hello ".to_vec(), b"stream".to_vec()]);
+        request
+            .respond(
+                HttpResponse::new(200, Vec::new(), b"streamed".to_vec())
+                    .expect("response should normalize"),
+            )
+            .expect("HTTP response should send");
+    });
+
+    let response = bridge
+        .request_streaming_blocking(
+            HttpRequest::new(
+                "POST",
+                "https://example.test/upload",
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("request should normalize"),
+            HttpRequestLimits::default(),
+            CancellationSource::new().token(),
+            |body| {
+                body.write_chunk_blocking(b"hello ".to_vec())?;
+                body.write_chunk_blocking(b"stream".to_vec())
+            },
+        )
+        .expect("streaming HTTP request should complete");
+    handler.join().expect("handler should finish");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, b"streamed");
+}
+
+#[test]
+fn http_bridge_streaming_request_body_rejects_buffered_body() {
+    let (bridge, _http_receiver) = HttpBridge::new(4);
+    let error = bridge
+        .request_streaming_blocking(
+            HttpRequest::new(
+                "POST",
+                "https://example.test/upload",
+                Vec::new(),
+                b"buffered".to_vec(),
+            )
+            .expect("request should normalize"),
+            HttpRequestLimits::default(),
+            CancellationSource::new().token(),
+            |_body| Ok(()),
+        )
+        .expect_err("streaming request should reject ambiguous buffered body");
+
+    assert_eq!(error.kind, HttpBridgeErrorKind::InvalidRequest);
+    assert!(error.message.contains("buffered request body"));
+}
+
+#[test]
+fn http_bridge_streaming_request_body_cancellation_reaches_producer() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let cancellation = CancellationSource::new();
+    let (handler_ready_sender, handler_ready_receiver) = mpsc::channel();
+    let (producer_cancelled_sender, producer_cancelled_receiver) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        assert!(request.has_streaming_body());
+        handler_ready_sender
+            .send(())
+            .expect("ready signal should send");
+
+        let started = Instant::now();
+        while !request.cancellation_token().is_cancelled() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "HTTP request cancellation should reach handler"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    let token = cancellation.token();
+    let runner = thread::spawn(move || {
+        bridge.request_streaming_blocking(
+            HttpRequest::new(
+                "POST",
+                "https://example.test/upload",
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("request should normalize"),
+            HttpRequestLimits::default(),
+            token,
+            move |body| {
+                body.write_chunk_blocking(b"first".to_vec())?;
+                let error = body
+                    .write_chunk_blocking(b"second".to_vec())
+                    .expect_err("producer should observe cancellation while backpressured");
+                producer_cancelled_sender
+                    .send(error.kind)
+                    .expect("producer cancellation signal should send");
+                Err(error)
+            },
+        )
+    });
+
+    handler_ready_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("handler should receive request");
+    cancellation.cancel();
+    handler.join().expect("handler should finish");
+
+    let error = runner
+        .join()
+        .expect("runner thread should finish")
+        .expect_err("external cancellation should fail the HTTP request");
+    assert_eq!(error.kind, HttpBridgeErrorKind::Cancelled);
+    assert_eq!(
+        producer_cancelled_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("producer should observe cancellation"),
+        HttpBridgeErrorKind::Cancelled
+    );
+}
+
+#[test]
+fn http_bridge_streaming_request_body_wall_time_reaches_producer() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let (handler_ready_sender, handler_ready_receiver) = mpsc::channel();
+    let (producer_cancelled_sender, producer_cancelled_receiver) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        assert!(request.has_streaming_body());
+        handler_ready_sender
+            .send(())
+            .expect("ready signal should send");
+
+        let started = Instant::now();
+        while !request.cancellation_token().is_cancelled() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "HTTP request timeout should reach handler"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    let error = bridge
+        .request_streaming_blocking(
+            HttpRequest::new(
+                "POST",
+                "https://example.test/upload",
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("request should normalize"),
+            HttpRequestLimits {
+                wall_time: Some(Duration::from_millis(50)),
+                ..HttpRequestLimits::default()
+            },
+            CancellationSource::new().token(),
+            move |body| {
+                body.write_chunk_blocking(b"first".to_vec())?;
+                let error = body
+                    .write_chunk_blocking(b"second".to_vec())
+                    .expect_err("producer should observe timeout while backpressured");
+                producer_cancelled_sender
+                    .send(error.kind)
+                    .expect("producer timeout signal should send");
+                Err(error)
+            },
+        )
+        .expect_err("wall-time timeout should fail the HTTP request");
+
+    handler_ready_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("handler should receive request");
+    handler.join().expect("handler should finish");
+
+    assert_eq!(error.kind, HttpBridgeErrorKind::Timeout);
+    assert_eq!(
+        producer_cancelled_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("producer should observe cancellation after timeout"),
+        HttpBridgeErrorKind::Cancelled
+    );
+}
+
+#[test]
+fn http_bridge_streaming_request_body_preserves_producer_errors() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        let chunk = request
+            .read_streaming_body_chunk_blocking()
+            .expect("first chunk should read")
+            .expect("first chunk should be present");
+        assert_eq!(chunk, b"partial");
+
+        let error = request
+            .read_streaming_body_chunk_blocking()
+            .expect_err("producer error should reach adapter");
+        request.fail(error).expect("HTTP error should send");
+    });
+
+    let error = bridge
+        .request_streaming_blocking(
+            HttpRequest::new(
+                "POST",
+                "https://example.test/upload",
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("request should normalize"),
+            HttpRequestLimits::default(),
+            CancellationSource::new().token(),
+            |body| {
+                body.write_chunk_blocking(b"partial".to_vec())?;
+                Err(HttpBridgeError::transport("upload source failed"))
+            },
+        )
+        .expect_err("producer error should fail the HTTP request");
+    handler.join().expect("handler should finish");
+
+    assert_eq!(error.kind, HttpBridgeErrorKind::Transport);
+    assert_eq!(error.message, "upload source failed");
+}
+
+#[test]
 fn http_bridge_enforces_response_body_limit() {
     let (bridge, mut http_receiver) = HttpBridge::new(4);
     let handler = thread::spawn(move || {

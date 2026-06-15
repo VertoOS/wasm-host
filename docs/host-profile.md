@@ -124,9 +124,19 @@ Required conformance groups:
 - browser permission and unsupported-capability errors
 
 The initial HTTP bridge contract is adapter-owned request dispatch with
-normalized methods, URLs, headers, status, body limits, classified errors, and
-cancellation. Guest syscall or socket integration is a later layer on top of
-that contract.
+normalized methods, URLs, headers, request/response body streams, body limits,
+classified errors, and cancellation. Guest syscall or socket integration is a
+later layer on top of that contract.
+
+Small request bodies may still use the buffered body field. Streaming request
+bodies must use the stream instead of also carrying a buffered body. The stream
+is a bounded chunk stream from producer to adapter: each chunk is delivered in
+order, end-of-body and producer failure are explicit stream events, and adapters
+must not require unbounded buffering. Cancellation and wall-time expiry must be
+observable both while a producer is generating body chunks and while an adapter
+is waiting for them. Native adapters may map this stream to chunked transfer
+encoding; browser adapters should map it to Fetch/gateway streaming when
+available and otherwise fail with a classified bridge error.
 
 Native terminal runs can expose the current bridge contract through
 `/dev/wasm-host-http` with `wasm-host-runner --http-bridge native`. The device is

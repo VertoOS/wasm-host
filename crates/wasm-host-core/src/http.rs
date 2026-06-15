@@ -2,8 +2,9 @@ use std::{
     fmt,
     sync::{
         atomic::{AtomicU64, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, Mutex,
     },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -11,12 +12,12 @@ use std::{
 use std::{
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
-    thread,
 };
 
 use crate::{CancellationSource, CancellationToken};
 
 const HTTP_RESPONSE_EVENT_QUEUE_SIZE: usize = 1;
+const HTTP_REQUEST_BODY_EVENT_QUEUE_SIZE: usize = 1;
 #[cfg(not(target_arch = "wasm32"))]
 const NATIVE_HTTP_HEADER_LIMIT: usize = 64 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
@@ -78,6 +79,12 @@ pub struct HttpBridge {
     inner: Arc<HttpBridgeInner>,
 }
 
+pub struct HttpRequestBodyWriter {
+    sender: mpsc::SyncSender<HttpRequestBodyEvent>,
+    cancellation: CancellationToken,
+    closed: bool,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub struct NativeHttpBridgeWorker {
     _handle: thread::JoinHandle<()>,
@@ -95,12 +102,37 @@ pub struct HttpBridgeRequest {
     pub request: HttpRequest,
     cancellation: CancellationToken,
     response_sender: mpsc::SyncSender<HttpBridgeResponseEvent>,
+    body_stream: Option<HttpRequestBodyStream>,
 }
 
 #[derive(Debug)]
 enum HttpBridgeResponseEvent {
     Body(Vec<u8>),
     Complete(std::result::Result<HttpResponse, HttpBridgeError>),
+}
+
+#[derive(Debug)]
+enum HttpRequestBodyEvent {
+    Chunk(Vec<u8>),
+    Complete(std::result::Result<(), HttpBridgeError>),
+}
+
+#[derive(Clone)]
+struct HttpRequestBodyStream {
+    receiver: Arc<Mutex<mpsc::Receiver<HttpRequestBodyEvent>>>,
+}
+
+struct HttpRequestBodyProducer {
+    cancellation: CancellationSource,
+    handle: thread::JoinHandle<()>,
+}
+
+impl fmt::Debug for HttpRequestBodyStream {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HttpRequestBodyStream")
+            .finish_non_exhaustive()
+    }
 }
 
 impl HttpHeader {
@@ -227,9 +259,112 @@ impl fmt::Display for HttpBridgeError {
 
 impl std::error::Error for HttpBridgeError {}
 
+impl HttpRequestBodyWriter {
+    pub fn write_chunk_blocking(
+        &mut self,
+        chunk: Vec<u8>,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        self.send_event_blocking(HttpRequestBodyEvent::Chunk(chunk))
+    }
+
+    pub fn finish(&mut self) -> std::result::Result<(), HttpBridgeError> {
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        self.send_event_blocking(HttpRequestBodyEvent::Complete(Ok(())))
+    }
+
+    pub fn fail(&mut self, error: HttpBridgeError) -> std::result::Result<(), HttpBridgeError> {
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        self.send_event_blocking(HttpRequestBodyEvent::Complete(Err(error)))
+    }
+
+    fn send_event_blocking(
+        &mut self,
+        mut event: HttpRequestBodyEvent,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        loop {
+            if self.cancellation.is_cancelled() {
+                return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+            }
+            match self.sender.try_send(event) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    event = returned;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    return Err(HttpBridgeError::transport(
+                        "HTTP request body receiver closed",
+                    ))
+                }
+            }
+        }
+    }
+}
+
+impl HttpRequestBodyStream {
+    fn new(capacity: usize) -> (Self, mpsc::SyncSender<HttpRequestBodyEvent>) {
+        let (sender, receiver) = mpsc::sync_channel(capacity);
+        (
+            Self {
+                receiver: Arc::new(Mutex::new(receiver)),
+            },
+            sender,
+        )
+    }
+
+    fn read_chunk_blocking(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> std::result::Result<Option<Vec<u8>>, HttpBridgeError> {
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+            }
+            let result = self
+                .receiver
+                .lock()
+                .map_err(|_| HttpBridgeError::transport("HTTP request body receiver poisoned"))?
+                .recv_timeout(Duration::from_millis(10));
+            match result {
+                Ok(HttpRequestBodyEvent::Chunk(chunk)) => return Ok(Some(chunk)),
+                Ok(HttpRequestBodyEvent::Complete(Ok(()))) => return Ok(None),
+                Ok(HttpRequestBodyEvent::Complete(Err(error))) => return Err(error),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(HttpBridgeError::transport(
+                        "HTTP request body sender closed",
+                    ))
+                }
+            }
+        }
+    }
+}
+
 impl HttpBridgeRequest {
     pub fn cancellation_token(&self) -> CancellationToken {
         self.cancellation.clone()
+    }
+
+    pub fn has_streaming_body(&self) -> bool {
+        self.body_stream.is_some()
+    }
+
+    pub fn read_streaming_body_chunk_blocking(
+        &self,
+    ) -> std::result::Result<Option<Vec<u8>>, HttpBridgeError> {
+        let Some(stream) = &self.body_stream else {
+            return Ok(None);
+        };
+        stream.read_chunk_blocking(&self.cancellation)
     }
 
     pub fn respond(&self, response: HttpResponse) -> std::result::Result<(), HttpBridgeError> {
@@ -271,6 +406,92 @@ impl HttpBridge {
         limits: HttpRequestLimits,
         cancellation: CancellationToken,
     ) -> std::result::Result<HttpResponse, HttpBridgeError> {
+        self.request_blocking_with_stream(request, None, limits, cancellation)
+    }
+
+    pub fn request_streaming_blocking<Producer>(
+        &self,
+        request: HttpRequest,
+        limits: HttpRequestLimits,
+        cancellation: CancellationToken,
+        producer: Producer,
+    ) -> std::result::Result<HttpResponse, HttpBridgeError>
+    where
+        Producer: FnOnce(&mut HttpRequestBodyWriter) -> std::result::Result<(), HttpBridgeError>
+            + Send
+            + 'static,
+    {
+        if !request.body.is_empty() {
+            return Err(HttpBridgeError::invalid_request(
+                "streaming HTTP requests cannot include a buffered request body",
+            ));
+        }
+
+        let producer_cancellation = CancellationSource::new();
+        let (body_stream, body_sender) =
+            HttpRequestBodyStream::new(HTTP_REQUEST_BODY_EVENT_QUEUE_SIZE);
+        let writer = HttpRequestBodyWriter {
+            sender: body_sender,
+            cancellation: producer_cancellation.token(),
+            closed: false,
+        };
+        let handle = thread::spawn(move || {
+            let mut writer = writer;
+            match producer(&mut writer) {
+                Ok(()) => {
+                    let _ = writer.finish();
+                }
+                Err(error) => {
+                    let _ = writer.fail(error);
+                }
+            }
+        });
+        let body_producer = HttpRequestBodyProducer {
+            cancellation: producer_cancellation,
+            handle,
+        };
+        self.request_blocking_with_body_producer(
+            request,
+            Some(body_stream),
+            limits,
+            cancellation,
+            Some(body_producer),
+        )
+    }
+
+    fn request_blocking_with_stream(
+        &self,
+        request: HttpRequest,
+        body_stream: Option<HttpRequestBodyStream>,
+        limits: HttpRequestLimits,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<HttpResponse, HttpBridgeError> {
+        self.request_blocking_with_body_producer(request, body_stream, limits, cancellation, None)
+    }
+
+    fn request_blocking_with_body_producer(
+        &self,
+        request: HttpRequest,
+        body_stream: Option<HttpRequestBodyStream>,
+        limits: HttpRequestLimits,
+        cancellation: CancellationToken,
+        body_producer: Option<HttpRequestBodyProducer>,
+    ) -> std::result::Result<HttpResponse, HttpBridgeError> {
+        let result = self.request_blocking_inner(request, body_stream, limits, cancellation);
+        if let Some(producer) = body_producer {
+            producer.cancellation.cancel();
+            let _ = producer.handle.join();
+        }
+        result
+    }
+
+    fn request_blocking_inner(
+        &self,
+        request: HttpRequest,
+        body_stream: Option<HttpRequestBodyStream>,
+        limits: HttpRequestLimits,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<HttpResponse, HttpBridgeError> {
         let id = self.inner.sequence.fetch_add(1, Ordering::AcqRel) + 1;
         let (response_sender, response_receiver) =
             mpsc::sync_channel(HTTP_RESPONSE_EVENT_QUEUE_SIZE);
@@ -280,6 +501,7 @@ impl HttpBridge {
             request,
             cancellation: request_cancellation.token(),
             response_sender,
+            body_stream,
         });
         let deadline = limits.wall_time.map(|timeout| Instant::now() + timeout);
 
@@ -422,11 +644,16 @@ fn dispatch_native_http_request(
                 HttpBridgeError::transport(format!("unable to set write timeout: {error}"))
             })?;
 
-        write_native_http_request(&mut stream, &current, &url)?;
+        write_native_http_request(&mut stream, request, &current, &url)?;
         let head = read_native_http_response_head(&mut stream, request)?;
         if let Some(redirected) =
             native_http_redirect_request(&current, &url, &head, redirect_count)?
         {
+            if request.has_streaming_body() {
+                return Err(HttpBridgeError::invalid_response(
+                    "HTTP redirects are not supported for streaming request bodies",
+                ));
+            }
             current = redirected;
             continue;
         }
@@ -565,6 +792,7 @@ fn connect_native_http(
 #[cfg(not(target_arch = "wasm32"))]
 fn write_native_http_request(
     stream: &mut TcpStream,
+    bridge_request: &HttpBridgeRequest,
     request: &HttpRequest,
     url: &NativeHttpUrl,
 ) -> std::result::Result<(), HttpBridgeError> {
@@ -576,7 +804,10 @@ fn write_native_http_request(
         write_http_line(stream, format_args!("Host: {}\r\n", url.authority))?;
     }
     for header in &request.headers {
-        if matches!(header.name.as_str(), "connection" | "content-length") {
+        if matches!(
+            header.name.as_str(),
+            "connection" | "content-length" | "transfer-encoding"
+        ) {
             continue;
         }
         write_http_line(
@@ -585,13 +816,33 @@ fn write_native_http_request(
         )?;
     }
     write_http_line(stream, format_args!("Connection: close\r\n"))?;
-    write_http_line(
-        stream,
-        format_args!("Content-Length: {}\r\n\r\n", request.body.len()),
-    )?;
-    stream.write_all(&request.body).map_err(|error| {
-        HttpBridgeError::transport(format!("unable to write HTTP request body: {error}"))
-    })
+    if bridge_request.has_streaming_body() {
+        write_http_line(stream, format_args!("Transfer-Encoding: chunked\r\n\r\n"))?;
+        write_native_http_streaming_request_body(stream, bridge_request)
+    } else {
+        write_http_line(
+            stream,
+            format_args!("Content-Length: {}\r\n\r\n", request.body.len()),
+        )?;
+        stream.write_all(&request.body).map_err(|error| {
+            HttpBridgeError::transport(format!("unable to write HTTP request body: {error}"))
+        })
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_native_http_streaming_request_body(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+) -> std::result::Result<(), HttpBridgeError> {
+    while let Some(chunk) = request.read_streaming_body_chunk_blocking()? {
+        write_http_line(stream, format_args!("{:x}\r\n", chunk.len()))?;
+        stream.write_all(&chunk).map_err(|error| {
+            HttpBridgeError::transport(format!("unable to write HTTP request body: {error}"))
+        })?;
+        write_http_line(stream, format_args!("\r\n"))?;
+    }
+    write_http_line(stream, format_args!("0\r\n\r\n"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1325,6 +1576,49 @@ mod tests {
     }
 
     #[test]
+    fn native_http_bridge_sends_streaming_request_body_as_chunked() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener should bind");
+        let address = listener.local_addr().expect("listener address should read");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("connection should arrive");
+            let request = read_chunked_test_http_request(&mut stream);
+            assert!(request.starts_with("POST /stream HTTP/1.1\r\n"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("transfer-encoding: chunked\r\n"));
+            assert!(!request.contains("Content-Length:"));
+            assert!(request.ends_with("\r\n6\r\nhello \r\n6\r\nstream\r\n0\r\n\r\n"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nuploaded")
+                .expect("response should write");
+        });
+
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let response = bridge
+            .request_streaming_blocking(
+                HttpRequest::new(
+                    "post",
+                    format!("http://{address}/stream"),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+                |body| {
+                    body.write_chunk_blocking(b"hello ".to_vec())?;
+                    body.write_chunk_blocking(b"stream".to_vec())
+                },
+            )
+            .expect("streaming HTTP request should complete");
+        server.join().expect("server should finish");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"uploaded");
+    }
+
+    #[test]
     fn native_http_bridge_strips_sensitive_headers_on_cross_authority_redirect() {
         let target_listener =
             TcpListener::bind("127.0.0.1:0").expect("target listener should bind");
@@ -1486,6 +1780,24 @@ mod tests {
             let count = stream.read(&mut chunk).expect("request body should read");
             assert!(count > 0, "request body should be complete");
             buffer.extend_from_slice(&chunk[..count]);
+        }
+        String::from_utf8(buffer).expect("request should be utf8")
+    }
+
+    fn read_chunked_test_http_request(stream: &mut TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("read timeout should set");
+        let mut buffer = Vec::new();
+        loop {
+            let mut chunk = [0_u8; 1024];
+            let count = stream.read(&mut chunk).expect("request should read");
+            assert!(count > 0, "request should include chunked body");
+            buffer.extend_from_slice(&chunk[..count]);
+            if buffer.ends_with(b"0\r\n\r\n") {
+                break;
+            }
+            assert!(buffer.len() < 8192, "chunked request exceeded 8 KiB");
         }
         String::from_utf8(buffer).expect("request should be utf8")
     }

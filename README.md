@@ -44,6 +44,10 @@ The runner defaults to `--profile browser-strict`, which rejects native host
 mounts. Use `--profile native-full` for local development scenarios that mount
 host directories.
 
+The runner validates the package before runtime setup. Missing or invalid WebC
+inputs fail with exit code `65`; command-line usage errors fail with exit code
+`2`; guest process exits preserve the guest return code.
+
 ## Project Shape
 
 ```text

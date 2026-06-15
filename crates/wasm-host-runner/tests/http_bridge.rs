@@ -8,7 +8,8 @@ use std::{
 };
 
 use wasm_host_fixtures::{
-    http_bridge_fixture_webc, http_bridge_fixture_webc_with_response_body_limit,
+    http_bridge_fixture_webc, http_bridge_fixture_webc_with_options,
+    http_bridge_fixture_webc_with_response_body_limit, HttpBridgeFixtureOptions,
     HTTP_BRIDGE_COMMAND,
 };
 
@@ -135,6 +136,38 @@ fn native_http_bridge_gateway_unavailable_error_is_visible_to_wasi_guest() {
     assert!(
         message.contains("unable to connect to HTTP host 127.0.0.1:"),
         "unexpected gateway unavailable error: {message}"
+    );
+}
+
+#[test]
+fn native_http_bridge_timeout_error_is_visible_to_wasi_guest() {
+    let mut server = SlowHttpServer::spawn(
+        "/http-bridge-timeout",
+        Duration::from_millis(250),
+        b"too-late",
+    );
+    let webc = http_bridge_fixture_webc_with_options(
+        &server.url(),
+        HttpBridgeFixtureOptions {
+            timeout_ms: Some(50),
+            ..HttpBridgeFixtureOptions::default()
+        },
+    )
+    .expect("build HTTP bridge fixture");
+    let output = run_native_http_bridge_fixture(webc, "http-timeout-fixture.webc");
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["kind"], "timeout");
+    assert_eq!(
+        response["error"]["message"],
+        "HTTP request exceeded wall time limit"
+    );
+
+    let request = server.request();
+    assert!(
+        request.starts_with("GET /http-bridge-timeout HTTP/1.1\r\n"),
+        "unexpected request line:\n{request}"
     );
 }
 
@@ -273,6 +306,54 @@ impl RedirectHttpServer {
                 .expect("redirect HTTP server should exit cleanly");
         }
         requests
+    }
+}
+
+struct SlowHttpServer {
+    url: String,
+    request_receiver: mpsc::Receiver<String>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl SlowHttpServer {
+    fn spawn(path: &str, delay: Duration, response_body: &'static [u8]) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind slow HTTP server");
+        let address = listener.local_addr().expect("read slow server address");
+        let (request_sender, request_receiver) = mpsc::sync_channel(1);
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept slow request");
+            let request = read_test_http_request(&mut stream);
+            request_sender
+                .send(request)
+                .expect("send captured slow request");
+            thread::sleep(delay);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response_body.len()
+            );
+            let _ = stream.write_all(response_body);
+        });
+        Self {
+            url: format!("http://{address}{path}"),
+            request_receiver,
+            handle: Some(handle),
+        }
+    }
+
+    fn url(&self) -> String {
+        self.url.clone()
+    }
+
+    fn request(&mut self) -> String {
+        let request = self
+            .request_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("receive captured slow HTTP request");
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("slow HTTP server should exit cleanly");
+        }
+        request
     }
 }
 

@@ -462,6 +462,8 @@ struct HttpBridgeDeviceRequest {
     body_base64: String,
     #[serde(default)]
     response_body_limit: Option<usize>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -3731,6 +3733,7 @@ fn dispatch_http_bridge_device_request(
     let response_body_bytes = request
         .response_body_limit
         .unwrap_or_else(|| HttpRequestLimits::default().response_body_bytes);
+    let wall_time = http_bridge_device_wall_time(wall_time, request.timeout_ms)?;
     let headers = request
         .headers
         .into_iter()
@@ -3756,6 +3759,25 @@ fn dispatch_http_bridge_device_request(
             })
             .collect(),
         body_base64: BASE64.encode(response.body),
+    })
+}
+
+fn http_bridge_device_wall_time(
+    inherited_wall_time: Option<Duration>,
+    timeout_ms: Option<u64>,
+) -> std::result::Result<Option<Duration>, HttpBridgeError> {
+    let Some(timeout_ms) = timeout_ms else {
+        return Ok(inherited_wall_time);
+    };
+    if timeout_ms == 0 {
+        return Err(HttpBridgeError::invalid_request(
+            "HTTP request timeout_ms must be positive",
+        ));
+    }
+    let timeout = Duration::from_millis(timeout_ms);
+    Ok(match inherited_wall_time {
+        Some(inherited) => Some(timeout.min(inherited)),
+        None => Some(timeout),
     })
 }
 
@@ -4183,6 +4205,96 @@ mod tests {
             value["response"]["body_base64"],
             BASE64.encode(b"response-body")
         );
+    }
+
+    #[tokio::test]
+    async fn http_bridge_device_request_timeout_returns_json_and_cancels_request() {
+        let root = TmpFileSystem::new();
+        create_dir_all(&root, Path::new("/dev")).expect("/dev should be created");
+        let (events, _event_receiver) = EventBus::new(4);
+        let (virtual_processes, _virtual_process_receiver) = VirtualExecutableBridge::new(4);
+        let (bridge, mut http_receiver) = HttpBridge::new(4);
+        let (cancelled_sender, cancelled_receiver) = std::sync::mpsc::channel();
+        let handler = std::thread::spawn(move || {
+            let request = http_receiver
+                .blocking_recv()
+                .expect("HTTP request should arrive");
+            let started = Instant::now();
+            while !request.cancellation_token().is_cancelled() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "HTTP request timeout should cancel the pending request"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            cancelled_sender
+                .send(())
+                .expect("cancelled signal should send");
+        });
+        let filesystem = process_filesystem(
+            root,
+            None,
+            events,
+            VirtualExecutableRegistry::new(virtual_processes),
+            Some(bridge),
+            Some(Duration::from_secs(5)),
+            CancellationSource::new().token(),
+        );
+        let mut file = filesystem
+            .new_open_options()
+            .read(true)
+            .write(true)
+            .open(Path::new(HTTP_BRIDGE_PATH))
+            .expect("HTTP bridge device should open");
+        let payload = serde_json::json!({
+            "method": "get",
+            "url": "https://example.test/slow",
+            "timeout_ms": 25,
+        });
+        file.write_all(&serde_json::to_vec(&payload).expect("payload should encode"))
+            .await
+            .expect("HTTP bridge request should write");
+
+        let mut output = Vec::new();
+        file.read_to_end(&mut output)
+            .await
+            .expect("HTTP bridge response should read");
+        cancelled_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("HTTP request timeout should cancel bridge request");
+        handler.join().expect("handler should finish");
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&output).expect("response should be JSON");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["kind"], "timeout");
+        assert_eq!(
+            value["error"]["message"],
+            "HTTP request exceeded wall time limit"
+        );
+    }
+
+    #[test]
+    fn http_bridge_device_rejects_zero_request_timeout() {
+        let (bridge, _http_receiver) = HttpBridge::new(4);
+        let payload = serde_json::json!({
+            "method": "get",
+            "url": "https://example.test/slow",
+            "timeout_ms": 0,
+        });
+
+        let error = match dispatch_http_bridge_device_request(
+            &bridge,
+            &serde_json::to_vec(&payload).expect("payload should encode"),
+            Some(Duration::from_secs(5)),
+            CancellationSource::new().token(),
+        ) {
+            Ok(_) => panic!("zero request timeout should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::InvalidRequest);
+        assert_eq!(error.message, "HTTP request timeout_ms must be positive");
     }
 
     #[test]

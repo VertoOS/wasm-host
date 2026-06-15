@@ -134,6 +134,11 @@ a simple JSON request/response surface for early guest-package tests; browser
 adapters should implement the same logical contract over Fetch or a gateway
 rather than depending on native sockets.
 
+Device requests may include `timeout_ms` to set a request-scoped wall-time
+limit. Browser adapters should map this to per-request Fetch/gateway
+aborts and return the same structured `timeout` error that the native bridge
+returns, while still respecting any stricter outer sandbox timeout.
+
 ## Full CLI Target
 
 The browser-capable CLI target should be a sandboxed CLI runtime, not a native

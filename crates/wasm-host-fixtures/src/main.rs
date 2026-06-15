@@ -2,8 +2,8 @@ use std::{env, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
 use wasm_host_fixtures::{
-    http_bridge_fixture_webc, http_bridge_fixture_webc_with_response_body_limit,
-    stdout_fixture_webc,
+    http_bridge_fixture_webc, http_bridge_fixture_webc_with_options, stdout_fixture_webc,
+    HttpBridgeFixtureOptions,
 };
 
 fn main() -> Result<()> {
@@ -22,16 +22,30 @@ fn main() -> Result<()> {
             write_output(output, &webc)
         }
         "http-bridge" => {
-            let options = CliOptions::parse(args, &["--output", "--url", "--response-body-limit"])?;
+            let options = CliOptions::parse(
+                args,
+                &["--output", "--url", "--response-body-limit", "--timeout-ms"],
+            )?;
             let output = options.required("--output")?;
             let url = options.required("--url")?;
-            let webc = if let Some(limit) = options.optional("--response-body-limit") {
-                let limit = limit
-                    .parse::<usize>()
-                    .with_context(|| format!("invalid --response-body-limit: {limit}"))?;
-                http_bridge_fixture_webc_with_response_body_limit(url, limit)?
+            let fixture_options = if options.optional("--response-body-limit").is_some()
+                || options.optional("--timeout-ms").is_some()
+            {
+                HttpBridgeFixtureOptions {
+                    response_body_limit: parse_optional_usize(
+                        &options,
+                        "--response-body-limit",
+                        HttpBridgeFixtureOptions::default().response_body_limit,
+                    )?,
+                    timeout_ms: parse_optional_positive_u64(&options, "--timeout-ms")?,
+                }
             } else {
+                HttpBridgeFixtureOptions::default()
+            };
+            let webc = if fixture_options == HttpBridgeFixtureOptions::default() {
                 http_bridge_fixture_webc(url)?
+            } else {
+                http_bridge_fixture_webc_with_options(url, fixture_options)?
             };
             write_output(output, &webc)
         }
@@ -80,6 +94,28 @@ impl CliOptions {
     }
 }
 
+fn parse_optional_usize(options: &CliOptions, name: &str, default: usize) -> Result<usize> {
+    match options.optional(name) {
+        Some(value) => value
+            .parse::<usize>()
+            .with_context(|| format!("invalid {name}: {value}")),
+        None => Ok(default),
+    }
+}
+
+fn parse_optional_positive_u64(options: &CliOptions, name: &str) -> Result<Option<u64>> {
+    let Some(value) = options.optional(name) else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<u64>()
+        .with_context(|| format!("invalid {name}: {value}"))?;
+    if parsed == 0 {
+        bail!("{name} must be positive");
+    }
+    Ok(Some(parsed))
+}
+
 fn write_output(path: &str, data: &[u8]) -> Result<()> {
     let path = PathBuf::from(path);
     if let Some(parent) = path.parent() {
@@ -91,6 +127,6 @@ fn write_output(path: &str, data: &[u8]) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  wasm-host-fixtures stdout --output PATH --stdout TEXT\n  wasm-host-fixtures http-bridge --output PATH --url URL [--response-body-limit BYTES]"
+        "usage:\n  wasm-host-fixtures stdout --output PATH --stdout TEXT\n  wasm-host-fixtures http-bridge --output PATH --url URL [--response-body-limit BYTES] [--timeout-ms MS]"
     );
 }

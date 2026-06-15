@@ -22,6 +22,21 @@ const STDOUT_ATOM: &str = "stdout-fixture";
 const HTTP_BRIDGE_ATOM: &str = "http-fixture";
 const HTTP_BRIDGE_PATH: &str = "dev/wasm-host-http";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HttpBridgeFixtureOptions {
+    pub response_body_limit: usize,
+    pub timeout_ms: Option<u64>,
+}
+
+impl Default for HttpBridgeFixtureOptions {
+    fn default() -> Self {
+        Self {
+            response_body_limit: 4096,
+            timeout_ms: None,
+        }
+    }
+}
+
 pub fn stdout_fixture_webc(stdout: &[u8]) -> Result<Vec<u8>> {
     let wasm = wat::parse_str(stdout_fixture_wat(stdout)).context("compile stdout fixture WAT")?;
     package_wasi_fixture(
@@ -34,14 +49,27 @@ pub fn stdout_fixture_webc(stdout: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn http_bridge_fixture_webc(url: &str) -> Result<Vec<u8>> {
-    http_bridge_fixture_webc_with_response_body_limit(url, 4096)
+    http_bridge_fixture_webc_with_options(url, HttpBridgeFixtureOptions::default())
 }
 
 pub fn http_bridge_fixture_webc_with_response_body_limit(
     url: &str,
     response_body_limit: usize,
 ) -> Result<Vec<u8>> {
-    let request = serde_json::json!({
+    http_bridge_fixture_webc_with_options(
+        url,
+        HttpBridgeFixtureOptions {
+            response_body_limit,
+            ..HttpBridgeFixtureOptions::default()
+        },
+    )
+}
+
+pub fn http_bridge_fixture_webc_with_options(
+    url: &str,
+    options: HttpBridgeFixtureOptions,
+) -> Result<Vec<u8>> {
+    let mut request = serde_json::json!({
         "method": "GET",
         "url": url,
         "headers": [
@@ -50,9 +78,12 @@ pub fn http_bridge_fixture_webc_with_response_body_limit(
                 "value": "wasm-host-runner"
             }
         ],
-        "response_body_limit": response_body_limit
-    })
-    .to_string();
+        "response_body_limit": options.response_body_limit
+    });
+    if let Some(timeout_ms) = options.timeout_ms {
+        request["timeout_ms"] = serde_json::json!(timeout_ms);
+    }
+    let request = request.to_string();
     let wasm =
         wat::parse_str(http_bridge_fixture_wat(&request)).context("compile HTTP fixture WAT")?;
     package_wasi_fixture(
@@ -270,6 +301,19 @@ mod tests {
     fn http_bridge_fixture_with_response_body_limit_is_webc() {
         let webc = http_bridge_fixture_webc_with_response_body_limit("http://127.0.0.1:1/test", 4)
             .unwrap();
+        assert!(webc.starts_with(b"\0webc003"));
+    }
+
+    #[test]
+    fn http_bridge_fixture_with_timeout_is_webc() {
+        let webc = http_bridge_fixture_webc_with_options(
+            "http://127.0.0.1:1/test",
+            HttpBridgeFixtureOptions {
+                timeout_ms: Some(50),
+                ..HttpBridgeFixtureOptions::default()
+            },
+        )
+        .unwrap();
         assert!(webc.starts_with(b"\0webc003"));
     }
 }

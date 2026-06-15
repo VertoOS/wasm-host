@@ -169,15 +169,16 @@ URLs. Concrete adapters decide how those URLs are dispatched:
 | Browser Fetch | Browser-allowed `http://` and `https://` | Browser security policy wins. Mixed content, CORS, credential mode, and permission failures are reported as bridge errors rather than bypassed. |
 | Gateway `--http-bridge gateway=<url>` | `http://` and `https://` if the gateway allows them | The terminal runner posts bridge requests to a configured local `http://` gateway endpoint. The gateway owns DNS, TLS, auth, CORS/proxy policy, and upstream transport behavior. |
 
-Core exposes a gateway adapter foundation for this policy. `GatewayHttpBridgeWorker`
-consumes the same `HttpBridgeRequest` stream as the native worker and delegates
-dispatch to a `GatewayHttpTransport`. The transport receives normalized request
-metadata plus a bounded body reader that works for both buffered and streaming
-uploads. It returns either a complete response body or response chunks, and the
-worker maps those chunks back through the same response-limit and cancellation
-path used by every other HTTP bridge caller. A browser Fetch transport or local
-gateway transport should implement that trait rather than defining a separate
-HTTP contract.
+Core exposes an adapter foundation for this policy. The native terminal runner
+uses `GatewayHttpBridgeWorker`, which consumes the same `HttpBridgeRequest`
+stream as the native worker and delegates dispatch to a `GatewayHttpTransport`.
+Browser workers should use `run_async_http_bridge_worker` with an
+`AsyncHttpBridgeTransport` instead of spawning a native thread. Both worker
+paths receive normalized request metadata plus a bounded body reader, return
+the same `HttpResponse`/`HttpBridgeError` contract, and map response chunks
+through the same response-limit and cancellation path used by every other HTTP
+bridge caller. Browser Fetch and browser gateway transports should implement
+the async transport trait rather than defining a separate HTTP contract.
 
 The terminal gateway uses JSON over `POST` for buffered requests:
 

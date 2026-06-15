@@ -1,5 +1,7 @@
 use std::{
     fmt,
+    future::Future,
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc, Arc, Mutex,
@@ -92,6 +94,15 @@ pub struct HttpRequestBodyWriter {
 
 pub struct GatewayHttpBridgeWorker {
     _handle: thread::JoinHandle<()>,
+}
+
+pub trait AsyncHttpBridgeTransport {
+    fn dispatch<'a>(
+        &'a self,
+        request: GatewayHttpRequest,
+        response: GatewayHttpResponseWriter,
+        cancellation: CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<(), HttpBridgeError>> + 'a>>;
 }
 
 pub trait GatewayHttpTransport: Send + Sync + 'static {
@@ -248,7 +259,7 @@ pub struct HttpBridgeRequest {
     pub id: u64,
     pub request: HttpRequest,
     cancellation: CancellationToken,
-    response_sender: mpsc::SyncSender<HttpBridgeResponseEvent>,
+    response_sender: tokio::sync::mpsc::Sender<HttpBridgeResponseEvent>,
     body_stream: Option<HttpRequestBodyStream>,
 }
 
@@ -448,6 +459,13 @@ impl GatewayHttpResponseWriter {
         self.request.write_body_chunk(chunk)
     }
 
+    pub async fn write_body_chunk_async(
+        &self,
+        chunk: Vec<u8>,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        self.request.write_body_chunk_async(chunk).await
+    }
+
     pub fn finish(
         &self,
         status: u16,
@@ -456,6 +474,17 @@ impl GatewayHttpResponseWriter {
     ) -> std::result::Result<(), HttpBridgeError> {
         self.request
             .respond(HttpResponse::new(status, headers, body)?)
+    }
+
+    pub async fn finish_async(
+        &self,
+        status: u16,
+        headers: Vec<HttpHeader>,
+        body: Vec<u8>,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        self.request
+            .respond_async(HttpResponse::new(status, headers, body)?)
+            .await
     }
 
     pub fn respond(
@@ -474,6 +503,28 @@ impl GatewayHttpResponseWriter {
                     self.write_body_chunk(chunk)?;
                 }
                 self.finish(status, headers, Vec::new())
+            }
+        }
+    }
+
+    pub async fn respond_async(
+        &self,
+        response: GatewayHttpResponse,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        let GatewayHttpResponse {
+            status,
+            headers,
+            body,
+        } = response;
+        match body {
+            GatewayHttpResponseBody::Complete(body) => {
+                self.finish_async(status, headers, body).await
+            }
+            GatewayHttpResponseBody::Chunks(chunks) => {
+                for chunk in chunks {
+                    self.write_body_chunk_async(chunk).await?;
+                }
+                self.finish_async(status, headers, Vec::new()).await
             }
         }
     }
@@ -1197,20 +1248,72 @@ impl HttpBridgeRequest {
     }
 
     pub fn respond(&self, response: HttpResponse) -> std::result::Result<(), HttpBridgeError> {
-        self.response_sender
-            .send(HttpBridgeResponseEvent::Complete(Ok(response)))
-            .map_err(|_| HttpBridgeError::transport("HTTP response receiver closed"))
+        self.send_response_event_blocking(HttpBridgeResponseEvent::Complete(Ok(response)))
+    }
+
+    pub async fn respond_async(
+        &self,
+        response: HttpResponse,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        self.send_response_event_async(HttpBridgeResponseEvent::Complete(Ok(response)))
+            .await
     }
 
     pub fn fail(&self, error: HttpBridgeError) -> std::result::Result<(), HttpBridgeError> {
-        self.response_sender
-            .send(HttpBridgeResponseEvent::Complete(Err(error)))
-            .map_err(|_| HttpBridgeError::transport("HTTP response receiver closed"))
+        self.send_response_event_blocking(HttpBridgeResponseEvent::Complete(Err(error)))
+    }
+
+    pub async fn fail_async(
+        &self,
+        error: HttpBridgeError,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        self.send_response_event_async(HttpBridgeResponseEvent::Complete(Err(error)))
+            .await
     }
 
     pub fn write_body_chunk(&self, chunk: Vec<u8>) -> std::result::Result<(), HttpBridgeError> {
+        self.send_response_event_blocking(HttpBridgeResponseEvent::Body(chunk))
+    }
+
+    pub async fn write_body_chunk_async(
+        &self,
+        chunk: Vec<u8>,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        self.send_response_event_async(HttpBridgeResponseEvent::Body(chunk))
+            .await
+    }
+
+    fn send_response_event_blocking(
+        &self,
+        mut event: HttpBridgeResponseEvent,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        loop {
+            if self.cancellation.is_cancelled() {
+                return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+            }
+            match self.response_sender.try_send(event) {
+                Ok(()) => return Ok(()),
+                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
+                    event = returned;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(HttpBridgeError::transport("HTTP response receiver closed"))
+                }
+            }
+        }
+    }
+
+    async fn send_response_event_async(
+        &self,
+        event: HttpBridgeResponseEvent,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        if self.cancellation.is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
         self.response_sender
-            .send(HttpBridgeResponseEvent::Body(chunk))
+            .send(event)
+            .await
             .map_err(|_| HttpBridgeError::transport("HTTP response receiver closed"))
     }
 }
@@ -1227,6 +1330,16 @@ impl HttpBridge {
             },
             receiver,
         )
+    }
+
+    pub async fn request_async(
+        &self,
+        request: HttpRequest,
+        limits: HttpRequestLimits,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<HttpResponse, HttpBridgeError> {
+        self.request_async_with_stream(request, None, limits, cancellation)
+            .await
     }
 
     pub fn request_blocking(
@@ -1322,8 +1435,8 @@ impl HttpBridge {
         cancellation: CancellationToken,
     ) -> std::result::Result<HttpResponse, HttpBridgeError> {
         let id = self.inner.sequence.fetch_add(1, Ordering::AcqRel) + 1;
-        let (response_sender, response_receiver) =
-            mpsc::sync_channel(HTTP_RESPONSE_EVENT_QUEUE_SIZE);
+        let (response_sender, mut response_receiver) =
+            tokio::sync::mpsc::channel(HTTP_RESPONSE_EVENT_QUEUE_SIZE);
         let request_cancellation = CancellationSource::new();
         let mut pending = Some(HttpBridgeRequest {
             id,
@@ -1378,7 +1491,7 @@ impl HttpBridge {
                 time.saturating_duration_since(Instant::now())
                     .min(Duration::from_millis(10))
             });
-            match response_receiver.recv_timeout(wait_time) {
+            match response_receiver.try_recv() {
                 Ok(HttpBridgeResponseEvent::Body(chunk)) => {
                     if let Err(error) =
                         append_response_body(&mut response_body, chunk, limits.response_body_bytes)
@@ -1403,8 +1516,110 @@ impl HttpBridge {
                     request_cancellation.cancel();
                     return Err(error);
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    std::thread::sleep(wait_time);
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    request_cancellation.cancel();
+                    return Err(HttpBridgeError::transport("HTTP response channel closed"));
+                }
+            }
+        }
+    }
+
+    async fn request_async_with_stream(
+        &self,
+        request: HttpRequest,
+        body_stream: Option<HttpRequestBodyStream>,
+        limits: HttpRequestLimits,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<HttpResponse, HttpBridgeError> {
+        let id = self.inner.sequence.fetch_add(1, Ordering::AcqRel) + 1;
+        let (response_sender, mut response_receiver) =
+            tokio::sync::mpsc::channel(HTTP_RESPONSE_EVENT_QUEUE_SIZE);
+        let request_cancellation = CancellationSource::new();
+        let mut pending = Some(HttpBridgeRequest {
+            id,
+            request,
+            cancellation: request_cancellation.token(),
+            response_sender,
+            body_stream,
+        });
+        let deadline = limits.wall_time.map(|timeout| Instant::now() + timeout);
+
+        while let Some(candidate) = pending.take() {
+            if cancellation.is_cancelled() {
+                request_cancellation.cancel();
+                return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+            }
+            if deadline.is_some_and(|time| Instant::now() >= time) {
+                request_cancellation.cancel();
+                return Err(HttpBridgeError::timeout(
+                    "HTTP request exceeded wall time limit",
+                ));
+            }
+
+            match self.inner.sender.try_send(candidate) {
+                Ok(()) => break,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(candidate)) => {
+                    pending = Some(candidate);
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    request_cancellation.cancel();
+                    return Err(HttpBridgeError::gateway_unavailable(
+                        "HTTP bridge dispatcher is closed",
+                    ));
+                }
+            }
+        }
+
+        let mut response_body = Vec::new();
+        loop {
+            if cancellation.is_cancelled() {
+                request_cancellation.cancel();
+                return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+            }
+            if deadline.is_some_and(|time| Instant::now() >= time) {
+                request_cancellation.cancel();
+                return Err(HttpBridgeError::timeout(
+                    "HTTP request exceeded wall time limit",
+                ));
+            }
+
+            let wait_time = deadline.map_or(Duration::from_millis(10), |time| {
+                time.saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(10))
+            });
+            match response_receiver.try_recv() {
+                Ok(HttpBridgeResponseEvent::Body(chunk)) => {
+                    if let Err(error) =
+                        append_response_body(&mut response_body, chunk, limits.response_body_bytes)
+                    {
+                        request_cancellation.cancel();
+                        return Err(error);
+                    }
+                }
+                Ok(HttpBridgeResponseEvent::Complete(Ok(mut response))) => {
+                    request_cancellation.cancel();
+                    if let Err(error) = append_response_body(
+                        &mut response_body,
+                        std::mem::take(&mut response.body),
+                        limits.response_body_bytes,
+                    ) {
+                        return Err(error);
+                    }
+                    response.body = response_body;
+                    return Ok(response);
+                }
+                Ok(HttpBridgeResponseEvent::Complete(Err(error))) => {
+                    request_cancellation.cancel();
+                    return Err(error);
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(wait_time).await;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     request_cancellation.cancel();
                     return Err(HttpBridgeError::transport("HTTP response channel closed"));
                 }
@@ -1437,6 +1652,44 @@ impl GatewayHttpBridgeWorker {
             }),
         }
     }
+}
+
+pub async fn run_async_http_bridge_worker<T>(
+    mut receiver: tokio::sync::mpsc::Receiver<HttpBridgeRequest>,
+    transport: T,
+) where
+    T: AsyncHttpBridgeTransport,
+{
+    while let Some(request) = receiver.recv().await {
+        if request.cancellation_token().is_cancelled() {
+            continue;
+        }
+        if let Err(error) = dispatch_async_http_bridge_request(&request, &transport).await {
+            let _ = request.fail_async(error).await;
+        }
+    }
+}
+
+async fn dispatch_async_http_bridge_request<T>(
+    request: &HttpBridgeRequest,
+    transport: &T,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    T: AsyncHttpBridgeTransport,
+{
+    transport
+        .dispatch(
+            GatewayHttpRequest {
+                id: request.id,
+                method: request.request.method.clone(),
+                url: request.request.url.clone(),
+                headers: request.request.headers.clone(),
+                body: GatewayHttpRequestBodyReader::new(request),
+            },
+            GatewayHttpResponseWriter::new(request.clone()),
+            request.cancellation_token(),
+        )
+        .await
 }
 
 fn dispatch_gateway_http_request(
@@ -2408,6 +2661,15 @@ mod tests {
         first_chunk_sender: mpsc::SyncSender<Vec<u8>>,
     }
 
+    #[derive(Clone)]
+    struct RecordingAsyncHttpTransport {
+        records: Arc<Mutex<Vec<GatewayRecord>>>,
+    }
+
+    struct FailingAsyncHttpTransport {
+        error: HttpBridgeError,
+    }
+
     impl GatewayHttpTransport for RecordingGatewayTransport {
         fn dispatch(
             &self,
@@ -2459,6 +2721,146 @@ mod tests {
             while request.body.read_chunk_blocking()?.is_some() {}
             GatewayHttpResponse::complete(200, Vec::new(), b"upload-ok".to_vec())
         }
+    }
+
+    impl AsyncHttpBridgeTransport for RecordingAsyncHttpTransport {
+        fn dispatch<'a>(
+            &'a self,
+            mut request: GatewayHttpRequest,
+            response: GatewayHttpResponseWriter,
+            cancellation: CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<(), HttpBridgeError>> + 'a>> {
+            Box::pin(async move {
+                assert!(!cancellation.is_cancelled());
+                let body = request.body.read_to_end_blocking()?;
+                self.records
+                    .lock()
+                    .expect("async transport records should lock")
+                    .push(GatewayRecord {
+                        id: request.id,
+                        method: request.method,
+                        url: request.url,
+                        headers: request.headers,
+                        body_chunks: vec![body],
+                    });
+                response.write_body_chunk_async(b"hello ".to_vec()).await?;
+                response.write_body_chunk_async(b"async".to_vec()).await?;
+                response
+                    .finish_async(
+                        209,
+                        vec![HttpHeader::new("x-async", "yes").expect("header should be valid")],
+                        b" worker".to_vec(),
+                    )
+                    .await
+            })
+        }
+    }
+
+    impl AsyncHttpBridgeTransport for FailingAsyncHttpTransport {
+        fn dispatch<'a>(
+            &'a self,
+            _request: GatewayHttpRequest,
+            _response: GatewayHttpResponseWriter,
+            _cancellation: CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<(), HttpBridgeError>> + 'a>> {
+            Box::pin(async { Err(self.error.clone()) })
+        }
+    }
+
+    #[test]
+    fn async_http_bridge_worker_streams_chunks_on_current_thread_runtime() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(async {
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let transport = RecordingAsyncHttpTransport {
+                records: Arc::clone(&records),
+            };
+            let (bridge, receiver) = HttpBridge::new(1);
+            let requester = async {
+                let response = bridge
+                    .request_async(
+                        HttpRequest::new(
+                            "post",
+                            "https://example.test/async",
+                            vec![
+                                HttpHeader::new("x-test", "yes")
+                                    .expect("header should be valid"),
+                            ],
+                            b"request-body".to_vec(),
+                        )
+                        .expect("request should be valid"),
+                        HttpRequestLimits::default(),
+                        CancellationSource::new().token(),
+                    )
+                    .await
+                    .expect("async HTTP request should complete");
+                drop(bridge);
+                response
+            };
+
+            let ((), response) =
+                tokio::join!(run_async_http_bridge_worker(receiver, transport), requester);
+
+            assert_eq!(response.status, 209);
+            assert_eq!(response.body, b"hello async worker");
+            assert_eq!(
+                response.headers,
+                [HttpHeader::new("x-async", "yes").expect("header should be valid")]
+            );
+            assert_eq!(
+                *records.lock().expect("async transport records should lock"),
+                [GatewayRecord {
+                    id: 1,
+                    method: "POST".to_string(),
+                    url: "https://example.test/async".to_string(),
+                    headers: vec![
+                        HttpHeader::new("x-test", "yes").expect("header should be valid")
+                    ],
+                    body_chunks: vec![b"request-body".to_vec()],
+                }]
+            );
+        });
+    }
+
+    #[test]
+    fn async_http_bridge_worker_preserves_transport_errors() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(async {
+            let (bridge, receiver) = HttpBridge::new(1);
+            let transport = FailingAsyncHttpTransport {
+                error: HttpBridgeError::cors("request blocked by browser policy"),
+            };
+            let requester = async {
+                let error = bridge
+                    .request_async(
+                        HttpRequest::new(
+                            "get",
+                            "https://example.test/blocked",
+                            Vec::new(),
+                            Vec::new(),
+                        )
+                        .expect("request should be valid"),
+                        HttpRequestLimits::default(),
+                        CancellationSource::new().token(),
+                    )
+                    .await
+                    .expect_err("async HTTP request should fail");
+                drop(bridge);
+                error
+            };
+
+            let ((), error) =
+                tokio::join!(run_async_http_bridge_worker(receiver, transport), requester);
+
+            assert_eq!(error.kind, HttpBridgeErrorKind::Cors);
+            assert_eq!(error.message, "request blocked by browser policy");
+        });
     }
 
     #[test]

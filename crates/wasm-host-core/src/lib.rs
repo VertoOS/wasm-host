@@ -47,10 +47,11 @@ pub use host_command::{
     register_native_host_commands, NativeHostCommandSpec, NativeHostCommandWorker,
 };
 pub use http::{
-    GatewayHttpBridgeWorker, GatewayHttpRequest, GatewayHttpRequestBodyReader, GatewayHttpResponse,
-    GatewayHttpResponseBody, GatewayHttpResponseWriter, GatewayHttpTransport, HttpBridge,
-    HttpBridgeError, HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest,
-    HttpRequestLimits, HttpResponse,
+    run_async_http_bridge_worker, AsyncHttpBridgeTransport, GatewayHttpBridgeWorker,
+    GatewayHttpRequest, GatewayHttpRequestBodyReader, GatewayHttpResponse, GatewayHttpResponseBody,
+    GatewayHttpResponseWriter, GatewayHttpTransport, HttpBridge, HttpBridgeError,
+    HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest, HttpRequestLimits,
+    HttpResponse,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::{NativeGatewayHttpTransport, NativeHttpBridgeWorker};

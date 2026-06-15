@@ -23,6 +23,8 @@ const NATIVE_HTTP_HEADER_LIMIT: usize = 64 * 1024;
 const NATIVE_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(not(target_arch = "wasm32"))]
 const NATIVE_HTTP_IO_TIMEOUT: Duration = Duration::from_millis(100);
+#[cfg(not(target_arch = "wasm32"))]
+const NATIVE_HTTP_MAX_REDIRECTS: usize = 10;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HttpHeader {
@@ -388,25 +390,54 @@ struct NativeHttpUrl {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+struct NativeHttpResponseHead {
+    status: u16,
+    headers: Vec<HttpHeader>,
+    content_length: Option<usize>,
+    chunked: bool,
+    body_prefix: Vec<u8>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn dispatch_native_http_request(
     request: &HttpBridgeRequest,
 ) -> std::result::Result<(), HttpBridgeError> {
-    let url = parse_native_http_url(&request.request.url)?;
-    let mut stream = connect_native_http(&url, request.cancellation_token())?;
-    stream
-        .set_read_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
-        .map_err(|error| {
-            HttpBridgeError::transport(format!("unable to set read timeout: {error}"))
-        })?;
-    stream
-        .set_write_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
-        .map_err(|error| {
-            HttpBridgeError::transport(format!("unable to set write timeout: {error}"))
-        })?;
+    let mut current = request.request.clone();
+    for redirect_count in 0..=NATIVE_HTTP_MAX_REDIRECTS {
+        if request.cancellation_token().is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
 
-    write_native_http_request(&mut stream, &request.request, &url)?;
-    let response = read_native_http_response(&mut stream, request)?;
-    request.respond(response)
+        let url = parse_native_http_url(&current.url)?;
+        let mut stream = connect_native_http(&url, request.cancellation_token())?;
+        stream
+            .set_read_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
+            .map_err(|error| {
+                HttpBridgeError::transport(format!("unable to set read timeout: {error}"))
+            })?;
+        stream
+            .set_write_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
+            .map_err(|error| {
+                HttpBridgeError::transport(format!("unable to set write timeout: {error}"))
+            })?;
+
+        write_native_http_request(&mut stream, &current, &url)?;
+        let head = read_native_http_response_head(&mut stream, request)?;
+        if let Some(redirected) =
+            native_http_redirect_request(&current, &url, &head, redirect_count)?
+        {
+            current = redirected;
+            continue;
+        }
+
+        let response = read_native_http_response_body(&mut stream, request, head)?;
+        return request.respond(response);
+    }
+
+    Err(HttpBridgeError::invalid_response(format!(
+        "HTTP redirect limit exceeded: {NATIVE_HTTP_MAX_REDIRECTS}"
+    )))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -574,10 +605,10 @@ fn write_http_line(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_native_http_response(
+fn read_native_http_response_head(
     stream: &mut TcpStream,
     request: &HttpBridgeRequest,
-) -> std::result::Result<HttpResponse, HttpBridgeError> {
+) -> std::result::Result<NativeHttpResponseHead, HttpBridgeError> {
     let mut buffer = Vec::new();
     let header_end = loop {
         if request.cancellation_token().is_cancelled() {
@@ -603,18 +634,146 @@ fn read_native_http_response(
     let body_prefix = buffer[body_start..].to_vec();
     let (status, headers, content_length, chunked) =
         parse_native_http_response_headers(header_bytes)?;
-    if chunked {
-        read_chunked_native_http_body(stream, request, body_prefix)?;
-    } else if let Some(length) = content_length {
-        let accepted = body_prefix.len().min(length);
-        write_native_http_body_chunk(request, body_prefix[..accepted].to_vec())?;
+    Ok(NativeHttpResponseHead {
+        status,
+        headers,
+        content_length,
+        chunked,
+        body_prefix,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_http_response_body(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+    head: NativeHttpResponseHead,
+) -> std::result::Result<HttpResponse, HttpBridgeError> {
+    if head.chunked {
+        read_chunked_native_http_body(stream, request, head.body_prefix)?;
+    } else if let Some(length) = head.content_length {
+        let accepted = head.body_prefix.len().min(length);
+        write_native_http_body_chunk(request, head.body_prefix[..accepted].to_vec())?;
         read_fixed_native_http_body(stream, request, length.saturating_sub(accepted))?;
     } else {
-        write_native_http_body_chunk(request, body_prefix)?;
+        write_native_http_body_chunk(request, head.body_prefix)?;
         read_until_eof_native_http_body(stream, request)?;
     }
 
-    HttpResponse::new(status, headers, Vec::new())
+    HttpResponse::new(head.status, head.headers, Vec::new())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_http_redirect_request(
+    current: &HttpRequest,
+    current_url: &NativeHttpUrl,
+    head: &NativeHttpResponseHead,
+    redirect_count: usize,
+) -> std::result::Result<Option<HttpRequest>, HttpBridgeError> {
+    if !is_native_http_redirect_status(head.status) {
+        return Ok(None);
+    }
+
+    let Some(location) = native_http_header_value(&head.headers, "location") else {
+        return Ok(None);
+    };
+    if redirect_count >= NATIVE_HTTP_MAX_REDIRECTS {
+        return Err(HttpBridgeError::invalid_response(format!(
+            "HTTP redirect limit exceeded: {NATIVE_HTTP_MAX_REDIRECTS}"
+        )));
+    }
+
+    let redirected_url = resolve_native_http_redirect_url(current_url, location)?;
+    let redirected_native_url = parse_native_http_url(&redirected_url)?;
+    let mut redirected = current.clone();
+    redirected.url = redirected_url;
+    if should_rewrite_native_http_redirect_method(head.status, &redirected.method) {
+        redirected.method = "GET".to_string();
+        redirected.body.clear();
+        redirected
+            .headers
+            .retain(|header| !matches!(header.name.as_str(), "content-type" | "content-length"));
+    }
+    if redirected_native_url.authority != current_url.authority {
+        redirected
+            .headers
+            .retain(|header| !matches!(header.name.as_str(), "authorization" | "cookie"));
+    }
+    Ok(Some(redirected))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_native_http_redirect_status(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_http_header_value<'a>(headers: &'a [HttpHeader], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find_map(|header| (header.name == name).then_some(header.value.as_str()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn should_rewrite_native_http_redirect_method(status: u16, method: &str) -> bool {
+    (status == 303 && !matches!(method, "GET" | "HEAD"))
+        || (matches!(status, 301 | 302) && method == "POST")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_native_http_redirect_url(
+    current: &NativeHttpUrl,
+    location: &str,
+) -> std::result::Result<String, HttpBridgeError> {
+    let location = location.trim();
+    if location.is_empty() {
+        return Err(HttpBridgeError::invalid_response(
+            "HTTP redirect location cannot be empty",
+        ));
+    }
+    if location.starts_with("http://") || location.starts_with("https://") {
+        return normalize_http_url(location.to_string()).map_err(|error| {
+            HttpBridgeError::invalid_response(format!("invalid HTTP redirect location: {error}"))
+        });
+    }
+    if location.starts_with("//") {
+        return Ok(format!("http:{location}"));
+    }
+
+    let target = location
+        .split_once('#')
+        .map_or(location, |(before_fragment, _)| before_fragment);
+    let target = if target.is_empty() {
+        current.request_target.clone()
+    } else if target.starts_with('/') {
+        target.to_string()
+    } else if target.starts_with('?') {
+        format!("{}{}", native_http_redirect_base_path(current), target)
+    } else {
+        format!("{}{}", native_http_redirect_directory(current), target)
+    };
+    Ok(format!("http://{}{}", current.authority, target))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_http_redirect_base_path(current: &NativeHttpUrl) -> String {
+    current
+        .request_target
+        .split_once('?')
+        .map_or(current.request_target.as_str(), |(path, _)| path)
+        .to_string()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_http_redirect_directory(current: &NativeHttpUrl) -> String {
+    let path = native_http_redirect_base_path(current);
+    let Some(index) = path.rfind('/') else {
+        return "/".to_string();
+    };
+    if index == 0 {
+        return "/".to_string();
+    }
+    path[..index + 1].to_string()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1113,6 +1272,124 @@ mod tests {
 
         assert_eq!(response.status, 200);
         assert_eq!(response.body, b"ok");
+    }
+
+    #[test]
+    fn native_http_bridge_follows_redirect_and_rewrites_post_to_get() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener should bind");
+        let address = listener.local_addr().expect("listener address should read");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("first connection should arrive");
+            let request = read_test_http_request(&mut stream);
+            assert!(request.starts_with("POST /start HTTP/1.1\r\n"));
+            assert!(request.ends_with("\r\n\r\nrequest-body"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: /final?x=1#client-only\r\nContent-Length: 13\r\n\r\nredirect-body",
+                )
+                .expect("redirect response should write");
+
+            let (mut stream, _) = listener
+                .accept()
+                .expect("redirect connection should arrive");
+            let request = read_test_http_request(&mut stream);
+            assert!(request.starts_with("GET /final?x=1 HTTP/1.1\r\n"));
+            assert!(!request.contains("client-only"));
+            assert!(request.contains("Content-Length: 0\r\n"));
+            assert!(!request.ends_with("request-body"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone")
+                .expect("final response should write");
+        });
+
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let response = bridge
+            .request_blocking(
+                HttpRequest::new(
+                    "post",
+                    format!("http://{address}/start"),
+                    vec![HttpHeader::new("content-type", "text/plain")
+                        .expect("header should be valid")],
+                    b"request-body".to_vec(),
+                )
+                .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect("redirected HTTP request should complete");
+        server.join().expect("server should finish");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"done");
+    }
+
+    #[test]
+    fn native_http_bridge_strips_sensitive_headers_on_cross_authority_redirect() {
+        let target_listener =
+            TcpListener::bind("127.0.0.1:0").expect("target listener should bind");
+        let target_address = target_listener
+            .local_addr()
+            .expect("target listener address should read");
+        let target_server = thread::spawn(move || {
+            let (mut stream, _) = target_listener
+                .accept()
+                .expect("redirect target connection should arrive");
+            let request = read_test_http_request(&mut stream);
+            assert!(request.starts_with("GET /target HTTP/1.1\r\n"));
+            assert!(!request.contains("authorization:"));
+            assert!(!request.contains("cookie:"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\ntarget")
+                .expect("target response should write");
+        });
+
+        let redirect_listener =
+            TcpListener::bind("127.0.0.1:0").expect("redirect listener should bind");
+        let redirect_address = redirect_listener
+            .local_addr()
+            .expect("redirect listener address should read");
+        let redirect_server = thread::spawn(move || {
+            let (mut stream, _) = redirect_listener
+                .accept()
+                .expect("redirect connection should arrive");
+            let request = read_test_http_request(&mut stream);
+            assert!(request.contains("authorization: Bearer secret\r\n"));
+            assert!(request.contains("cookie: session=secret\r\n"));
+            write!(
+                stream,
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_address}/target\r\nContent-Length: 0\r\n\r\n"
+            )
+            .expect("redirect response should write");
+        });
+
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let response = bridge
+            .request_blocking(
+                HttpRequest::new(
+                    "get",
+                    format!("http://{redirect_address}/start"),
+                    vec![
+                        HttpHeader::new("authorization", "Bearer secret")
+                            .expect("authorization should be valid"),
+                        HttpHeader::new("cookie", "session=secret")
+                            .expect("cookie should be valid"),
+                    ],
+                    Vec::new(),
+                )
+                .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect("redirected HTTP request should complete");
+        redirect_server
+            .join()
+            .expect("redirect server should finish");
+        target_server.join().expect("target server should finish");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"target");
     }
 
     #[test]

@@ -12,7 +12,8 @@ use tempfile::tempdir;
 use wasm_host_core::{
     CancellationSource, EventBus, HostMount, HostProfile, HttpBridge, HttpBridgeError,
     HttpBridgeErrorKind, HttpHeader, HttpRequest, HttpRequestLimits, HttpResponse, Limits,
-    RunRequest, SandboxState, VirtualExecutableBridge, VirtualProcessRequest,
+    RunError, RunErrorKind, RunRequest, SandboxState, VirtualExecutableBridge,
+    VirtualProcessRequest,
 };
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -605,6 +606,36 @@ fn virtual_executable_exit_code_and_stderr_are_preserved() {
     assert_eq!(result.stderr, b"tool failed\n");
 }
 
+#[test]
+fn missing_command_reports_command_resolution_error() {
+    let state = sandbox_with_profile(
+        selected_profile(),
+        HashMap::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+
+    let error = match state.run_blocking(
+        RunRequest {
+            args: vec!["missing-tool".to_string()],
+            input: None,
+            env: None,
+            cwd: None,
+            limits: limits(),
+        },
+        CancellationSource::new().token(),
+    ) {
+        Ok(_) => panic!("missing command should fail"),
+        Err(error) => error,
+    };
+    let run_error = error
+        .downcast_ref::<RunError>()
+        .expect("missing command should preserve RunError");
+
+    assert_eq!(run_error.kind(), RunErrorKind::CommandResolution);
+    assert_eq!(run_error.to_string(), "command not found: missing-tool");
+}
+
 fn virtual_command_error_for_response(
     stdout: &'static [u8],
     stderr: &'static [u8],
@@ -701,6 +732,10 @@ fn virtual_executable_wall_time_limit_cancels_pending_request() {
         error.to_string().contains("wall time limit"),
         "unexpected timeout error: {error:#}"
     );
+    let run_error = error
+        .downcast_ref::<RunError>()
+        .expect("timeout should preserve RunError");
+    assert_eq!(run_error.kind(), RunErrorKind::Timeout);
 }
 
 #[test]

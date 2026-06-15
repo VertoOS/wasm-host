@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     env,
+    error::Error,
+    fmt,
     future::Future,
     io::{self, SeekFrom},
     path::{Path, PathBuf},
@@ -265,6 +267,40 @@ pub struct CompletedProcess {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunErrorKind {
+    CommandResolution,
+    Timeout,
+    Cancelled,
+}
+
+#[derive(Debug)]
+pub struct RunError {
+    kind: RunErrorKind,
+    message: String,
+}
+
+impl RunError {
+    fn new(kind: RunErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn kind(&self) -> RunErrorKind {
+        self.kind
+    }
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.message.fmt(formatter)
+    }
+}
+
+impl Error for RunError {}
 
 #[derive(Clone, Debug)]
 pub struct CancellationSource {
@@ -689,11 +725,15 @@ impl VirtualExecutableBridge {
         while let Some(candidate) = request.take() {
             if cancellation.is_cancelled() {
                 request_cancellation.cancel();
-                return Err(anyhow!("process cancelled"));
+                return Err(RunError::new(RunErrorKind::Cancelled, "process cancelled").into());
             }
             if deadline.is_some_and(|time| Instant::now() >= time) {
                 request_cancellation.cancel();
-                return Err(anyhow!("virtual executable exceeded wall time limit"));
+                return Err(RunError::new(
+                    RunErrorKind::Timeout,
+                    "virtual executable exceeded wall time limit",
+                )
+                .into());
             }
 
             match self.inner.sender.try_send(candidate) {
@@ -712,11 +752,15 @@ impl VirtualExecutableBridge {
         loop {
             if cancellation.is_cancelled() {
                 request_cancellation.cancel();
-                return Err(anyhow!("process cancelled"));
+                return Err(RunError::new(RunErrorKind::Cancelled, "process cancelled").into());
             }
             if deadline.is_some_and(|time| Instant::now() >= time) {
                 request_cancellation.cancel();
-                return Err(anyhow!("virtual executable exceeded wall time limit"));
+                return Err(RunError::new(
+                    RunErrorKind::Timeout,
+                    "virtual executable exceeded wall time limit",
+                )
+                .into());
             }
 
             let wait_time = deadline.map_or(Duration::from_millis(10), |time| {
@@ -842,10 +886,16 @@ impl VirtualExecutableRegistry {
         path_env: Option<&String>,
     ) -> Result<Option<ResolvedVirtualExecutable>> {
         if command.as_bytes().contains(&0) {
-            return Err(anyhow!("command cannot contain NUL bytes"));
+            return Err(RunError::new(
+                RunErrorKind::CommandResolution,
+                "command cannot contain NUL bytes",
+            )
+            .into());
         }
         if command.is_empty() {
-            return Err(anyhow!("command cannot be empty"));
+            return Err(
+                RunError::new(RunErrorKind::CommandResolution, "command cannot be empty").into(),
+            );
         }
 
         if command.contains('/') {
@@ -2251,10 +2301,16 @@ impl PackageCatalog {
         path_env: Option<&String>,
     ) -> Result<ResolvedCommand> {
         if command.as_bytes().contains(&0) {
-            return Err(anyhow!("command cannot contain NUL bytes"));
+            return Err(RunError::new(
+                RunErrorKind::CommandResolution,
+                "command cannot contain NUL bytes",
+            )
+            .into());
         }
         if command.is_empty() {
-            return Err(anyhow!("command cannot be empty"));
+            return Err(
+                RunError::new(RunErrorKind::CommandResolution, "command cannot be empty").into(),
+            );
         }
 
         if let Some(target) = state
@@ -2271,12 +2327,24 @@ impl PackageCatalog {
                 .get(&path)
                 .cloned()
                 .map(ResolvedCommand::Package)
-                .ok_or_else(|| anyhow!("command not found: {command}"));
+                .ok_or_else(|| {
+                    RunError::new(
+                        RunErrorKind::CommandResolution,
+                        format!("command not found: {command}"),
+                    )
+                    .into()
+                });
         }
 
         self.resolve_path_command(command, cwd, path_env)?
             .map(ResolvedCommand::Package)
-            .ok_or_else(|| anyhow!("command not found: {command}"))
+            .ok_or_else(|| {
+                RunError::new(
+                    RunErrorKind::CommandResolution,
+                    format!("command not found: {command}"),
+                )
+                .into()
+            })
     }
 
     fn resolve_path_command(
@@ -2386,7 +2454,7 @@ impl PackageCatalog {
             let mut task_handle = tokio::select! {
                 result = spawn => result.context("spawn failed")?,
                 _ = cancellation.cancelled() => {
-                    return Err(anyhow!("process cancelled"));
+                    return Err(RunError::new(RunErrorKind::Cancelled, "process cancelled").into());
                 }
             };
 
@@ -2400,15 +2468,19 @@ impl PackageCatalog {
                     _ = tokio::time::sleep(timeout) => {
                         process.terminate(126_i32.into());
                         let _ = wait_finished.await;
-                        return Err(anyhow!(
-                            "process exceeded wall time limit of {:.3} seconds",
-                            timeout.as_secs_f64()
-                        ));
+                        return Err(RunError::new(
+                            RunErrorKind::Timeout,
+                            format!(
+                                "process exceeded wall time limit of {:.3} seconds",
+                                timeout.as_secs_f64()
+                            ),
+                        )
+                        .into());
                     }
                     _ = cancellation.cancelled() => {
                         process.terminate(126_i32.into());
                         let _ = wait_finished.await;
-                        return Err(anyhow!("process cancelled"));
+                        return Err(RunError::new(RunErrorKind::Cancelled, "process cancelled").into());
                     }
                 }
             } else {
@@ -2418,7 +2490,7 @@ impl PackageCatalog {
                     _ = cancellation.cancelled() => {
                         process.terminate(126_i32.into());
                         let _ = wait_finished.await;
-                        return Err(anyhow!("process cancelled"));
+                        return Err(RunError::new(RunErrorKind::Cancelled, "process cancelled").into());
                     }
                 }
             };

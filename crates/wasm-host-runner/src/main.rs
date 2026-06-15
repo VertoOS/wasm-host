@@ -12,7 +12,7 @@ use std::{
 use serde_json::{json, Map, Value};
 use wasm_host_core::{
     CancellationSource, EventBus, HostMount, HostProfile, Limits, PackageCommandAlias, PackageSpec,
-    RunRequest, SandboxOptions, SandboxState, VirtualExecutableBridge,
+    RunError, RunErrorKind, RunRequest, SandboxOptions, SandboxState, VirtualExecutableBridge,
 };
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
@@ -20,7 +20,10 @@ const DEFAULT_EVENT_QUEUE_SIZE: usize = 4096;
 const WEBC_MAGIC: &[u8; 5] = b"\0webc";
 const EXIT_USAGE: u8 = 2;
 const EXIT_PACKAGE: u8 = 65;
+const EXIT_TIMEOUT: u8 = 124;
 const EXIT_HOST: u8 = 125;
+const EXIT_CANCELLED: u8 = 130;
+const EXIT_COMMAND_NOT_FOUND: u8 = 127;
 
 fn main() -> ExitCode {
     match run() {
@@ -110,10 +113,20 @@ fn run() -> Result<i32, RunnerError> {
     ) {
         Ok(result) => result,
         Err(error) => {
+            let failure = run_failure_for_error(&error);
             reporter
-                .runner_failed("run", EXIT_HOST, &error, started_at.elapsed())
+                .runner_failed(
+                    failure.stage,
+                    failure.exit_code,
+                    &error,
+                    started_at.elapsed(),
+                )
                 .map_err(RunnerError::host)?;
-            return Err(RunnerError::host_reported(error, options.event_format));
+            return Err(RunnerError::reported(
+                error,
+                failure.exit_code,
+                options.event_format,
+            ));
         }
     };
 
@@ -169,9 +182,14 @@ impl RunnerError {
     }
 
     fn host_reported(error: anyhow::Error, event_format: EventFormat) -> Self {
+        Self::reported(error, EXIT_HOST, event_format)
+    }
+
+    fn reported(error: anyhow::Error, exit_code: u8, event_format: EventFormat) -> Self {
         Self {
+            exit_code,
+            error,
             suppress_plain_error: event_format == EventFormat::Json,
-            ..Self::host(error)
         }
     }
 }
@@ -198,6 +216,32 @@ struct Options {
     output_limit: usize,
     timeout_seconds: Option<f64>,
     command: Vec<String>,
+}
+
+struct RunFailure {
+    stage: &'static str,
+    exit_code: u8,
+}
+
+fn run_failure_for_error(error: &anyhow::Error) -> RunFailure {
+    match error.downcast_ref::<RunError>().map(RunError::kind) {
+        Some(RunErrorKind::CommandResolution) => RunFailure {
+            stage: "command",
+            exit_code: EXIT_COMMAND_NOT_FOUND,
+        },
+        Some(RunErrorKind::Timeout) => RunFailure {
+            stage: "timeout",
+            exit_code: EXIT_TIMEOUT,
+        },
+        Some(RunErrorKind::Cancelled) => RunFailure {
+            stage: "cancelled",
+            exit_code: EXIT_CANCELLED,
+        },
+        None => RunFailure {
+            stage: "run",
+            exit_code: EXIT_HOST,
+        },
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -425,14 +469,7 @@ impl Options {
                 }
                 "--timeout" => {
                     let value = next_value(&mut args, "--timeout")?;
-                    timeout_seconds =
-                        if value == "none" {
-                            None
-                        } else {
-                            Some(value.parse().map_err(|_| {
-                                anyhow::anyhow!("--timeout must be seconds or none")
-                            })?)
-                        };
+                    timeout_seconds = parse_timeout(&value)?;
                 }
                 _ => return Err(anyhow::anyhow!("unknown option: {arg}")),
             }
@@ -528,6 +565,21 @@ fn read_stdin_source(value: &str) -> anyhow::Result<Vec<u8>> {
     }
     std::fs::read(Path::new(value))
         .map_err(|error| anyhow::anyhow!("unable to read stdin file {value}: {error}"))
+}
+
+fn parse_timeout(value: &str) -> anyhow::Result<Option<f64>> {
+    if value == "none" {
+        return Ok(None);
+    }
+    let seconds = value
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--timeout must be positive seconds or none"))?;
+    if !f64::is_finite(seconds) || seconds <= 0.0 {
+        return Err(anyhow::anyhow!(
+            "--timeout must be positive seconds or none"
+        ));
+    }
+    Ok(Some(seconds))
 }
 
 fn display_bytes(bytes: &[u8]) -> String {
@@ -654,6 +706,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_accepts_positive_timeout_and_none() {
+        assert_eq!(
+            parse_timeout("1.25").expect("positive timeout should parse"),
+            Some(1.25)
+        );
+        assert_eq!(parse_timeout("none").expect("none should parse"), None);
+    }
+
+    #[test]
+    fn parse_rejects_non_positive_timeout() {
+        let zero = parse_timeout("0").expect_err("zero timeout should fail");
+        assert!(zero.to_string().contains("positive seconds"));
+
+        let negative = parse_timeout("-1").expect_err("negative timeout should fail");
+        assert!(negative.to_string().contains("positive seconds"));
+    }
+
+    #[test]
     fn parse_rejects_unknown_profile() {
         let error = match Options::parse(args([
             "--webc",
@@ -761,6 +831,83 @@ mod tests {
         assert_eq!(event["env_keys"], json!(["PUBLIC", "SECRET"]));
         assert_eq!(event["env_count"], 2);
         assert_eq!(event["module_cache_dir"], "/cache/modules");
+    }
+
+    #[test]
+    fn command_resolution_errors_map_to_command_exit() {
+        let (events, _event_receiver) = EventBus::new(4);
+        let (virtual_executables, _virtual_process_receiver) = VirtualExecutableBridge::new(4);
+        let state = SandboxState::new_with_profile(
+            HostProfile::BrowserStrict,
+            HashMap::new(),
+            Vec::new(),
+            Vec::new(),
+            "/work".to_string(),
+            HashMap::new(),
+            events,
+            virtual_executables,
+        )
+        .expect("sandbox should initialize");
+        let error = match state.run_blocking(
+            RunRequest {
+                args: vec!["missing-tool".to_string()],
+                input: None,
+                env: None,
+                cwd: None,
+                limits: Limits {
+                    output_bytes: 1024,
+                    wall_time_seconds: Some(1.0),
+                },
+            },
+            CancellationSource::new().token(),
+        ) {
+            Ok(_) => panic!("missing command should fail"),
+            Err(error) => error,
+        };
+
+        let failure = run_failure_for_error(&error);
+        assert_eq!(failure.stage, "command");
+        assert_eq!(failure.exit_code, EXIT_COMMAND_NOT_FOUND);
+    }
+
+    #[test]
+    fn timeout_errors_map_to_timeout_exit() {
+        let (events, _event_receiver) = EventBus::new(4);
+        let (virtual_executables, _virtual_process_receiver) = VirtualExecutableBridge::new(4);
+        let state = SandboxState::new_with_profile(
+            HostProfile::BrowserStrict,
+            HashMap::new(),
+            Vec::new(),
+            Vec::new(),
+            "/work".to_string(),
+            HashMap::from([("PATH".to_string(), "/tools:/bin:/usr/bin".to_string())]),
+            events,
+            virtual_executables,
+        )
+        .expect("sandbox should initialize");
+        state
+            .register_virtual_executable(7, vec!["/tools/hang".to_string()], false)
+            .expect("virtual executable should register");
+        let error = match state.run_blocking(
+            RunRequest {
+                args: vec!["hang".to_string()],
+                input: None,
+                env: None,
+                cwd: None,
+                limits: Limits {
+                    output_bytes: 1024,
+                    wall_time_seconds: Some(0.01),
+                },
+            },
+            CancellationSource::new().token(),
+        ) {
+            Ok(_) => panic!("timeout should fail"),
+            Err(error) => error,
+        };
+
+        let failure = run_failure_for_error(&error);
+        assert_eq!(failure.stage, "timeout");
+        assert_eq!(failure.exit_code, EXIT_TIMEOUT);
     }
 
     #[test]

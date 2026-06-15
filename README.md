@@ -16,8 +16,8 @@ until the boundaries are stable enough to split.
 ## Status
 
 - Native runner can execute a local WebC package.
-- The runner supports mounts, cwd, env, env pass-through, stdin files, output
-  limits, and wall-time limits.
+- The runner supports mounts, cwd, env, env pass-through, stdin files, live
+  stdout/stderr streaming, output limits, and wall-time limits.
 - The host profile and monorepo layout are documented.
 - Core conformance covers the first HTTP bridge contract for adapter-owned
   request dispatch, clean errors, response limits, and cancellation.
@@ -51,6 +51,10 @@ inputs fail with exit code `65`; command-line usage errors fail with exit code
 `2`; unresolved commands fail with exit code `127`; wall-time timeouts fail with
 exit code `124`; cancelled runs fail with exit code `130`; guest process exits
 preserve the guest return code.
+
+Guest stdout and stderr are streamed to the terminal as the process writes them.
+The core API still captures both streams and returns them in `CompletedProcess`
+so adapters can report byte counts or inspect output after the command exits.
 
 Use `--module-cache-dir PATH` to pin where compiled module cache artifacts are
 stored. Without it, the runtime uses `XDG_CACHE_HOME`, `HOME/.cache`, or a temp

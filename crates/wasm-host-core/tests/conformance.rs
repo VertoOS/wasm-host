@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
-    sync::mpsc,
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -12,8 +12,8 @@ use tempfile::tempdir;
 use wasm_host_core::{
     CancellationSource, EventBus, HostMount, HostProfile, HttpBridge, HttpBridgeError,
     HttpBridgeErrorKind, HttpHeader, HttpRequest, HttpRequestLimits, HttpResponse, Limits,
-    RunError, RunErrorKind, RunRequest, SandboxState, VirtualExecutableBridge,
-    VirtualProcessRequest,
+    OutputSink, OutputSinks, RunError, RunErrorKind, RunRequest, SandboxState,
+    VirtualExecutableBridge, VirtualProcessRequest,
 };
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -77,6 +77,28 @@ fn encode_virtual_process_response(returncode: i32, stdout: &[u8], stderr: &[u8]
     data.extend_from_slice(stdout);
     data.extend_from_slice(stderr);
     data
+}
+
+#[derive(Clone)]
+struct SharedOutput(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedOutput {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| std::io::Error::other("shared output lock failed"))?
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn shared_output_sink() -> (OutputSink, Arc<Mutex<Vec<u8>>>) {
+    let output = Arc::new(Mutex::new(Vec::new()));
+    (OutputSink::new(SharedOutput(Arc::clone(&output))), output)
 }
 
 fn virtual_command_sandbox() -> (
@@ -573,6 +595,60 @@ fn virtual_executables_dispatch_through_the_host_bridge() {
     assert_eq!(result.returncode, 7);
     assert_eq!(result.stdout, b"bridge-out");
     assert_eq!(result.stderr, b"bridge-err");
+}
+
+#[test]
+fn run_blocking_with_output_streams_and_captures_virtual_output() {
+    let (state, mut virtual_process_receiver) = virtual_command_sandbox();
+    let handler = thread::spawn(move || {
+        let request = virtual_process_receiver
+            .blocking_recv()
+            .expect("virtual process request should arrive");
+        request
+            .respond(encode_virtual_process_response(
+                0,
+                b"streamed stdout",
+                b"streamed stderr",
+            ))
+            .expect("response should send");
+    });
+    let (stdout_sink, streamed_stdout) = shared_output_sink();
+    let (stderr_sink, streamed_stderr) = shared_output_sink();
+
+    let result = state
+        .run_blocking_with_output(
+            RunRequest {
+                args: vec!["host-tool".to_string()],
+                input: None,
+                env: None,
+                cwd: None,
+                limits: limits(),
+            },
+            OutputSinks {
+                stdout: Some(stdout_sink),
+                stderr: Some(stderr_sink),
+            },
+            CancellationSource::new().token(),
+        )
+        .expect("virtual command should run");
+    handler.join().expect("handler thread should finish");
+
+    assert_eq!(result.stdout, b"streamed stdout");
+    assert_eq!(result.stderr, b"streamed stderr");
+    assert_eq!(
+        streamed_stdout
+            .lock()
+            .expect("stdout stream should lock")
+            .as_slice(),
+        b"streamed stdout"
+    );
+    assert_eq!(
+        streamed_stderr
+            .lock()
+            .expect("stderr stream should lock")
+            .as_slice(),
+        b"streamed stderr"
+    );
 }
 
 #[test]

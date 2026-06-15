@@ -11,8 +11,9 @@ use std::{
 
 use serde_json::{json, Map, Value};
 use wasm_host_core::{
-    CancellationSource, EventBus, HostMount, HostProfile, Limits, PackageCommandAlias, PackageSpec,
-    RunError, RunErrorKind, RunRequest, SandboxOptions, SandboxState, VirtualExecutableBridge,
+    CancellationSource, EventBus, HostMount, HostProfile, Limits, OutputSink, OutputSinks,
+    PackageCommandAlias, PackageSpec, RunError, RunErrorKind, RunRequest, SandboxOptions,
+    SandboxState, VirtualExecutableBridge,
 };
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
@@ -98,7 +99,11 @@ fn run() -> Result<i32, RunnerError> {
         .sandbox_initialized(&package_name)
         .map_err(RunnerError::host)?;
     let cancellation = CancellationSource::new();
-    let result = match state.run_blocking(
+    let output = OutputSinks {
+        stdout: Some(OutputSink::new(io::stdout())),
+        stderr: Some(OutputSink::new(io::stderr())),
+    };
+    let result = match state.run_blocking_with_output(
         RunRequest {
             args: options.command,
             input: options.stdin,
@@ -109,6 +114,7 @@ fn run() -> Result<i32, RunnerError> {
                 wall_time_seconds: options.timeout_seconds,
             },
         },
+        output,
         cancellation.token(),
     ) {
         Ok(result) => result,
@@ -130,12 +136,6 @@ fn run() -> Result<i32, RunnerError> {
         }
     };
 
-    io::stdout()
-        .write_all(&result.stdout)
-        .map_err(|error| RunnerError::host(anyhow::Error::new(error)))?;
-    io::stderr()
-        .write_all(&result.stderr)
-        .map_err(|error| RunnerError::host(anyhow::Error::new(error)))?;
     reporter
         .command_completed(&result, started_at.elapsed())
         .map_err(RunnerError::host)?;

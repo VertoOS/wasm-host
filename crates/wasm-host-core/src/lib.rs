@@ -4,7 +4,7 @@ use std::{
     error::Error,
     fmt,
     future::Future,
-    io::{self, SeekFrom},
+    io::{self, SeekFrom, Write as _},
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
@@ -266,6 +266,40 @@ pub struct CompletedProcess {
     pub returncode: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+#[derive(Clone)]
+pub struct OutputSink {
+    writer: Arc<Mutex<Box<dyn io::Write + Send + 'static>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct OutputSinks {
+    pub stdout: Option<OutputSink>,
+    pub stderr: Option<OutputSink>,
+}
+
+impl OutputSink {
+    pub fn new(writer: impl io::Write + Send + 'static) -> Self {
+        Self {
+            writer: Arc::new(Mutex::new(Box::new(writer))),
+        }
+    }
+
+    fn write_all(&self, data: &[u8]) -> io::Result<()> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| io::Error::other("output sink lock failed"))?;
+        writer.write_all(data)?;
+        writer.flush()
+    }
+}
+
+impl fmt::Debug for OutputSink {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OutputSink { .. }")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2059,6 +2093,16 @@ impl SandboxState {
         self.catalog.run(self, request, cancellation)
     }
 
+    pub fn run_blocking_with_output(
+        &self,
+        request: RunRequest,
+        output: OutputSinks,
+        cancellation: CancellationToken,
+    ) -> Result<CompletedProcess> {
+        self.catalog
+            .run_with_output(self, request, output, cancellation)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn run_with_stdio_blocking(
         &self,
@@ -2131,6 +2175,16 @@ impl PackageCatalog {
         request: RunRequest,
         cancellation: CancellationToken,
     ) -> Result<CompletedProcess> {
+        self.run_with_output(state, request, OutputSinks::default(), cancellation)
+    }
+
+    fn run_with_output(
+        &self,
+        state: &SandboxState,
+        request: RunRequest,
+        output: OutputSinks,
+        cancellation: CancellationToken,
+    ) -> Result<CompletedProcess> {
         let RunRequest {
             args,
             input,
@@ -2141,8 +2195,8 @@ impl PackageCatalog {
         let input = input.unwrap_or_default();
         let streams = ProcessStreams {
             stdin: Box::new(StaticFile::new(input)),
-            stdout: CapturedOutput::new(limits.output_bytes),
-            stderr: CapturedOutput::new(limits.output_bytes),
+            stdout: CapturedOutput::new(limits.output_bytes, output.stdout),
+            stderr: CapturedOutput::new(limits.output_bytes, output.stderr),
         };
         let request = RunRequest {
             args,
@@ -2174,7 +2228,6 @@ impl PackageCatalog {
         let cwd = request.cwd.unwrap_or_else(|| state.cwd.clone());
         let cwd = normalize_path(&cwd)?;
         validate_directory(&state.fs, &cwd, "cwd")?;
-        let output_limit = request.limits.output_bytes;
         let wall_time = match request.limits.wall_time_seconds {
             Some(seconds) => Some(duration_from_seconds(seconds)?),
             None => None,
@@ -2182,6 +2235,8 @@ impl PackageCatalog {
         let target = match self.resolve_command(state, &args[0], &cwd, env.get("PATH"))? {
             ResolvedCommand::Virtual(target) => {
                 let input = self.read_stdin_to_end(streams.stdin)?;
+                let stdout = streams.stdout;
+                let stderr = streams.stderr;
                 return self.run_virtual_command(
                     args,
                     input,
@@ -2190,7 +2245,8 @@ impl PackageCatalog {
                     target,
                     state,
                     wall_time,
-                    output_limit,
+                    stdout,
+                    stderr,
                     cancellation,
                 );
             }
@@ -2260,7 +2316,8 @@ impl PackageCatalog {
         target: ResolvedVirtualExecutable,
         state: &SandboxState,
         wall_time: Option<Duration>,
-        output_limit: usize,
+        stdout: CapturedOutput,
+        stderr: CapturedOutput,
         cancellation: CancellationToken,
     ) -> Result<CompletedProcess> {
         let cwd = cwd
@@ -2283,13 +2340,15 @@ impl PackageCatalog {
                 .invoke_blocking(payload, wall_time, cancellation)?;
         let response = decode_virtual_process_response(&response)
             .context("invalid virtual executable response")?;
-        ensure_process_output_within_limit("stdout", &response.stdout, output_limit)?;
-        ensure_process_output_within_limit("stderr", &response.stderr, output_limit)?;
+        stdout.write_all("stdout", &response.stdout)?;
+        stderr.write_all("stderr", &response.stderr)?;
+        let captured_stdout = stdout.capture("stdout")?;
+        let captured_stderr = stderr.capture("stderr")?;
         Ok(CompletedProcess {
             args,
             returncode: response.returncode,
-            stdout: response.stdout,
-            stderr: response.stderr,
+            stdout: captured_stdout,
+            stderr: captured_stderr,
         })
     }
 
@@ -2572,6 +2631,7 @@ struct CapturedOutputState {
     data: Vec<u8>,
     limit: usize,
     exceeded: bool,
+    sink: Option<OutputSink>,
 }
 
 #[derive(Debug)]
@@ -2746,12 +2806,13 @@ impl VirtualFile for InteractiveStdinFile {
 }
 
 impl CapturedOutput {
-    pub(crate) fn new(limit: usize) -> Self {
+    pub(crate) fn new(limit: usize, sink: Option<OutputSink>) -> Self {
         Self {
             state: Arc::new(Mutex::new(CapturedOutputState {
                 data: Vec::new(),
                 limit,
                 exceeded: false,
+                sink,
             })),
         }
     }
@@ -2775,6 +2836,50 @@ impl CapturedOutput {
             ));
         }
         Ok(state.data.clone())
+    }
+
+    fn write_all(&self, stream_name: &str, data: &[u8]) -> Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let sink = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("captured {stream_name} lock failed"))?;
+            if state.exceeded {
+                return Err(anyhow!(
+                    "process {stream_name} output exceeded {} bytes",
+                    state.limit
+                ));
+            }
+
+            let Some(next_len) = state.data.len().checked_add(data.len()) else {
+                state.exceeded = true;
+                return Err(anyhow!(
+                    "process {stream_name} output exceeded {} bytes",
+                    state.limit
+                ));
+            };
+            if next_len > state.limit {
+                state.exceeded = true;
+                return Err(anyhow!(
+                    "process {stream_name} output exceeded {} bytes",
+                    state.limit
+                ));
+            }
+
+            state.data.extend_from_slice(data);
+            state.sink.clone()
+        };
+
+        if let Some(sink) = sink {
+            sink.write_all(data)
+                .with_context(|| format!("unable to stream process {stream_name} output"))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -2801,9 +2906,15 @@ impl LimitedCaptureFile {
         let write_len = available.min(buf.len());
         state.data.extend_from_slice(&buf[..write_len]);
         self.cursor = state.data.len() as u64;
+        let sink = state.sink.clone();
 
         if write_len < buf.len() {
             state.exceeded = true;
+        }
+        drop(state);
+
+        if let Some(sink) = sink {
+            sink.write_all(&buf[..write_len])?;
         }
 
         Ok(write_len)
@@ -2956,15 +3067,6 @@ impl VirtualFile for LimitedCaptureFile {
 
 fn output_limit_error(limit: usize) -> io::Error {
     io::Error::other(format!("process output exceeded {limit} bytes"))
-}
-
-fn ensure_process_output_within_limit(stream_name: &str, data: &[u8], limit: usize) -> Result<()> {
-    if data.len() <= limit {
-        return Ok(());
-    }
-    Err(anyhow!(
-        "process {stream_name} output exceeded {limit} bytes"
-    ))
 }
 
 fn read_only_mount_error() -> io::Error {
@@ -3536,9 +3638,26 @@ mod tests {
 
     use super::*;
 
+    #[derive(Clone)]
+    struct SharedOutput(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedOutput {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_| io::Error::other("shared output lock failed"))?
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn limited_capture_stops_storing_at_limit() {
-        let captured = CapturedOutput::new(4);
+        let captured = CapturedOutput::new(4, None);
         let mut file = captured.file();
 
         file.write_all(b"abcdef").await.unwrap_err();
@@ -3546,6 +3665,46 @@ mod tests {
         let state = captured.state.lock().expect("capture state should lock");
         assert_eq!(state.data, b"abcd");
         assert!(state.exceeded);
+    }
+
+    #[tokio::test]
+    async fn limited_capture_streams_each_accepted_write_to_sink() {
+        let streamed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = CapturedOutput::new(
+            8,
+            Some(OutputSink::new(SharedOutput(std::sync::Arc::clone(
+                &streamed,
+            )))),
+        );
+        let mut file = captured.file();
+
+        file.write_all(b"ab")
+            .await
+            .expect("first write should pass");
+        assert_eq!(
+            streamed
+                .lock()
+                .expect("streamed output should lock")
+                .as_slice(),
+            b"ab"
+        );
+
+        file.write_all(b"cd")
+            .await
+            .expect("second write should pass");
+        assert_eq!(
+            streamed
+                .lock()
+                .expect("streamed output should lock")
+                .as_slice(),
+            b"abcd"
+        );
+        assert_eq!(
+            captured
+                .capture("stdout")
+                .expect("captured output should be readable"),
+            b"abcd"
+        );
     }
 
     #[test]

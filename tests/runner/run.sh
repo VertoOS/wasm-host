@@ -7,6 +7,13 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 
 cargo build --quiet --manifest-path "$ROOT/Cargo.toml" --bin wasm-host-runner --bin wasm-host-fixtures --locked
 
+expected_version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -n 1)"
+version_output="$("$ROOT/target/debug/wasm-host-runner" --version)"
+if [[ "$version_output" != "wasm-host-runner $expected_version" ]]; then
+  echo "unexpected runner version output: $version_output" >&2
+  exit 1
+fi
+
 printf '<!doctype html>' > "$TMP_ROOT/bad.webc"
 
 set +e

@@ -517,6 +517,10 @@ impl Options {
                     print_usage();
                     std::process::exit(0);
                 }
+                "--version" => {
+                    print_version();
+                    std::process::exit(0);
+                }
                 "--webc" => webc = Some(PathBuf::from(next_value(&mut args, "--webc")?)),
                 "--profile" => {
                     profile = HostProfile::parse(&next_value(&mut args, "--profile")?)?;
@@ -765,14 +769,31 @@ Options:
   --stdin-file <path|->      Read process stdin from a file or host stdin
   --output-limit <bytes>     Captured stdout/stderr limit, default 16777216
   --timeout <seconds|none>   Wall-time limit, default none
+  --version                  Print version and exit
 "
     );
+}
+
+fn print_version() {
+    println!("{}", runner_version());
+}
+
+fn runner_version() -> String {
+    format!("wasm-host-runner {}", env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{env, fs};
+
+    #[test]
+    fn version_output_uses_package_version() {
+        assert_eq!(
+            runner_version(),
+            format!("wasm-host-runner {}", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     #[test]
     fn parse_defaults_to_browser_strict_profile() {

@@ -40,6 +40,8 @@ use wasmer_wasix::{
 use webc::metadata::annotations::Wasi;
 
 mod http;
+#[cfg(not(target_arch = "wasm32"))]
+pub use http::NativeHttpBridgeWorker;
 pub use http::{
     HttpBridge, HttpBridgeError, HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest,
     HttpRequestLimits, HttpResponse,

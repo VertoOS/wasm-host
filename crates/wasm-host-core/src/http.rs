@@ -7,9 +7,22 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    io::{Read, Write},
+    net::{TcpStream, ToSocketAddrs},
+    thread,
+};
+
 use crate::{CancellationSource, CancellationToken};
 
 const HTTP_RESPONSE_EVENT_QUEUE_SIZE: usize = 1;
+#[cfg(not(target_arch = "wasm32"))]
+const NATIVE_HTTP_HEADER_LIMIT: usize = 64 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
+const NATIVE_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(not(target_arch = "wasm32"))]
+const NATIVE_HTTP_IO_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HttpHeader {
@@ -61,6 +74,11 @@ pub struct HttpBridgeError {
 #[derive(Clone, Debug)]
 pub struct HttpBridge {
     inner: Arc<HttpBridgeInner>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct NativeHttpBridgeWorker {
+    _handle: thread::JoinHandle<()>,
 }
 
 #[derive(Debug)]
@@ -342,6 +360,376 @@ impl HttpBridge {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeHttpBridgeWorker {
+    pub fn spawn(mut receiver: tokio::sync::mpsc::Receiver<HttpBridgeRequest>) -> Self {
+        Self {
+            _handle: thread::spawn(move || {
+                while let Some(request) = receiver.blocking_recv() {
+                    if request.cancellation_token().is_cancelled() {
+                        continue;
+                    }
+                    if let Err(error) = dispatch_native_http_request(&request) {
+                        let _ = request.fail(error);
+                    }
+                }
+            }),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+struct NativeHttpUrl {
+    host: String,
+    port: u16,
+    authority: String,
+    request_target: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn dispatch_native_http_request(
+    request: &HttpBridgeRequest,
+) -> std::result::Result<(), HttpBridgeError> {
+    let url = parse_native_http_url(&request.request.url)?;
+    let mut stream = connect_native_http(&url, request.cancellation_token())?;
+    stream
+        .set_read_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
+        .map_err(|error| {
+            HttpBridgeError::transport(format!("unable to set read timeout: {error}"))
+        })?;
+    stream
+        .set_write_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
+        .map_err(|error| {
+            HttpBridgeError::transport(format!("unable to set write timeout: {error}"))
+        })?;
+
+    write_native_http_request(&mut stream, &request.request, &url)?;
+    let response = read_native_http_response(&mut stream, request)?;
+    request.respond(response)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_native_http_url(url: &str) -> std::result::Result<NativeHttpUrl, HttpBridgeError> {
+    let Some(rest) = url.strip_prefix("http://") else {
+        let scheme = url.split_once(':').map_or("unknown", |(scheme, _)| scheme);
+        return Err(HttpBridgeError::unsupported_scheme(format!(
+            "native HTTP bridge supports http:// URLs only, got {scheme}"
+        )));
+    };
+    let (authority, request_target) = match rest.split_once('/') {
+        Some((authority, path)) => (authority, format!("/{path}")),
+        None => (rest, "/".to_string()),
+    };
+    if authority.is_empty() || authority.contains('@') {
+        return Err(HttpBridgeError::invalid_request(
+            "HTTP request URL must include a host without userinfo",
+        ));
+    }
+
+    let (host, port) = parse_native_http_authority(authority)?;
+    Ok(NativeHttpUrl {
+        host,
+        port,
+        authority: authority.to_string(),
+        request_target,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_native_http_authority(
+    authority: &str,
+) -> std::result::Result<(String, u16), HttpBridgeError> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let Some((host, suffix)) = rest.split_once(']') else {
+            return Err(HttpBridgeError::invalid_request(
+                "IPv6 HTTP URL host must include a closing bracket",
+            ));
+        };
+        let port = match suffix.strip_prefix(':') {
+            Some(value) => parse_native_http_port(value)?,
+            None if suffix.is_empty() => 80,
+            _ => {
+                return Err(HttpBridgeError::invalid_request(
+                    "invalid IPv6 HTTP URL authority",
+                ))
+            }
+        };
+        return Ok((host.to_string(), port));
+    }
+
+    match authority.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => {
+            Ok((host.to_string(), parse_native_http_port(port)?))
+        }
+        _ if authority.contains(':') => Err(HttpBridgeError::invalid_request(
+            "IPv6 HTTP URL hosts must be bracketed",
+        )),
+        _ => Ok((authority.to_string(), 80)),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_native_http_port(value: &str) -> std::result::Result<u16, HttpBridgeError> {
+    value
+        .parse::<u16>()
+        .map_err(|_| HttpBridgeError::invalid_request(format!("invalid HTTP URL port: {value}")))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn connect_native_http(
+    url: &NativeHttpUrl,
+    cancellation: CancellationToken,
+) -> std::result::Result<TcpStream, HttpBridgeError> {
+    let addresses = (url.host.as_str(), url.port)
+        .to_socket_addrs()
+        .map_err(|error| {
+            HttpBridgeError::transport(format!("unable to resolve HTTP host: {error}"))
+        })?;
+    let mut last_error = None;
+    for address in addresses {
+        if cancellation.is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        match TcpStream::connect_timeout(&address, NATIVE_HTTP_CONNECT_TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(HttpBridgeError::gateway_unavailable(format!(
+        "unable to connect to HTTP host {}:{}{}",
+        url.host,
+        url.port,
+        last_error.map_or(String::new(), |error| format!(": {error}"))
+    )))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_native_http_request(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    url: &NativeHttpUrl,
+) -> std::result::Result<(), HttpBridgeError> {
+    write_http_line(
+        stream,
+        format_args!("{} {} HTTP/1.1\r\n", request.method, url.request_target),
+    )?;
+    if !request.headers.iter().any(|header| header.name == "host") {
+        write_http_line(stream, format_args!("Host: {}\r\n", url.authority))?;
+    }
+    for header in &request.headers {
+        if matches!(header.name.as_str(), "connection" | "content-length") {
+            continue;
+        }
+        write_http_line(
+            stream,
+            format_args!("{}: {}\r\n", header.name, header.value),
+        )?;
+    }
+    write_http_line(stream, format_args!("Connection: close\r\n"))?;
+    write_http_line(
+        stream,
+        format_args!("Content-Length: {}\r\n\r\n", request.body.len()),
+    )?;
+    stream.write_all(&request.body).map_err(|error| {
+        HttpBridgeError::transport(format!("unable to write HTTP request body: {error}"))
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_http_line(
+    stream: &mut TcpStream,
+    args: fmt::Arguments<'_>,
+) -> std::result::Result<(), HttpBridgeError> {
+    stream.write_fmt(args).map_err(|error| {
+        HttpBridgeError::transport(format!("unable to write HTTP request: {error}"))
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_http_response(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+) -> std::result::Result<HttpResponse, HttpBridgeError> {
+    let mut buffer = Vec::new();
+    let header_end = loop {
+        if request.cancellation_token().is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        if let Some(index) = find_header_end(&buffer) {
+            break index;
+        }
+        if buffer.len() > NATIVE_HTTP_HEADER_LIMIT {
+            return Err(HttpBridgeError::invalid_response(format!(
+                "HTTP response headers exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
+            )));
+        }
+        let mut chunk = [0_u8; 4096];
+        match stream.read(&mut chunk) {
+            Ok(0) => {
+                return Err(HttpBridgeError::transport(
+                    "HTTP connection closed before response headers",
+                ))
+            }
+            Ok(count) => buffer.extend_from_slice(&chunk[..count]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(error) => {
+                return Err(HttpBridgeError::transport(format!(
+                    "unable to read HTTP response: {error}"
+                )))
+            }
+        }
+    };
+
+    let header_bytes = &buffer[..header_end];
+    let body_start = header_end + 4;
+    let body_prefix = buffer[body_start..].to_vec();
+    let (status, headers, content_length, chunked) =
+        parse_native_http_response_headers(header_bytes)?;
+    if chunked {
+        return Err(HttpBridgeError::invalid_response(
+            "native HTTP bridge does not support chunked responses yet",
+        ));
+    }
+
+    if let Some(length) = content_length {
+        let accepted = body_prefix.len().min(length);
+        write_native_http_body_chunk(request, body_prefix[..accepted].to_vec())?;
+        read_fixed_native_http_body(stream, request, length.saturating_sub(accepted))?;
+    } else {
+        write_native_http_body_chunk(request, body_prefix)?;
+        read_until_eof_native_http_body(stream, request)?;
+    }
+
+    HttpResponse::new(status, headers, Vec::new())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_native_http_response_headers(
+    header_bytes: &[u8],
+) -> std::result::Result<(u16, Vec<HttpHeader>, Option<usize>, bool), HttpBridgeError> {
+    let text = std::str::from_utf8(header_bytes)
+        .map_err(|_| HttpBridgeError::invalid_response("HTTP response headers must be UTF-8"))?;
+    let mut lines = text.split("\r\n");
+    let status_line = lines.next().unwrap_or_default();
+    let status = parse_native_http_status(status_line)?;
+    let mut headers = Vec::new();
+    let mut content_length = None;
+    let mut chunked = false;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            return Err(HttpBridgeError::invalid_response(format!(
+                "invalid HTTP response header: {line}"
+            )));
+        };
+        let header = HttpHeader::new(name, value).map_err(|error| {
+            HttpBridgeError::invalid_response(format!("invalid HTTP response header: {error}"))
+        })?;
+        if header.name == "content-length" {
+            content_length = Some(header.value.parse::<usize>().map_err(|_| {
+                HttpBridgeError::invalid_response(format!(
+                    "invalid HTTP response content-length: {}",
+                    header.value
+                ))
+            })?);
+        }
+        if header.name == "transfer-encoding" && header.value.eq_ignore_ascii_case("chunked") {
+            chunked = true;
+        }
+        headers.push(header);
+    }
+    Ok((status, headers, content_length, chunked))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_native_http_status(status_line: &str) -> std::result::Result<u16, HttpBridgeError> {
+    let mut parts = status_line.split_whitespace();
+    let version = parts.next().unwrap_or_default();
+    let status = parts.next().unwrap_or_default();
+    if !matches!(version, "HTTP/1.0" | "HTTP/1.1") {
+        return Err(HttpBridgeError::invalid_response(format!(
+            "unsupported HTTP response version: {version}"
+        )));
+    }
+    status.parse::<u16>().map_err(|_| {
+        HttpBridgeError::invalid_response(format!("invalid HTTP response status: {status}"))
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_fixed_native_http_body(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+    mut remaining: usize,
+) -> std::result::Result<(), HttpBridgeError> {
+    let mut buffer = [0_u8; 8192];
+    while remaining > 0 {
+        if request.cancellation_token().is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        let read_len = buffer.len().min(remaining);
+        match stream.read(&mut buffer[..read_len]) {
+            Ok(0) => return Err(HttpBridgeError::transport("HTTP response body ended early")),
+            Ok(count) => {
+                remaining -= count;
+                write_native_http_body_chunk(request, buffer[..count].to_vec())?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(error) => {
+                return Err(HttpBridgeError::transport(format!(
+                    "unable to read HTTP response body: {error}"
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_until_eof_native_http_body(
+    stream: &mut TcpStream,
+    request: &HttpBridgeRequest,
+) -> std::result::Result<(), HttpBridgeError> {
+    let mut buffer = [0_u8; 8192];
+    loop {
+        if request.cancellation_token().is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(count) => write_native_http_body_chunk(request, buffer[..count].to_vec())?,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(error) => {
+                return Err(HttpBridgeError::transport(format!(
+                    "unable to read HTTP response body: {error}"
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_native_http_body_chunk(
+    request: &HttpBridgeRequest,
+    chunk: Vec<u8>,
+) -> std::result::Result<(), HttpBridgeError> {
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    request.write_body_chunk(chunk)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
 fn append_response_body(
     body: &mut Vec<u8>,
     chunk: Vec<u8>,
@@ -410,4 +798,109 @@ fn is_http_token_byte(byte: u8) -> bool {
             | b'|'
             | b'~'
     )
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn native_http_bridge_dispatches_local_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener should bind");
+        let address = listener.local_addr().expect("listener address should read");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("connection should arrive");
+            let request = read_test_http_request(&mut stream);
+            assert!(request.starts_with("POST /hello?x=1 HTTP/1.1\r\n"));
+            assert!(request.contains("Host: 127.0.0.1:"));
+            assert!(request.contains("x-test: yes\r\n"));
+            assert!(request.ends_with("\r\n\r\nrequest-body"));
+
+            stream
+                .write_all(
+                    b"HTTP/1.1 202 Accepted\r\nContent-Length: 11\r\nX-Reply: ok\r\n\r\nhello ",
+                )
+                .expect("response prefix should write");
+            stream
+                .write_all(b"world")
+                .expect("response suffix should write");
+        });
+
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let response = bridge
+            .request_blocking(
+                HttpRequest::new(
+                    "post",
+                    format!("http://{address}/hello?x=1"),
+                    vec![HttpHeader::new("x-test", "yes").expect("header should be valid")],
+                    b"request-body".to_vec(),
+                )
+                .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect("HTTP request should complete");
+        server.join().expect("server should finish");
+
+        assert_eq!(response.status, 202);
+        assert_eq!(response.body, b"hello world");
+        assert!(response
+            .headers
+            .contains(&HttpHeader::new("x-reply", "ok").expect("response header should be valid")));
+    }
+
+    #[test]
+    fn native_http_bridge_rejects_https_until_tls_adapter_exists() {
+        let (bridge, receiver) = HttpBridge::new(4);
+        let _worker = NativeHttpBridgeWorker::spawn(receiver);
+        let error = bridge
+            .request_blocking(
+                HttpRequest::new("GET", "https://example.test/", Vec::new(), Vec::new())
+                    .expect("request should be valid"),
+                HttpRequestLimits::default(),
+                CancellationSource::new().token(),
+            )
+            .expect_err("native worker should reject https");
+
+        assert_eq!(error.kind, HttpBridgeErrorKind::UnsupportedScheme);
+        assert!(error.message.contains("https"));
+    }
+
+    fn read_test_http_request(stream: &mut TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("read timeout should set");
+        let mut buffer = Vec::new();
+        let header_end = loop {
+            if let Some(index) = find_header_end(&buffer) {
+                break index;
+            }
+            let mut chunk = [0_u8; 1024];
+            let count = stream.read(&mut chunk).expect("request should read");
+            assert!(count > 0, "request should include headers");
+            buffer.extend_from_slice(&chunk[..count]);
+        };
+        let header = String::from_utf8(buffer[..header_end].to_vec())
+            .expect("request headers should be utf8");
+        let content_length = header
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    return Some(value.trim().parse::<usize>().expect("content length"));
+                }
+                None
+            })
+            .unwrap_or(0);
+        let body_start = header_end + 4;
+        while buffer.len() - body_start < content_length {
+            let mut chunk = [0_u8; 1024];
+            let count = stream.read(&mut chunk).expect("request body should read");
+            assert!(count > 0, "request body should be complete");
+            buffer.extend_from_slice(&chunk[..count]);
+        }
+        String::from_utf8(buffer).expect("request should be utf8")
+    }
 }

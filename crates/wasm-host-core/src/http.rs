@@ -100,6 +100,15 @@ pub trait GatewayHttpTransport: Send + Sync + 'static {
         request: GatewayHttpRequest,
         cancellation: CancellationToken,
     ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError>;
+
+    fn dispatch_with_response_writer(
+        &self,
+        request: GatewayHttpRequest,
+        response: GatewayHttpResponseWriter,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        response.respond(self.dispatch(request, cancellation)?)
+    }
 }
 
 #[derive(Debug)]
@@ -115,6 +124,11 @@ pub struct GatewayHttpRequest {
 pub struct GatewayHttpRequestBodyReader {
     buffered: Option<Vec<u8>>,
     stream_request: Option<HttpBridgeRequest>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GatewayHttpResponseWriter {
+    request: HttpBridgeRequest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -168,6 +182,24 @@ enum GatewayStreamWireRequestFrame {
     BodyEnd,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum GatewayStreamWireResponseFrame {
+    Response {
+        status: u16,
+        #[serde(default)]
+        headers: Vec<GatewayWireHeader>,
+    },
+    BodyChunk {
+        body_base64: String,
+    },
+    BodyEnd,
+    Error {
+        kind: String,
+        message: String,
+    },
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct GatewayWireHeader {
     name: String,
@@ -196,6 +228,13 @@ struct GatewayWireSuccess {
 struct GatewayWireError {
     kind: String,
     message: String,
+}
+
+struct GatewayStreamResponseDecoder {
+    writer: GatewayHttpResponseWriter,
+    buffer: Vec<u8>,
+    response: Option<(u16, Vec<HttpHeader>)>,
+    completed: bool,
 }
 
 #[derive(Debug)]
@@ -400,6 +439,46 @@ impl GatewayHttpRequestBodyReader {
     }
 }
 
+impl GatewayHttpResponseWriter {
+    fn new(request: HttpBridgeRequest) -> Self {
+        Self { request }
+    }
+
+    pub fn write_body_chunk(&self, chunk: Vec<u8>) -> std::result::Result<(), HttpBridgeError> {
+        self.request.write_body_chunk(chunk)
+    }
+
+    pub fn finish(
+        &self,
+        status: u16,
+        headers: Vec<HttpHeader>,
+        body: Vec<u8>,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        self.request
+            .respond(HttpResponse::new(status, headers, body)?)
+    }
+
+    pub fn respond(
+        &self,
+        response: GatewayHttpResponse,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        let GatewayHttpResponse {
+            status,
+            headers,
+            body,
+        } = response;
+        match body {
+            GatewayHttpResponseBody::Complete(body) => self.finish(status, headers, body),
+            GatewayHttpResponseBody::Chunks(chunks) => {
+                for chunk in chunks {
+                    self.write_body_chunk(chunk)?;
+                }
+                self.finish(status, headers, Vec::new())
+            }
+        }
+    }
+}
+
 impl GatewayHttpResponse {
     pub fn complete(
         status: u16,
@@ -489,6 +568,15 @@ impl GatewayHttpTransport for NativeGatewayHttpTransport {
             .map_err(map_gateway_endpoint_error)?;
 
         decode_gateway_endpoint_response(response)
+    }
+
+    fn dispatch_with_response_writer(
+        &self,
+        request: GatewayHttpRequest,
+        response: GatewayHttpResponseWriter,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        dispatch_gateway_endpoint_request(&self.endpoint, request, response, cancellation)
     }
 }
 
@@ -593,10 +681,168 @@ fn write_gateway_stream_frame(
     body.write_chunk_blocking(data)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn dispatch_gateway_endpoint_request(
+    endpoint: &str,
+    request: GatewayHttpRequest,
+    response: GatewayHttpResponseWriter,
+    cancellation: CancellationToken,
+) -> std::result::Result<(), HttpBridgeError> {
+    let url = parse_native_http_url(endpoint)?;
+    let mut stream = connect_native_http(&url, cancellation.clone())?;
+    stream
+        .set_read_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
+        .map_err(|error| {
+            HttpBridgeError::transport(format!("unable to set read timeout: {error}"))
+        })?;
+    stream
+        .set_write_timeout(Some(NATIVE_HTTP_IO_TIMEOUT))
+        .map_err(|error| {
+            HttpBridgeError::transport(format!("unable to set write timeout: {error}"))
+        })?;
+
+    write_gateway_endpoint_request(&mut stream, &url, request, cancellation.clone())?;
+    let head = read_gateway_endpoint_response_head(&mut stream, &cancellation)?;
+    validate_gateway_endpoint_status(head.status)?;
+    if is_gateway_stream_response(&head.headers) {
+        let mut decoder = GatewayStreamResponseDecoder::new(response);
+        read_gateway_endpoint_response_body_chunks(&mut stream, &cancellation, head, |chunk| {
+            decoder.push(chunk)
+        })?;
+        decoder.finish()
+    } else {
+        let status = head.status;
+        let headers = head.headers.clone();
+        let mut body = Vec::new();
+        read_gateway_endpoint_response_body_chunks(&mut stream, &cancellation, head, |chunk| {
+            append_response_body(&mut body, chunk, HTTP_GATEWAY_RESPONSE_BODY_LIMIT)
+        })?;
+        response.respond(decode_gateway_endpoint_response(HttpResponse::new(
+            status, headers, body,
+        )?)?)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_gateway_endpoint_request(
+    stream: &mut TcpStream,
+    url: &NativeHttpUrl,
+    request: GatewayHttpRequest,
+    cancellation: CancellationToken,
+) -> std::result::Result<(), HttpBridgeError> {
+    write_http_line(
+        stream,
+        format_args!("POST {} HTTP/1.1\r\n", url.request_target),
+    )?;
+    write_http_line(stream, format_args!("Host: {}\r\n", url.authority))?;
+    write_http_line(
+        stream,
+        format_args!("Accept: application/json, application/x-ndjson\r\n"),
+    )?;
+    write_http_line(stream, format_args!("Connection: close\r\n"))?;
+
+    if request.body.is_streaming() {
+        write_http_line(
+            stream,
+            format_args!("Content-Type: application/x-ndjson\r\n"),
+        )?;
+        write_http_line(stream, format_args!("Transfer-Encoding: chunked\r\n\r\n"))?;
+        write_gateway_streaming_request_body_to_http(stream, request, cancellation)
+    } else {
+        let wire_request = encode_gateway_wire_request(request)?;
+        let body = serde_json::to_vec(&wire_request).map_err(|error| {
+            HttpBridgeError::invalid_request(format!(
+                "unable to encode HTTP gateway request: {error}"
+            ))
+        })?;
+        write_http_line(stream, format_args!("Content-Type: application/json\r\n"))?;
+        write_http_line(
+            stream,
+            format_args!("Content-Length: {}\r\n\r\n", body.len()),
+        )?;
+        stream.write_all(&body).map_err(|error| {
+            HttpBridgeError::transport(format!("unable to write HTTP gateway request: {error}"))
+        })
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_gateway_streaming_request_body_to_http(
+    stream: &mut TcpStream,
+    mut request: GatewayHttpRequest,
+    cancellation: CancellationToken,
+) -> std::result::Result<(), HttpBridgeError> {
+    write_gateway_stream_frame_to_http(
+        stream,
+        &GatewayStreamWireRequestFrame::Request {
+            schema: 1,
+            id: request.id,
+            method: request.method,
+            url: request.url,
+            headers: request
+                .headers
+                .into_iter()
+                .map(|header| GatewayWireHeader {
+                    name: header.name,
+                    value: header.value,
+                })
+                .collect(),
+        },
+        &cancellation,
+    )?;
+    while let Some(chunk) = request.body.read_chunk_blocking()? {
+        write_gateway_stream_frame_to_http(
+            stream,
+            &GatewayStreamWireRequestFrame::BodyChunk {
+                body_base64: BASE64.encode(chunk),
+            },
+            &cancellation,
+        )?;
+    }
+    write_gateway_stream_frame_to_http(
+        stream,
+        &GatewayStreamWireRequestFrame::BodyEnd,
+        &cancellation,
+    )?;
+    write_http_line(stream, format_args!("0\r\n\r\n"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_gateway_stream_frame_to_http(
+    stream: &mut TcpStream,
+    frame: &GatewayStreamWireRequestFrame,
+    cancellation: &CancellationToken,
+) -> std::result::Result<(), HttpBridgeError> {
+    if cancellation.is_cancelled() {
+        return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+    }
+    let mut data = serde_json::to_vec(frame).map_err(|error| {
+        HttpBridgeError::invalid_request(format!("unable to encode HTTP gateway frame: {error}"))
+    })?;
+    data.push(b'\n');
+    write_http_line(stream, format_args!("{:x}\r\n", data.len()))?;
+    stream.write_all(&data).map_err(|error| {
+        HttpBridgeError::transport(format!("unable to write HTTP gateway request: {error}"))
+    })?;
+    write_http_line(stream, format_args!("\r\n"))
+}
+
 fn decode_gateway_endpoint_response(
     response: HttpResponse,
 ) -> std::result::Result<GatewayHttpResponse, HttpBridgeError> {
-    match response.status {
+    validate_gateway_endpoint_status(response.status)?;
+
+    let wire_response: GatewayWireResponse =
+        serde_json::from_slice(&response.body).map_err(|error| {
+            HttpBridgeError::invalid_response(format!(
+                "invalid HTTP gateway response JSON: {error}"
+            ))
+        })?;
+    decode_gateway_wire_response(wire_response)
+}
+
+fn validate_gateway_endpoint_status(status: u16) -> std::result::Result<(), HttpBridgeError> {
+    match status {
         200..=299 => {}
         401 | 403 => {
             return Err(HttpBridgeError::auth_failure(
@@ -614,14 +860,447 @@ fn decode_gateway_endpoint_response(
             )))
         }
     }
+    Ok(())
+}
 
-    let wire_response: GatewayWireResponse =
-        serde_json::from_slice(&response.body).map_err(|error| {
-            HttpBridgeError::invalid_response(format!(
-                "invalid HTTP gateway response JSON: {error}"
-            ))
-        })?;
-    decode_gateway_wire_response(wire_response)
+impl GatewayStreamResponseDecoder {
+    fn new(writer: GatewayHttpResponseWriter) -> Self {
+        Self {
+            writer,
+            buffer: Vec::new(),
+            response: None,
+            completed: false,
+        }
+    }
+
+    fn push(&mut self, chunk: Vec<u8>) -> std::result::Result<(), HttpBridgeError> {
+        self.buffer.extend_from_slice(&chunk);
+        if self.buffer.len() > HTTP_GATEWAY_RESPONSE_BODY_LIMIT {
+            return Err(HttpBridgeError::response_too_large(
+                "HTTP gateway stream frame exceeded bridge limit",
+            ));
+        }
+        while let Some(index) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.buffer.drain(..=index).collect::<Vec<_>>();
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            if line.is_empty() {
+                continue;
+            }
+            let frame: GatewayStreamWireResponseFrame =
+                serde_json::from_slice(&line).map_err(|error| {
+                    HttpBridgeError::invalid_response(format!(
+                        "invalid HTTP gateway stream frame: {error}"
+                    ))
+                })?;
+            self.apply(frame)?;
+        }
+        Ok(())
+    }
+
+    fn apply(
+        &mut self,
+        frame: GatewayStreamWireResponseFrame,
+    ) -> std::result::Result<(), HttpBridgeError> {
+        if self.completed {
+            return Err(HttpBridgeError::invalid_response(
+                "HTTP gateway stream sent a frame after body_end",
+            ));
+        }
+
+        match frame {
+            GatewayStreamWireResponseFrame::Response { status, headers } => {
+                if self.response.is_some() {
+                    return Err(HttpBridgeError::invalid_response(
+                        "HTTP gateway stream sent multiple response frames",
+                    ));
+                }
+                let headers = headers
+                    .into_iter()
+                    .map(|header| HttpHeader::new(header.name, header.value))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                self.response = Some((status, headers));
+                Ok(())
+            }
+            GatewayStreamWireResponseFrame::BodyChunk { body_base64 } => {
+                if self.response.is_none() {
+                    return Err(HttpBridgeError::invalid_response(
+                        "HTTP gateway stream body_chunk arrived before response",
+                    ));
+                }
+                self.writer
+                    .write_body_chunk(decode_gateway_body(&body_base64)?)
+            }
+            GatewayStreamWireResponseFrame::BodyEnd => {
+                let Some((status, headers)) = self.response.take() else {
+                    return Err(HttpBridgeError::invalid_response(
+                        "HTTP gateway stream body_end arrived before response",
+                    ));
+                };
+                self.completed = true;
+                self.writer.finish(status, headers, Vec::new())
+            }
+            GatewayStreamWireResponseFrame::Error { kind, message } => {
+                Err(decode_gateway_wire_error(GatewayWireError {
+                    kind,
+                    message,
+                })?)
+            }
+        }
+    }
+
+    fn finish(self) -> std::result::Result<(), HttpBridgeError> {
+        if self.buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
+            return Err(HttpBridgeError::invalid_response(
+                "HTTP gateway stream ended with a partial frame",
+            ));
+        }
+        if !self.completed {
+            return Err(HttpBridgeError::invalid_response(
+                "HTTP gateway stream did not send body_end",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_gateway_stream_response(headers: &[HttpHeader]) -> bool {
+    native_http_header_value(headers, "content-type").is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .eq_ignore_ascii_case("application/x-ndjson")
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gateway_endpoint_response_head(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+) -> std::result::Result<NativeHttpResponseHead, HttpBridgeError> {
+    let mut buffer = Vec::new();
+    let header_end = loop {
+        if cancellation.is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        if let Some(index) = find_header_end(&buffer) {
+            break index;
+        }
+        if buffer.len() > NATIVE_HTTP_HEADER_LIMIT {
+            return Err(HttpBridgeError::invalid_response(format!(
+                "HTTP response headers exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
+            )));
+        }
+        if read_more_gateway_http(stream, cancellation, &mut buffer, "HTTP response headers")? == 0
+        {
+            return Err(HttpBridgeError::transport(
+                "HTTP connection closed before response headers",
+            ));
+        }
+    };
+
+    let header_bytes = &buffer[..header_end];
+    let body_start = header_end + 4;
+    let body_prefix = buffer[body_start..].to_vec();
+    let (status, headers, content_length, chunked) =
+        parse_native_http_response_headers(header_bytes)?;
+    Ok(NativeHttpResponseHead {
+        status,
+        headers,
+        content_length,
+        chunked,
+        body_prefix,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gateway_endpoint_response_body_chunks<Consumer>(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+    head: NativeHttpResponseHead,
+    mut consumer: Consumer,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
+    let mut encoded_bytes = 0_usize;
+    if head.chunked {
+        read_gateway_chunked_http_body(
+            stream,
+            cancellation,
+            head.body_prefix,
+            &mut encoded_bytes,
+            consumer,
+        )
+    } else if let Some(length) = head.content_length {
+        let accepted = head.body_prefix.len().min(length);
+        push_gateway_response_chunk(
+            &mut consumer,
+            &mut encoded_bytes,
+            head.body_prefix[..accepted].to_vec(),
+        )?;
+        read_gateway_fixed_http_body(
+            stream,
+            cancellation,
+            length.saturating_sub(accepted),
+            &mut encoded_bytes,
+            consumer,
+        )
+    } else {
+        push_gateway_response_chunk(&mut consumer, &mut encoded_bytes, head.body_prefix)?;
+        read_gateway_until_eof_http_body(stream, cancellation, &mut encoded_bytes, consumer)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gateway_chunked_http_body<Consumer>(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+    mut buffer: Vec<u8>,
+    encoded_bytes: &mut usize,
+    mut consumer: Consumer,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
+    loop {
+        let size_line = read_gateway_http_line(
+            stream,
+            cancellation,
+            &mut buffer,
+            "chunked HTTP response chunk size",
+        )?;
+        let mut remaining = parse_native_http_chunk_size(&size_line)?;
+        if remaining == 0 {
+            read_gateway_http_trailers(stream, cancellation, &mut buffer)?;
+            return Ok(());
+        }
+
+        while remaining > 0 {
+            if buffer.is_empty()
+                && read_more_gateway_http(
+                    stream,
+                    cancellation,
+                    &mut buffer,
+                    "chunked HTTP response body",
+                )? == 0
+            {
+                return Err(HttpBridgeError::transport(
+                    "HTTP connection closed before chunked response body completed",
+                ));
+            }
+
+            let accepted = buffer.len().min(remaining);
+            push_gateway_response_chunk(&mut consumer, encoded_bytes, buffer[..accepted].to_vec())?;
+            buffer.drain(..accepted);
+            remaining -= accepted;
+        }
+
+        ensure_gateway_http_buffer(
+            stream,
+            cancellation,
+            &mut buffer,
+            2,
+            "chunked HTTP response chunk terminator",
+        )?;
+        if &buffer[..2] != b"\r\n" {
+            return Err(HttpBridgeError::invalid_response(
+                "chunked HTTP response chunk missing CRLF terminator",
+            ));
+        }
+        buffer.drain(..2);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gateway_fixed_http_body<Consumer>(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+    mut remaining: usize,
+    encoded_bytes: &mut usize,
+    mut consumer: Consumer,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
+    let mut buffer = [0_u8; 8192];
+    while remaining > 0 {
+        if cancellation.is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        let read_len = buffer.len().min(remaining);
+        match stream.read(&mut buffer[..read_len]) {
+            Ok(0) => return Err(HttpBridgeError::transport("HTTP response body ended early")),
+            Ok(count) => {
+                remaining -= count;
+                push_gateway_response_chunk(
+                    &mut consumer,
+                    encoded_bytes,
+                    buffer[..count].to_vec(),
+                )?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(error) => {
+                return Err(HttpBridgeError::transport(format!(
+                    "unable to read HTTP response body: {error}"
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gateway_until_eof_http_body<Consumer>(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+    encoded_bytes: &mut usize,
+    mut consumer: Consumer,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
+    let mut buffer = [0_u8; 8192];
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(count) => {
+                push_gateway_response_chunk(
+                    &mut consumer,
+                    encoded_bytes,
+                    buffer[..count].to_vec(),
+                )?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(error) => {
+                return Err(HttpBridgeError::transport(format!(
+                    "unable to read HTTP response body: {error}"
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn push_gateway_response_chunk<Consumer>(
+    consumer: &mut Consumer,
+    encoded_bytes: &mut usize,
+    chunk: Vec<u8>,
+) -> std::result::Result<(), HttpBridgeError>
+where
+    Consumer: FnMut(Vec<u8>) -> std::result::Result<(), HttpBridgeError>,
+{
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    *encoded_bytes = encoded_bytes
+        .checked_add(chunk.len())
+        .ok_or_else(|| response_too_large_error(HTTP_GATEWAY_RESPONSE_BODY_LIMIT))?;
+    if *encoded_bytes > HTTP_GATEWAY_RESPONSE_BODY_LIMIT {
+        return Err(response_too_large_error(HTTP_GATEWAY_RESPONSE_BODY_LIMIT));
+    }
+    consumer(chunk)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gateway_http_trailers(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+    buffer: &mut Vec<u8>,
+) -> std::result::Result<(), HttpBridgeError> {
+    loop {
+        let line = read_gateway_http_line(
+            stream,
+            cancellation,
+            buffer,
+            "chunked HTTP response trailers",
+        )?;
+        if line.is_empty() {
+            return Ok(());
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gateway_http_line(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+    buffer: &mut Vec<u8>,
+    context: &str,
+) -> std::result::Result<Vec<u8>, HttpBridgeError> {
+    loop {
+        if let Some(index) = find_crlf(buffer) {
+            let line = buffer[..index].to_vec();
+            buffer.drain(..index + 2);
+            return Ok(line);
+        }
+        if buffer.len() > NATIVE_HTTP_HEADER_LIMIT {
+            return Err(HttpBridgeError::invalid_response(format!(
+                "{context} exceeded {NATIVE_HTTP_HEADER_LIMIT} bytes"
+            )));
+        }
+        if read_more_gateway_http(stream, cancellation, buffer, context)? == 0 {
+            return Err(HttpBridgeError::transport(format!(
+                "HTTP connection closed before {context}"
+            )));
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn ensure_gateway_http_buffer(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+    buffer: &mut Vec<u8>,
+    length: usize,
+    context: &str,
+) -> std::result::Result<(), HttpBridgeError> {
+    while buffer.len() < length {
+        if read_more_gateway_http(stream, cancellation, buffer, context)? == 0 {
+            return Err(HttpBridgeError::transport(format!(
+                "HTTP connection closed before {context}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_more_gateway_http(
+    stream: &mut TcpStream,
+    cancellation: &CancellationToken,
+    buffer: &mut Vec<u8>,
+    context: &str,
+) -> std::result::Result<usize, HttpBridgeError> {
+    let mut chunk = [0_u8; 4096];
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(HttpBridgeError::cancelled("HTTP request cancelled"));
+        }
+        match stream.read(&mut chunk) {
+            Ok(count) => {
+                buffer.extend_from_slice(&chunk[..count]);
+                return Ok(count);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(error) => {
+                return Err(HttpBridgeError::transport(format!(
+                    "unable to read {context}: {error}"
+                )))
+            }
+        }
+    }
 }
 
 fn decode_gateway_wire_response(
@@ -1076,7 +1755,7 @@ fn dispatch_gateway_http_request(
     request: &HttpBridgeRequest,
     transport: &dyn GatewayHttpTransport,
 ) -> std::result::Result<(), HttpBridgeError> {
-    let response = transport.dispatch(
+    transport.dispatch_with_response_writer(
         GatewayHttpRequest {
             id: request.id,
             method: request.request.method.clone(),
@@ -1084,24 +1763,9 @@ fn dispatch_gateway_http_request(
             headers: request.request.headers.clone(),
             body: GatewayHttpRequestBodyReader::new(request),
         },
+        GatewayHttpResponseWriter::new(request.clone()),
         request.cancellation_token(),
-    )?;
-    let GatewayHttpResponse {
-        status,
-        headers,
-        body,
-    } = response;
-    match body {
-        GatewayHttpResponseBody::Complete(body) => {
-            request.respond(HttpResponse::new(status, headers, body)?)
-        }
-        GatewayHttpResponseBody::Chunks(chunks) => {
-            for chunk in chunks {
-                request.write_body_chunk(chunk)?;
-            }
-            request.respond(HttpResponse::new(status, headers, Vec::new())?)
-        }
-    }
+    )
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -203,6 +203,18 @@ guest device:
 {"ok":false,"error":{"kind":"cors","message":"request blocked by gateway policy"}}
 ```
 
+For streaming response bodies, the gateway may return
+`Content-Type: application/x-ndjson` with chunked transfer encoding. The first
+line is a response frame, followed by zero or more body chunks, then an
+explicit end frame:
+
+```json
+{"type":"response","status":200,"headers":[]}
+{"type":"body_chunk","body_base64":"c3RyZWFtLQ=="}
+{"type":"body_chunk","body_base64":"b2s="}
+{"type":"body_end"}
+```
+
 For streaming request bodies, the terminal gateway sends
 `Content-Type: application/x-ndjson` with chunked transfer encoding. The first
 line is a request frame, followed by zero or more body chunks, then an explicit
@@ -218,6 +230,8 @@ end frame:
 The buffered JSON envelope is acceptable for small, non-streaming requests.
 Streaming request frames are required when the guest provides a streaming upload
 or when an adapter cannot safely collect the full request body before dispatch.
+Streaming response frames are required when the gateway cannot safely collect
+the full upstream response body before replying.
 
 Endpoint URLs are configuration, not telemetry. Runner events expose the bridge
 mode as `gateway` but must not include the configured gateway URL.

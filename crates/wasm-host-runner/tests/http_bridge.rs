@@ -312,6 +312,38 @@ fn gateway_http_bridge_error_is_visible_to_wasi_guest() {
 }
 
 #[test]
+fn gateway_http_bridge_streams_response_chunks_to_wasi_guest() {
+    let mut gateway = GatewayHttpServer::spawn_streaming_response(vec![
+        json!({
+            "type": "response",
+            "status": 206,
+            "headers": [{"name": "x-gateway", "value": "stream"}]
+        }),
+        json!({"type": "body_chunk", "body_base64": "c3RyZWFtLQ=="}),
+        json!({"type": "body_chunk", "body_base64": "b2s="}),
+        json!({"type": "body_end"}),
+    ]);
+    let webc = http_bridge_fixture_webc("https://example.test/http-bridge-stream")
+        .expect("build HTTP bridge fixture");
+    let output = run_http_bridge_fixture(
+        webc,
+        "http-gateway-stream-response-fixture.webc",
+        &format!("gateway={}", gateway.url()),
+    );
+    let response = parse_fixture_stdout(&output);
+
+    assert_eq!(response["ok"], true, "guest response: {response}");
+    assert_eq!(response["response"]["status"], 206);
+    assert_eq!(response["response"]["body_base64"], "c3RyZWFtLW9r");
+
+    let request = gateway.request();
+    assert_eq!(
+        request.body["url"],
+        "https://example.test/http-bridge-stream"
+    );
+}
+
+#[test]
 fn gateway_http_bridge_preserves_streaming_upload_chunks() {
     let mut gateway = GatewayHttpServer::spawn(json!({
         "ok": true,
@@ -612,6 +644,11 @@ struct GatewayHttpServer {
     handle: Option<thread::JoinHandle<()>>,
 }
 
+enum GatewayHttpResponseSpec {
+    Json(Value),
+    Stream(Vec<Value>),
+}
+
 struct GatewayHttpRequestCapture {
     head: String,
     body: Value,
@@ -620,23 +657,21 @@ struct GatewayHttpRequestCapture {
 
 impl GatewayHttpServer {
     fn spawn(response_body: Value) -> Self {
+        Self::spawn_response(GatewayHttpResponseSpec::Json(response_body))
+    }
+
+    fn spawn_streaming_response(frames: Vec<Value>) -> Self {
+        Self::spawn_response(GatewayHttpResponseSpec::Stream(frames))
+    }
+
+    fn spawn_response(response: GatewayHttpResponseSpec) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind gateway HTTP server");
         let address = listener.local_addr().expect("read gateway server address");
         let (request_sender, request_receiver) = mpsc::sync_channel(1);
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept gateway request");
             let request = read_gateway_http_request(&mut stream);
-            let response_body =
-                serde_json::to_vec(&response_body).expect("gateway response should encode");
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                response_body.len()
-            )
-            .expect("write gateway response headers");
-            stream
-                .write_all(&response_body)
-                .expect("write gateway response body");
+            write_gateway_response(&mut stream, response);
             request_sender
                 .send(request)
                 .expect("send captured gateway request");
@@ -663,6 +698,45 @@ impl GatewayHttpServer {
                 .expect("gateway HTTP server should exit cleanly");
         }
         request
+    }
+}
+
+fn write_gateway_response(stream: &mut TcpStream, response: GatewayHttpResponseSpec) {
+    match response {
+        GatewayHttpResponseSpec::Json(response_body) => {
+            let response_body =
+                serde_json::to_vec(&response_body).expect("gateway response should encode");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response_body.len()
+            )
+            .expect("write gateway response headers");
+            stream
+                .write_all(&response_body)
+                .expect("write gateway response body");
+        }
+        GatewayHttpResponseSpec::Stream(frames) => {
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .expect("write gateway stream response headers");
+            for frame in frames {
+                let mut frame = serde_json::to_vec(&frame).expect("gateway frame should encode");
+                frame.push(b'\n');
+                write!(stream, "{:x}\r\n", frame.len()).expect("write gateway chunk size");
+                stream
+                    .write_all(&frame)
+                    .expect("write gateway stream frame");
+                stream
+                    .write_all(b"\r\n")
+                    .expect("write gateway chunk terminator");
+            }
+            stream
+                .write_all(b"0\r\n\r\n")
+                .expect("write gateway stream response end");
+        }
     }
 }
 

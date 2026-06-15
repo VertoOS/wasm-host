@@ -123,6 +123,11 @@ Required conformance groups:
 - tool execution through packaged shell commands
 - browser permission and unsupported-capability errors
 
+The initial HTTP bridge contract is adapter-owned request dispatch with
+normalized methods, URLs, headers, status, body limits, classified errors, and
+cancellation. Guest syscall or socket integration is a later layer on top of
+that contract.
+
 ## Full CLI Target
 
 The browser-capable CLI target should be a sandboxed CLI runtime, not a native

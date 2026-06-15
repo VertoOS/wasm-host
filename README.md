@@ -19,6 +19,8 @@ until the boundaries are stable enough to split.
 - The runner supports mounts, cwd, env, env pass-through, stdin files, output
   limits, and wall-time limits.
 - The host profile and monorepo layout are documented.
+- Core conformance covers the first HTTP bridge contract for adapter-owned
+  request dispatch, clean errors, response limits, and cancellation.
 - Browser adapter, conformance fixtures, C ABI, and language bindings are
   scaffolded but not implemented yet.
 

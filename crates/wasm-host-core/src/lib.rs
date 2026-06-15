@@ -37,6 +37,12 @@ use wasmer_wasix::{
 };
 use webc::metadata::annotations::Wasi;
 
+mod http;
+pub use http::{
+    HttpBridge, HttpBridgeError, HttpBridgeErrorKind, HttpBridgeRequest, HttpHeader, HttpRequest,
+    HttpRequestLimits, HttpResponse,
+};
+
 const COMMAND_PATH_PREFIXES: &[&str] = &["/bin", "/usr/bin"];
 const VIRTUAL_EXEC_BRIDGE_PATH: &str = "/dev/wasm-host-virtual-exec";
 const VIRTUAL_EXECUTABLE_WASM: &str = r#"

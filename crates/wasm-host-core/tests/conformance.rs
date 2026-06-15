@@ -10,8 +10,9 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::Value;
 use tempfile::tempdir;
 use wasm_host_core::{
-    CancellationSource, EventBus, HostMount, HostProfile, Limits, RunRequest, SandboxState,
-    VirtualExecutableBridge, VirtualProcessRequest,
+    CancellationSource, EventBus, HostMount, HostProfile, HttpBridge, HttpBridgeError,
+    HttpBridgeErrorKind, HttpHeader, HttpRequest, HttpRequestLimits, HttpResponse, Limits,
+    RunRequest, SandboxState, VirtualExecutableBridge, VirtualProcessRequest,
 };
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -352,6 +353,171 @@ fn browser_strict_profile_rejects_host_mounts() {
         error.to_string().contains("native-full profile"),
         "unexpected profile error: {error:#}"
     );
+}
+
+#[test]
+fn http_bridge_normalizes_and_dispatches_requests() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        assert_eq!(request.id, 1);
+        assert_eq!(request.request.method, "GET");
+        assert_eq!(request.request.url, "https://example.test/api");
+        assert_eq!(
+            request.request.headers,
+            [HttpHeader::new("accept", "application/json").expect("header should normalize")]
+        );
+        assert_eq!(request.request.body, b"request-body");
+
+        request
+            .respond(
+                HttpResponse::new(
+                    201,
+                    vec![HttpHeader::new("Content-Type", "text/plain").expect("valid header")],
+                    b"response-body".to_vec(),
+                )
+                .expect("response should normalize"),
+            )
+            .expect("HTTP response should send");
+    });
+
+    let response = bridge
+        .request_blocking(
+            HttpRequest::new(
+                " get ",
+                " HTTPS://example.test/api ",
+                vec![HttpHeader::new(" Accept ", " application/json ").expect("valid header")],
+                b"request-body".to_vec(),
+            )
+            .expect("request should normalize"),
+            HttpRequestLimits::default(),
+            CancellationSource::new().token(),
+        )
+        .expect("HTTP request should complete");
+    handler.join().expect("handler should finish");
+
+    assert_eq!(response.status, 201);
+    assert_eq!(
+        response.headers,
+        [HttpHeader::new("content-type", "text/plain").expect("valid header")]
+    );
+    assert_eq!(response.body, b"response-body");
+}
+
+#[test]
+fn http_bridge_rejects_unsupported_schemes() {
+    let error = HttpRequest::new("GET", "file:///workspace/data.txt", Vec::new(), Vec::new())
+        .expect_err("file scheme should be rejected");
+    assert_eq!(error.kind, HttpBridgeErrorKind::UnsupportedScheme);
+    assert!(error.message.contains("file"));
+}
+
+#[test]
+fn http_bridge_preserves_handler_errors() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        request
+            .fail(HttpBridgeError::gateway_unavailable(
+                "local gateway is not running",
+            ))
+            .expect("HTTP error should send");
+    });
+
+    let error = bridge
+        .request_blocking(
+            HttpRequest::new("POST", "https://example.test/api", Vec::new(), Vec::new())
+                .expect("request should normalize"),
+            HttpRequestLimits::default(),
+            CancellationSource::new().token(),
+        )
+        .expect_err("handler error should be returned");
+    handler.join().expect("handler should finish");
+
+    assert_eq!(error.kind, HttpBridgeErrorKind::GatewayUnavailable);
+    assert_eq!(error.message, "local gateway is not running");
+}
+
+#[test]
+fn http_bridge_enforces_response_body_limit() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        request
+            .respond(
+                HttpResponse::new(200, Vec::new(), b"abcde".to_vec())
+                    .expect("response should normalize"),
+            )
+            .expect("HTTP response should send");
+    });
+
+    let error = bridge
+        .request_blocking(
+            HttpRequest::new("GET", "https://example.test/api", Vec::new(), Vec::new())
+                .expect("request should normalize"),
+            HttpRequestLimits {
+                response_body_bytes: 4,
+                wall_time: Some(Duration::from_secs(5)),
+            },
+            CancellationSource::new().token(),
+        )
+        .expect_err("oversized response should fail");
+    handler.join().expect("handler should finish");
+
+    assert_eq!(error.kind, HttpBridgeErrorKind::ResponseTooLarge);
+    assert_eq!(error.message, "HTTP response body exceeded 4 bytes");
+}
+
+#[test]
+fn http_bridge_external_cancellation_cancels_pending_request() {
+    let (bridge, mut http_receiver) = HttpBridge::new(4);
+    let cancellation = CancellationSource::new();
+    let (handler_ready_sender, handler_ready_receiver) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let request = http_receiver
+            .blocking_recv()
+            .expect("HTTP request should arrive");
+        handler_ready_sender
+            .send(())
+            .expect("ready signal should send");
+
+        let started = Instant::now();
+        while !request.cancellation_token().is_cancelled() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "HTTP request cancellation should be delivered"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    let token = cancellation.token();
+    let runner = thread::spawn(move || {
+        bridge.request_blocking(
+            HttpRequest::new("GET", "https://example.test/api", Vec::new(), Vec::new())
+                .expect("request should normalize"),
+            HttpRequestLimits::default(),
+            token,
+        )
+    });
+    handler_ready_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("handler should receive request");
+    cancellation.cancel();
+    handler.join().expect("handler should finish");
+
+    let error = runner
+        .join()
+        .expect("runner thread should finish")
+        .expect_err("external cancellation should fail the HTTP request");
+    assert_eq!(error.kind, HttpBridgeErrorKind::Cancelled);
+    assert_eq!(error.message, "HTTP request cancelled");
 }
 
 #[test]

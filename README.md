@@ -59,8 +59,8 @@ until the boundaries are stable enough to split.
   metadata, and
   directory listing, volatile `/tmp` scratch directory create/rename/remove and
   file advise/allocate/write/positioned-write/renumber/rename/truncate/sync,
-  stdio fd stat, stdout/stderr, and exit status capture for the narrow fixture
-  import set.
+  stdio fd stat, descriptor rights reduction, stdout/stderr, and exit status
+  capture for the narrow fixture import set.
 - The browser adapter package has an automated command-worker-boundary smoke
   for the Codex `codex --version` contract, plus an optional local-artifact
   variant when `codex-wasix/dist` outputs are present.

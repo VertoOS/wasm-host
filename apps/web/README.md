@@ -68,7 +68,8 @@ Current scope:
   for modules that import args/env, realtime and monotonic clocks, cooperative
   `sched_yield`, Web Crypto random bytes, preloaded fd 0 stdin through
   `fd_read`, stdio descriptor metadata through `fd_fdstat_get` and
-  `fd_fdstat_set_flags`, a read-only `/workspace` package-file preopen through
+  `fd_fdstat_set_flags`, descriptor rights reduction through
+  `fd_fdstat_set_rights`, a read-only `/workspace` package-file preopen through
   `fd_prestat_get`, `fd_prestat_dir_name`, `path_open`, `path_filestat_get`,
   `fd_readdir`, `fd_filestat_get`, `fd_close`, `fd_renumber`, and file-backed
   `fd_read`, `fd_pread`, `fd_pwrite`, `fd_seek`, `fd_tell`, and `fd_advise`,
@@ -123,7 +124,8 @@ Current scope:
   streaming overflow, and sha256 mismatch handling.
 - `test/wasi-module.test.js` covers raw WASI module byte loading, argv/env
   plumbing, clocks, cooperative yield, random bytes, stdin, read-only package
-  files, stdio fd stat, path/file metadata, directory listing and cookies, file
+  files, stdio fd stat, descriptor rights reduction, path/file metadata,
+  directory listing and cookies, file
   seek/tell/advice/pread/pwrite behavior, descriptor renumbering, volatile
   scratch-file allocation/truncate/sync and directory create/remove operations,
   scratch path rename behavior,

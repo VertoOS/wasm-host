@@ -441,6 +441,8 @@ class WasiPreview1Runtime {
           fdflags,
           openedFdPtr,
         ),
+      path_filestat_get: (fd, flags, pathPtr, pathLen, filestatPtr) =>
+        this.pathFilestatGet(fd, flags, pathPtr, pathLen, filestatPtr),
       random_get: (bufferPtr, bufferLength) =>
         this.randomGet(bufferPtr, bufferLength),
       proc_exit: (exitCode) => {
@@ -644,6 +646,23 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
+  pathFilestatGet(fd, flags, pathPtr, pathLen, filestatPtr) {
+    this.throwIfAborted();
+    if (fd !== WORKSPACE_FD) {
+      return this.fdStat(fd) ? ERRNO_ACCESS : ERRNO_BADF;
+    }
+    if ((flags & ~WASI_LOOKUP_SYMLINK_FOLLOW) !== 0) {
+      return ERRNO_INVAL;
+    }
+
+    const stat = this.pathStat(this.readString(pathPtr, pathLen));
+    if (stat.errno != null) {
+      return stat.errno;
+    }
+    this.writeFilestat(filestatPtr, stat.filetype, stat.size ?? 0);
+    return ERRNO_SUCCESS;
+  }
+
   fdPrestatGet(fd, prestatPtr) {
     this.throwIfAborted();
     if (fd !== WORKSPACE_FD) {
@@ -714,6 +733,31 @@ class WasiPreview1Runtime {
     });
     this.writeU32(openedFdPtr, openedFd);
     return ERRNO_SUCCESS;
+  }
+
+  pathStat(pathValue) {
+    const pathText = String(pathValue ?? "");
+    if (pathText === "") {
+      return { errno: ERRNO_NOENT };
+    }
+    const path = normalizeWasiLookupPath(pathText);
+    if (path == null) {
+      return { errno: ERRNO_NOTCAPABLE };
+    }
+    if (path === "") {
+      return {
+        filetype: WASI_FILETYPE_DIRECTORY,
+        size: 0,
+      };
+    }
+    const file = this.files.get(path);
+    if (!file) {
+      return { errno: ERRNO_NOENT };
+    }
+    return {
+      filetype: WASI_FILETYPE_REGULAR_FILE,
+      size: file.bytes.byteLength,
+    };
   }
 
   fdStat(fd) {
@@ -990,6 +1034,14 @@ function normalizeWasiPath(value) {
     return null;
   }
   return normalizeRelativeWasiPath(path);
+}
+
+function normalizeWasiLookupPath(value) {
+  const path = String(value ?? "");
+  if (path === ".") {
+    return "";
+  }
+  return normalizeWasiPath(path);
 }
 
 function normalizeRelativeWasiPath(path) {

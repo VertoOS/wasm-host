@@ -297,12 +297,12 @@ package-file fixtures:
 `args_sizes_get`, `args_get`, `clock_res_get`, `clock_time_get`,
 `environ_sizes_get`, `environ_get`, `fd_close`, `fd_filestat_get`,
 `fd_prestat_dir_name`, `fd_prestat_get`, `fd_read`, `fd_seek`, `fd_tell`,
-`fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_write`, `path_open`, `random_get`,
-and `proc_exit`. This runner captures stdout, stderr, and exit status for the
-interim browser smoke path and can expose explicit package files through a
-read-only `/workspace` preopen. It is not a general WASIX runtime and does not
-provide writable or persistent filesystems, sockets, threads, or WebC metadata
-execution.
+`fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_write`, `path_filestat_get`,
+`path_open`, `random_get`, and `proc_exit`. This runner captures stdout,
+stderr, and exit status for the interim browser smoke path and can expose
+explicit package files through a read-only `/workspace` preopen. It is not a
+general WASIX runtime and does not provide writable or persistent filesystems,
+sockets, threads, or WebC metadata execution.
 
 The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex

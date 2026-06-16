@@ -1,3 +1,4 @@
+import { HttpBridgeError } from "./http.js";
 import { createDefaultHttpTransports } from "./http-worker.js";
 import {
   commandPackageFromRecord,
@@ -239,6 +240,11 @@ export class BrowserCommandWorkerRuntime {
         command: run.command,
         cwd: run.cwd,
         env: run.env,
+        httpBridge: new BrowserHttpBridgeClient({
+          signal: activeRun.controller.signal,
+          transport: http.transport,
+          transportName: http.name,
+        }),
         httpTransport: http.transport,
         httpTransportName: http.name,
         httpTransports: this.httpTransports,
@@ -440,6 +446,39 @@ export function createSmokeCommandExecutor(options = {}) {
   };
 }
 
+export class BrowserHttpBridgeClient {
+  constructor(options = {}) {
+    this.signal = options.signal;
+    this.transport = options.transport;
+    this.transportName = options.transportName ?? DEFAULT_HTTP_TRANSPORT;
+  }
+
+  async dispatch(request = {}) {
+    if (typeof this.transport?.dispatch !== "function") {
+      throw new HttpBridgeError(
+        "transport",
+        `HTTP bridge transport is not dispatchable: ${String(this.transportName)}`,
+      );
+    }
+
+    const abort = createHttpBridgeAbortSignal(this.signal, request.timeoutMs);
+    const writer = new HttpBridgeResponseCollector();
+    try {
+      await this.transport.dispatch(
+        normalizeHttpBridgeRequest(request),
+        writer,
+        abort.signal,
+      );
+      abort.throwIfAborted();
+      return writer.result();
+    } catch (error) {
+      throw normalizeHttpBridgeClientError(error, abort);
+    } finally {
+      abort.cleanup();
+    }
+  }
+}
+
 class CommandOutputWriter {
   constructor(port, id, activeRun) {
     this.port = port;
@@ -464,6 +503,45 @@ class CommandOutputWriter {
       id: this.id,
       chunk: bytes,
     });
+  }
+}
+
+class HttpBridgeResponseCollector {
+  constructor() {
+    this.bodyChunks = [];
+    this.complete = null;
+  }
+
+  async writeBodyChunk(chunk) {
+    this.bodyChunks.push(toUint8Array(chunk, "HTTP bridge body chunks must be bytes"));
+  }
+
+  async finish(status, headers, body = new Uint8Array()) {
+    if (body != null) {
+      const bytes = toUint8Array(body, "HTTP bridge body chunks must be bytes");
+      if (bytes.byteLength > 0) {
+        this.bodyChunks.push(bytes);
+      }
+    }
+    this.complete = {
+      headers: normalizeHttpHeaders(headers ?? []),
+      status: Number(status),
+    };
+  }
+
+  result() {
+    if (!this.complete) {
+      throw new HttpBridgeError(
+        "invalid_response",
+        "HTTP bridge transport completed without a response",
+      );
+    }
+    return {
+      body: concatBytes(this.bodyChunks),
+      bodyChunks: [...this.bodyChunks],
+      headers: this.complete.headers,
+      status: this.complete.status,
+    };
   }
 }
 
@@ -857,6 +935,60 @@ function abortRejection(signal) {
   };
 }
 
+function createHttpBridgeAbortSignal(commandSignal, timeoutMs) {
+  const controller = new AbortController();
+  let reason = null;
+  const cleanupHandlers = [];
+  const abort = (nextReason) => {
+    if (!controller.signal.aborted) {
+      reason = nextReason;
+      controller.abort(nextReason);
+    }
+  };
+
+  if (commandSignal) {
+    if (commandSignal.aborted) {
+      abort(commandSignal.reason ?? cancelledError());
+    } else {
+      const onAbort = () => abort(commandSignal.reason ?? cancelledError());
+      commandSignal.addEventListener("abort", onAbort, { once: true });
+      cleanupHandlers.push(() =>
+        commandSignal.removeEventListener("abort", onAbort),
+      );
+    }
+  }
+
+  if (timeoutMs != null) {
+    const timeout = Number(timeoutMs);
+    if (!Number.isFinite(timeout) || timeout <= 0) {
+      throw new HttpBridgeError(
+        "invalid_request",
+        "HTTP bridge request timeoutMs must be positive",
+      );
+    }
+    const timer = setTimeout(() => abort(httpBridgeTimeoutError()), timeout);
+    cleanupHandlers.push(() => clearTimeout(timer));
+  }
+
+  return {
+    get reason() {
+      return reason;
+    },
+    signal: controller.signal,
+    cleanup() {
+      for (const cleanup of cleanupHandlers.splice(0)) {
+        cleanup();
+      }
+    },
+    throwIfAborted() {
+      if (!controller.signal.aborted) {
+        return;
+      }
+      throw reason ?? new HttpBridgeError("cancelled", "HTTP request cancelled");
+    },
+  };
+}
+
 function completeResult(activeRun, result = {}) {
   return {
     cancelled: false,
@@ -945,6 +1077,75 @@ function timeoutError() {
   );
 }
 
+function httpBridgeTimeoutError() {
+  return new HttpBridgeError("timeout", "HTTP request exceeded wall time limit");
+}
+
+function normalizeHttpBridgeRequest(request) {
+  if (!request || typeof request !== "object") {
+    throw new HttpBridgeError("invalid_request", "HTTP bridge request is required");
+  }
+  return {
+    body: normalizeHttpBridgeRequestBody(request),
+    gatewayResponseLimit: request.gatewayResponseLimit,
+    headers: normalizeHttpHeaders(request.headers ?? [], "invalid_request"),
+    id: request.id,
+    method: nonEmptyHttpString(request.method, "HTTP bridge method is required"),
+    responseBodyLimit: request.responseBodyLimit,
+    timeoutMs: request.timeoutMs,
+    url: nonEmptyHttpString(request.url, "HTTP bridge URL is required"),
+  };
+}
+
+function normalizeHttpBridgeRequestBody(request) {
+  const fields = [
+    request.body != null,
+    request.bodyBase64 != null,
+    request.bodyChunks != null,
+    request.bodyChunksBase64 != null,
+  ].filter(Boolean).length;
+  if (fields > 1) {
+    throw new HttpBridgeError(
+      "invalid_request",
+      "HTTP bridge request must include at most one body field",
+    );
+  }
+  if (request.body != null) {
+    return toUint8Array(request.body, "HTTP bridge body chunks must be bytes");
+  }
+  if (request.bodyBase64 != null) {
+    return httpBase64ToBytes(request.bodyBase64);
+  }
+  if (Array.isArray(request.bodyChunks)) {
+    return request.bodyChunks.map((chunk) =>
+      toUint8Array(chunk, "HTTP bridge body chunks must be bytes"),
+    );
+  }
+  if (Array.isArray(request.bodyChunksBase64)) {
+    return request.bodyChunksBase64.map(httpBase64ToBytes);
+  }
+  return null;
+}
+
+function normalizeHttpBridgeClientError(error, abort) {
+  if (abort.reason?.kind === "timeout") {
+    return httpBridgeTimeoutError();
+  }
+  if (abort.reason?.kind === "cancelled" || error?.name === "AbortError") {
+    return new HttpBridgeError("cancelled", "HTTP request cancelled");
+  }
+  if (error instanceof HttpBridgeError) {
+    return error;
+  }
+  if (typeof error?.kind === "string") {
+    return new HttpBridgeError(error.kind, String(error.message ?? ""));
+  }
+  return new HttpBridgeError(
+    "transport",
+    error?.message ?? "HTTP bridge transport failed",
+  );
+}
+
 function postOutputStreamClose(port, id, activeRun) {
   if (!activeRun.stdoutClosed) {
     activeRun.stdoutClosed = true;
@@ -988,6 +1189,60 @@ function base64ToBytes(value) {
 
 function isValidBase64(value) {
   return value.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
+}
+
+function normalizeHttpHeaders(headers, kind = "invalid_response") {
+  if (!Array.isArray(headers)) {
+    throw new HttpBridgeError(
+      kind,
+      "HTTP bridge headers must be an array",
+    );
+  }
+  return headers.map((header) => {
+    const name = String(header?.name ?? "").trim().toLowerCase();
+    const value = String(header?.value ?? "").trim();
+    if (!name) {
+      throw new HttpBridgeError(
+        kind,
+        "HTTP bridge header names must be non-empty",
+      );
+    }
+    return { name, value };
+  });
+}
+
+function nonEmptyHttpString(value, message) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    throw new HttpBridgeError("invalid_request", message);
+  }
+  return text;
+}
+
+function httpBase64ToBytes(value) {
+  if (typeof value !== "string" || !isValidBase64(value)) {
+    throw new HttpBridgeError("invalid_request", "invalid HTTP body base64");
+  }
+  if (typeof Buffer !== "undefined") {
+    return new Uint8Array(Buffer.from(value, "base64"));
+  }
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function concatBytes(chunks) {
+  const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 function toUint8Array(value, message) {

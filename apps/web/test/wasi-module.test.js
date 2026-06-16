@@ -72,6 +72,10 @@ const TMP_DIRS_WASM = base64ToBytes(
   "AGFzbQEAAAABYg5gAn9/AX9gA39/fwF/YAR/f39/AX9gBX9/f39/AX9gCX9/f39/fn5/fwF/YAR/fn9/AX9gBX9/f35/AX9gAX8AYAF/AX9gA39/fwBgA35+fwBgAn9/AGAFf39/f38AYAAAAp4DCxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxFXBhdGhfY3JlYXRlX2RpcmVjdG9yeQABFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAQWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQACFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfc2VlawAFFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAACFndhc2lfc25hcHNob3RfcHJldmlldzEKZmRfcmVhZGRpcgAGFndhc2lfc25hcHNob3RfcHJldmlldzEPZmRfZmlsZXN0YXRfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRFwYXRoX2ZpbGVzdGF0X2dldAADFndhc2lfc25hcHNob3RfcHJldmlldzEQcGF0aF91bmxpbmtfZmlsZQABFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfY2xvc2UACBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAAHAwcGCQkKCwwNBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0ABAKhQUGDgAgACABRwRAIAIQCgsLDgAgACABRwRAIAIQCgsLDgAgACABUgRAIAIQCgsLLQBBACAANgIAQQQgATYCAEEBQQBBAUEgEAJBAEHaABALQSAoAgAgAUHbABAMC1UBAX8gAEEQaigCACABIAQQDCAAQRRqLQAAIAIgBEEBahAMQQAhBQNAIAUgAUkEQCAAQRhqIAVqLQAAIAMgBWotAAAgBEECahAMIAVBAWohBQwBCwsL0QMBAn9BBEGQAkEOEABBLEEKEAtBBEGAAkEFEABBAEELEAtBBEGAAkEFEABBFEEMEAtBBEEAQYACQQVBwAAQB0EAQQ0QC0HQAC0AAEEDQQ4QDEEEQQBBkAJBDkEJQuaAgAFCAEEAQSAQAUEAQQ8QC0EgKAIAIgBBBUEQEAxBAEGwAjYCAEEEQQc2AgAgAEEAQQFBJBACQQBBERALQSQoAgBBB0ESEAwgAEIAQQBBKBADQQBBExALQQBBtAE2AgBBBEEHNgIAIABBAEEBQSQQBEEAQRQQC0EkKAIAQQdBFRAMQbQBQQcQDiAAQcAAEAZBAEEWEAtB4AApAwBCB0EXEA1BBEGABEHAAEIAQSwQBUEAQRgQC0EsKAIAQR1BGRAMQYAEQQVBA0GAAkEaEA9BBEEAQYACQQVBAkKAgAFCAEEAQSAQAUEAQR4QC0EgKAIAIgFBBkEfEAwgAUGABEHAAEIAQSwQBUEAQSAQC0EsKAIAQSBBIRAMQYAEQQhBBEGWAkEiEA9BBEGAAkEFEAhBH0EoEAsgABAJQQBBKRALIAEQCUEAQSoQC0EEQZACQQ4QCEEAQSsQC0EEQQBBkAJBDkHAABAHQSxBLBALQcACQQsQDgsLPgQAQYACCwVidWlsZABBkAILDmJ1aWxkL25vdGUudHh0AEGwAgsHZGlyLW9rCgBBwAILC3RtcC1kaXItb2sK",
 );
 
+const TMP_RMDIR_WASM = base64ToBytes(
+  "AGFzbQEAAAABOAhgA39/fwF/YAV/f39/fwF/YAl/f39/f35+f38Bf2AEf39/fwF/YAF/AGADf39/AGACf38AYAAAApwCBxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxFXBhdGhfY3JlYXRlX2RpcmVjdG9yeQAAFndhc2lfc25hcHNob3RfcHJldmlldzEVcGF0aF9yZW1vdmVfZGlyZWN0b3J5AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRFwYXRoX2ZpbGVzdGF0X2dldAABFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQADFndhc2lfc25hcHNob3RfcHJldmlldzEQcGF0aF91bmxpbmtfZmlsZQAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAQDBAMFBgcFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQACQrkAwMOACAAIAFHBEAgAhAGCws2AEHAACAANgIAQcQAIAE2AgBBAUHAAEEBQcgAEARBAEHaABAHQcgAKAIAIAFHBEBB2wAQBgsLmwMBAn9BBEGABEEFEABBAEEKEAdBBEGABEEFEAFBAEELEAdBBEEAQYAEQQVBgAEQAkEsQQwQB0EEQZAEQQQQAEEAQRQQB0EEQQBBoARBDUEBQsAAQgBBAEHQABADQQBBFRAHQdAAKAIAIQBBwABBsAQ2AgBBxABBATYCACAAQcAAQQFByAAQBEEAQRYQB0EEQZAEQQQQAUE3QRcQB0EEQaAEQQ0QAUE2QRgQB0EEQaAEQQ0QBUEAQRkQB0EEQZAEQQQQAUEAQRoQB0EEQQBBwARBBkEBQsAAQgBBAEHQABADQQBBGxAHQQRB0ARBDBABQTZBHBAHQQRB4ARBBxABQSxBHRAHQQRB8ARBBBABQcwAQR4QB0EDQYAEQQUQAUHMAEEfEAdBBEGABUEEEABBAEEoEAdBBEGQBUEJEABBAEEpEAdBBEEAQYAFQQRBAkIAQgBBAEHUABADQQBBKhAHQdQAKAIAIQEgAUGgBUEBEAFBzABBKxAHIAFBpQVBBBABQQBBLBAHQQRBgAVBBBABQQBBLRAHQbAFQQ0QCAsLogENAEGABAsFZW1wdHkAQZAECwR3b3JrAEGgBAsNd29yay9ub3RlLnR4dABBsAQLAXgAQcAECwZwYXJlbnQAQdAECwxwYXJlbnQvY2hpbGQAQeAECwdtaXNzaW5nAEHwBAsELi4veABBgAULBGJhc2UAQZAFCwliYXNlL2xlYWYAQaAFCwEuAEGlBQsEbGVhZgBBsAULDXRtcC1ybWRpci1vawo=",
+);
+
 const MISSING_MEMORY_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABwoBBl9zdGFydAAACgQBAgAL",
 );
@@ -548,6 +552,32 @@ test("raw WASI executor creates and lists scratch directories", async () => {
 
   assert.deepEqual(result, { exitCode: 0 });
   assert.equal(output.stdout, "dir-ok\ntmp-dir-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor removes scratch directories", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: TMP_RMDIR_WASM,
+    command: "tmp-rmdir",
+    id: "tmp-rmdir",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "tmp-rmdir",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "tmp-rmdir-ok\n");
   assert.equal(output.stderr, "");
 });
 
@@ -1098,6 +1128,53 @@ test("command worker runs raw WASI modules with scratch directories", async () =
       failureStage: null,
       stderrBytes: 0,
       stdoutBytes: 18,
+      timedOut: false,
+    },
+  });
+});
+
+test("command worker runs raw WASI modules with scratch directory removal", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-tmp-rmdir",
+    package: {
+      artifactKind: "wasi-module",
+      command: "tmp-rmdir",
+      id: "tmp-rmdir",
+      wasiModule: {
+        bytes: TMP_RMDIR_WASM,
+      },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-tmp-rmdir",
+    packageId: "tmp-rmdir",
+    command: "tmp-rmdir",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.type === "command.loaded",
+  );
+  assert.equal(loaded.artifactKind, "wasi-module");
+  assert.equal(loaded.packageType, "wasi-module");
+  assert.equal(stdoutText(port.messages), "tmp-rmdir-ok\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-tmp-rmdir",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 13,
       timedOut: false,
     },
   });

@@ -440,6 +440,8 @@ class WasiPreview1Runtime {
         this.writeSizes(this.env, environCountPtr, environBufSizePtr),
       fd_read: (fd, iovsPtr, iovsLen, nreadPtr) =>
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
+      fd_allocate: (fd, offset, length) =>
+        this.fdAllocate(fd, offset, length),
       fd_datasync: (fd) => this.fdSync(fd, WASI_RIGHT_FD_DATASYNC),
       fd_readdir: (fd, bufferPtr, bufferLength, cookie, bufferUsedPtr) =>
         this.fdReaddir(fd, bufferPtr, bufferLength, cookie, bufferUsedPtr),
@@ -794,6 +796,37 @@ class WasiPreview1Runtime {
       return nextSize.errno;
     }
     resizeOpenFile(file, nextSize.size);
+    return ERRNO_SUCCESS;
+  }
+
+  fdAllocate(fd, offset, length) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    if (!file) {
+      const stat = this.fdStat(fd);
+      if (!stat) {
+        return ERRNO_BADF;
+      }
+      return stat.filetype === WASI_FILETYPE_DIRECTORY
+        ? ERRNO_ISDIR
+        : ERRNO_NOTCAPABLE;
+    }
+    if (isOpenDirectory(file)) {
+      return ERRNO_ISDIR;
+    }
+    if (!canAllocateFile(file)) {
+      return ERRNO_NOTCAPABLE;
+    }
+    const allocation = resolveFileAllocation(offset, length);
+    if (allocation.errno != null) {
+      return allocation.errno;
+    }
+    if (
+      allocation.size != null &&
+      allocation.size > file.record.bytes.byteLength
+    ) {
+      resizeOpenFile(file, allocation.size);
+    }
     return ERRNO_SUCCESS;
   }
 
@@ -1552,6 +1585,10 @@ function canResizeFile(file) {
   );
 }
 
+function canAllocateFile(file) {
+  return file.writable && (file.rights & WASI_RIGHT_FD_ALLOCATE) !== 0n;
+}
+
 function isOpenDirectory(file) {
   return file?.kind === "directory";
 }
@@ -1574,6 +1611,26 @@ function resolveFileSize(size) {
     return { errno: ERRNO_OVERFLOW };
   }
   return { size: Number(value) };
+}
+
+function resolveFileAllocation(offset, length) {
+  const start = BigInt(offset);
+  const size = BigInt(length);
+  if (start < 0n || size < 0n) {
+    return { errno: ERRNO_INVAL };
+  }
+  const maxSize = BigInt(Number.MAX_SAFE_INTEGER);
+  if (start > maxSize || size > maxSize) {
+    return { errno: ERRNO_OVERFLOW };
+  }
+  if (size === 0n) {
+    return { size: null };
+  }
+  const end = start + size;
+  if (end > maxSize) {
+    return { errno: ERRNO_OVERFLOW };
+  }
+  return { size: Number(end) };
 }
 
 function resolveFileSeekOffset(file, offset, whence) {

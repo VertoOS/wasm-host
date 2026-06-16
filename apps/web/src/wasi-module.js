@@ -461,6 +461,8 @@ class WasiPreview1Runtime {
       fd_tell: (fd, offsetPtr) => this.fdTell(fd, offsetPtr),
       fd_fdstat_get: (fd, fdstatPtr) => this.fdFdstatGet(fd, fdstatPtr),
       fd_fdstat_set_flags: (fd, flags) => this.fdFdstatSetFlags(fd, flags),
+      fd_fdstat_set_rights: (fd, rightsBase, rightsInheriting) =>
+        this.fdFdstatSetRights(fd, rightsBase, rightsInheriting),
       fd_close: (fd) => this.fdClose(fd),
       fd_filestat_get: (fd, filestatPtr) =>
         this.fdFilestatGet(fd, filestatPtr),
@@ -837,6 +839,32 @@ class WasiPreview1Runtime {
   fdFdstatSetFlags(fd, _flags) {
     this.throwIfAborted();
     return this.fdStat(fd) ? ERRNO_SUCCESS : ERRNO_BADF;
+  }
+
+  fdFdstatSetRights(fd, rightsBase, rightsInheriting) {
+    this.throwIfAborted();
+    const stat = this.fdStat(fd);
+    if (!stat) {
+      return ERRNO_BADF;
+    }
+
+    const nextRights = BigInt(rightsBase);
+    const nextInheriting = BigInt(rightsInheriting);
+    if (
+      !allowsRights(nextRights, stat.rights) ||
+      !allowsRights(nextInheriting, stat.inheriting ?? 0n)
+    ) {
+      return ERRNO_NOTCAPABLE;
+    }
+
+    const file = this.openFiles.get(fd);
+    if (file) {
+      file.rights = nextRights;
+      if (isOpenDirectory(file)) {
+        file.inheriting = nextInheriting;
+      }
+    }
+    return ERRNO_SUCCESS;
   }
 
   fdClose(fd) {
@@ -1240,6 +1268,7 @@ class WasiPreview1Runtime {
     this.openFiles.set(openedFd, {
       fdflags,
       kind: "directory",
+      inheriting: BigInt(rightsInheriting),
       offset: 0,
       path,
       rights: requestedRights,
@@ -1577,7 +1606,7 @@ class WasiPreview1Runtime {
       if (isOpenDirectory(file)) {
         return {
           filetype: WASI_FILETYPE_DIRECTORY,
-          inheriting: WASI_SCRATCH_FILE_RIGHTS,
+          inheriting: file.inheriting ?? WASI_SCRATCH_FILE_RIGHTS,
           rights: file.rights,
           size: 0,
         };

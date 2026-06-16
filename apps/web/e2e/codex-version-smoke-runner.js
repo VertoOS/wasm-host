@@ -109,11 +109,21 @@ async function runCodexVersionSmokePage(page) {
   });
   assert.equal(status.result.requestBuilder.stderr, "");
   assert(status.result.requestBuilder.stdoutBytes > 0);
+  assert.equal(status.result.workspaceEdit.exitCode, 0);
+  assert.equal(status.result.workspaceEdit.stderr, "");
+  assert.equal(status.result.workspaceEdit.path, "/workspace/notes/edit.txt");
+  assert.equal(status.result.workspaceEdit.replacements, 1);
+  assert.equal(
+    status.result.workspaceEdit.edited,
+    "Browser Codex can edit this file.\n",
+  );
+  assert(status.result.workspaceEdit.stdoutBytes > 0);
   assert.equal(status.result.workerEntrypoint, "/src/command-worker-entry.js");
   return [
     `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`,
     `PASS browser Codex model-turn e2e: ${status.result.modelTurn.stdout.trim()}`,
     `PASS browser Codex request-builder e2e: ${status.result.requestBuilder.model}`,
+    `PASS browser Codex workspace-edit e2e: ${status.result.workspaceEdit.path}`,
   ].join("\n");
 }
 

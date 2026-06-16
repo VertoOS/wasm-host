@@ -4,6 +4,7 @@ const WASM_MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
 const DEFAULT_PACKAGE_ID = "codex-browser";
 const DEFAULT_COMMAND = "build-request";
 const MODEL_REQUEST_COMMAND = "model-request";
+const WORKSPACE_EDIT_COMMAND = "workspace-edit";
 const MODEL_BEARER_SECRET_ENV = "CODEX_MODEL_BEARER_SECRET_REF";
 const DEFAULT_ENTRYPOINT = "codex_build_request";
 const DEFAULT_MODEL = "gpt-5";
@@ -111,7 +112,8 @@ export async function runCodexBrowserRequestBuilder(
   }
   if (
     request.command !== DEFAULT_COMMAND &&
-    request.command !== MODEL_REQUEST_COMMAND
+    request.command !== MODEL_REQUEST_COMMAND &&
+    request.command !== WORKSPACE_EDIT_COMMAND
   ) {
     throw new BrowserCodexBrowserError(
       "command_not_found",
@@ -121,6 +123,10 @@ export async function runCodexBrowserRequestBuilder(
     );
   }
   throwIfAborted(request.signal);
+
+  if (request.command === WORKSPACE_EDIT_COMMAND) {
+    return runCodexBrowserWorkspaceEdit(request, output, options);
+  }
 
   const endpoint =
     request.command === MODEL_REQUEST_COMMAND
@@ -161,6 +167,50 @@ export async function runCodexBrowserRequestBuilder(
   }
   await output.writeStdout(`${requestJson}\n`);
   return { exitCode: 0 };
+}
+
+async function runCodexBrowserWorkspaceEdit(request, output, options) {
+  await instantiateCodexBrowserPackage(request.package, options);
+  throwIfAborted(request.signal);
+
+  const workspace = workspaceStoreFromRequest(request, options);
+  const { expected, path, replacement } = workspaceEditArgs(request);
+  let currentBytes;
+  try {
+    currentBytes = await workspace.readFile(path);
+  } catch (error) {
+    throw workspaceEditError(error);
+  }
+  throwIfAborted(request.signal);
+  const current = decoder.decode(currentBytes);
+  const index = current.indexOf(expected);
+  if (index === -1) {
+    throw new BrowserCodexBrowserError(
+      "invalid_request",
+      "codex-browser workspace-edit target text was not found",
+      "runtime",
+      { exitCode: 1 },
+    );
+  }
+  const next =
+    current.slice(0, index) +
+    replacement +
+    current.slice(index + expected.length);
+  let stat;
+  try {
+    stat = await workspace.writeFile(path, next);
+  } catch (error) {
+    throw workspaceEditError(error);
+  }
+  throwIfAborted(request.signal);
+  const result = {
+    afterBytes: encoder.encode(next).byteLength,
+    beforeBytes: currentBytes.byteLength,
+    path: stat.path,
+    replacements: 1,
+  };
+  await output.writeStdout(`${JSON.stringify(result)}\n`);
+  return { exitCode: 0, workspaceEdit: result };
 }
 
 async function instantiateCodexBrowserPackage(packageRecord, options) {
@@ -790,6 +840,72 @@ function modelEndpointFromRequest(request, options) {
     );
   }
   return text;
+}
+
+function workspaceStoreFromRequest(request, options) {
+  const store = request.workspaceStore ?? options.workspaceStore;
+  if (
+    typeof store?.readFile !== "function" ||
+    typeof store?.writeFile !== "function"
+  ) {
+    throw new BrowserCodexBrowserError(
+      "unsupported",
+      "codex-browser workspace-edit requires a browser workspace store",
+      "startup",
+    );
+  }
+  return store;
+}
+
+function workspaceEditArgs(request) {
+  return {
+    expected: requiredEditArg(
+      request.args[1],
+      "codex-browser workspace-edit requires target text",
+    ),
+    path: requiredEditArg(
+      request.args[0],
+      "codex-browser workspace-edit requires a workspace file path",
+    ),
+    replacement: optionalEditArg(request.args[2]),
+  };
+}
+
+function requiredEditArg(value, message) {
+  const text = String(value ?? "");
+  if (!text) {
+    throw new BrowserCodexBrowserError(
+      "invalid_request",
+      message,
+      "startup",
+      { exitCode: 2 },
+    );
+  }
+  return text;
+}
+
+function optionalEditArg(value) {
+  if (value == null) {
+    throw new BrowserCodexBrowserError(
+      "invalid_request",
+      "codex-browser workspace-edit requires replacement text",
+      "startup",
+      { exitCode: 2 },
+    );
+  }
+  return String(value);
+}
+
+function workspaceEditError(error) {
+  if (typeof error?.kind === "string") {
+    return new BrowserCodexBrowserError(
+      error.kind,
+      `codex-browser workspace-edit failed: ${error.message}`,
+      error.stage ?? "workspace",
+      { exitCode: 1 },
+    );
+  }
+  return error;
 }
 
 function optionalPositiveInteger(value, name, options = {}) {

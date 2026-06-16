@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CODEX_BROWSER_WORKSPACE_EDIT_BEFORE,
+  CODEX_BROWSER_WORKSPACE_EDIT_PATH,
   CODEX_BROWSER_REQUEST_BUILDER_WASM,
   assertCodexBrowserRequestPayload,
   codexBrowserModelRequestFixture,
   codexBrowserRequestBuilderFixture,
+  codexBrowserWorkspaceEditFixture,
 } from "../fixtures/codex-browser-request-builder-core.js";
 import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import { loadCodexBrowserPackage } from "../src/codex-browser.js";
@@ -17,6 +20,7 @@ import {
   createFakeBrowserDeviceFlowAuthBroker,
   createMemorySecretProvider,
 } from "../src/secrets.js";
+import { createMemoryBrowserWorkspaceStore } from "../src/workspace.js";
 
 const EMPTY_WASM = base64ToBytes("AGFzbQEAAAA=");
 const MODEL_SECRET_REF_ENV = "CODEX_MODEL_BEARER_SECRET_REF";
@@ -24,6 +28,7 @@ const MODEL_SECRET_REF = "codex-model-bearer";
 const MODEL_SECRET_TOKEN = "test-codex-model-token";
 const MODEL_SECRET_THROW_TOKEN = "provider-threw-token";
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 test("codex-browser executor builds Responses request JSON", async () => {
   const fixture = await codexBrowserRequestBuilderFixture();
@@ -95,6 +100,91 @@ test("codex-browser executor reports missing prompt as command error", async () 
   assert.equal(error.error.kind, "invalid_request");
   assert.equal(error.error.stage, "startup");
   assert.equal(error.result.exitCode, 2);
+});
+
+test("codex-browser workspace-edit persists a browser workspace change", async () => {
+  const fixture = await codexBrowserWorkspaceEditFixture();
+  const port = recordingPort();
+  const workspaceStore = createMemoryBrowserWorkspaceStore();
+  await workspaceStore.createDirectory("/workspace/notes");
+  await workspaceStore.writeFile(
+    CODEX_BROWSER_WORKSPACE_EDIT_PATH,
+    CODEX_BROWSER_WORKSPACE_EDIT_BEFORE,
+  );
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    workspaceStore,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage(fixture.commandRun);
+
+  const stdout = stdoutText(port.messages);
+  const edited = "Browser Codex can edit this file.\n";
+  assert.deepEqual(JSON.parse(stdout), {
+    afterBytes: encoder.encode(edited).byteLength,
+    beforeBytes: encoder.encode(CODEX_BROWSER_WORKSPACE_EDIT_BEFORE).byteLength,
+    path: CODEX_BROWSER_WORKSPACE_EDIT_PATH,
+    replacements: 1,
+  });
+  assert.equal(
+    decoder.decode(await workspaceStore.readFile(CODEX_BROWSER_WORKSPACE_EDIT_PATH)),
+    edited,
+  );
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assert.equal(port.messages.at(-1).result.exitCode, 0);
+});
+
+test("codex-browser workspace-edit reports missing workspace stores", async () => {
+  const fixture = await codexBrowserWorkspaceEditFixture({
+    packageId: "codex-browser-no-workspace",
+  });
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    workspaceStore: null,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage(fixture.commandRun);
+
+  const error = port.messages.at(-1);
+  assert.equal(error.type, "command.error");
+  assert.equal(error.error.kind, "unsupported");
+  assert.equal(error.error.stage, "startup");
+});
+
+test("codex-browser workspace-edit leaves files unchanged when text is absent", async () => {
+  const fixture = await codexBrowserWorkspaceEditFixture({
+    expected: "missing text",
+    packageId: "codex-browser-workspace-no-match",
+  });
+  const port = recordingPort();
+  const workspaceStore = createMemoryBrowserWorkspaceStore();
+  await workspaceStore.createDirectory("/workspace/notes");
+  await workspaceStore.writeFile(
+    CODEX_BROWSER_WORKSPACE_EDIT_PATH,
+    CODEX_BROWSER_WORKSPACE_EDIT_BEFORE,
+  );
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    workspaceStore,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage(fixture.commandRun);
+
+  const error = port.messages.at(-1);
+  assert.equal(error.type, "command.error");
+  assert.equal(error.error.kind, "invalid_request");
+  assert.equal(error.result.exitCode, 1);
+  assert.equal(
+    decoder.decode(await workspaceStore.readFile(CODEX_BROWSER_WORKSPACE_EDIT_PATH)),
+    CODEX_BROWSER_WORKSPACE_EDIT_BEFORE,
+  );
 });
 
 test("codex-browser model-request streams direct Fetch responses to stdout", async () => {

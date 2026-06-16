@@ -14,6 +14,7 @@ import {
   loadRawWasiModulePackage,
   packageNeedsRawWasiModuleLoader,
 } from "./wasi-module.js";
+import { createBrowserWorkspaceStore } from "./workspace.js";
 
 const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_HTTP_TRANSPORT = "direct";
@@ -52,6 +53,10 @@ export class BrowserCommandWorkerRuntime {
       createBrowserPackageLoader(options.packageLoaderOptions ?? options);
     this.packages = new Map();
     this.packageLoads = new Map();
+    this.workspaceStore =
+      options.workspaceStore === undefined
+        ? createBrowserWorkspaceStore(options.workspaceStoreOptions ?? {})
+        : options.workspaceStore;
     this.activeRun = null;
     this.listener = null;
     this.detach = null;
@@ -271,6 +276,7 @@ export class BrowserCommandWorkerRuntime {
         signal: activeRun.controller.signal,
         stdin: activeRun.stdin,
         terminal: activeRun.terminal,
+        workspaceStore: this.workspaceStoreForPackage(packageRecord),
       }, output);
       throwIfAborted(activeRun.controller.signal);
       postOutputStreamClose(this.port, run.id, activeRun);
@@ -430,6 +436,12 @@ export class BrowserCommandWorkerRuntime {
       );
     }
     return { name: transportName, transport };
+  }
+
+  workspaceStoreForPackage(packageRecord) {
+    return packageRecord.type === "codex-browser"
+      ? this.workspaceStore
+      : undefined;
   }
 
   postCommandError(id, error) {

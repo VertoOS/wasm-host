@@ -285,9 +285,11 @@ file/directory operations, exports and imports deterministic snapshots, and
 persists one whole-workspace snapshot per workspace id in IndexedDB when
 available. Memory storage is the fallback. This is the first workspace state
 boundary only: raw WASI fixture runs can mount an injected store by snapshotting
-before `_start` and flushing mutations after exit, while OPFS-backed large-file
-storage, user-granted directories, app-server integration, and Codex file-edit
-turn wiring remain later browser runtime layers.
+before `_start` and flushing mutations after exit, and the `codex-browser`
+`workspace-edit` fixture can read/write the host-owned store directly.
+OPFS-backed large-file storage, user-granted directories, app-server
+integration, and full Codex file-edit turn wiring remain later browser runtime
+layers.
 
 The interim Codex browser smoke manifest consumer lives in
 `apps/web/src/artifact-manifest.js`. It validates
@@ -353,11 +355,14 @@ Responses SSE text deltas. For authenticated model fixtures, the host can
 inject a bearer token through an opaque
 `CODEX_MODEL_BEARER_SECRET_REF` resolved by the browser secret provider at HTTP
 dispatch time; the raw token is not guest argv, ordinary env, terminal output,
-or package metadata. The browser profile also has a deterministic fake
-device-flow auth broker for start/status, host-side completion, cancellation,
-and logout tests. It is intentionally not modeled as raw WASI and does not imply
-real provider credentials, refresh, persistent storage, full Codex CLI,
-app-server, workspace, tool, or MCP support.
+or package metadata. The same executor has a deterministic `workspace-edit`
+fixture that reads a file from the host-owned browser workspace store, replaces
+expected text, writes the file back, and verifies the persisted edit across the
+real browser page/worker boundary. The browser profile also has a deterministic
+fake device-flow auth broker for start/status, host-side completion,
+cancellation, and logout tests. It is intentionally not modeled as raw WASI and
+does not imply real provider credentials, refresh, full Codex CLI, app-server,
+tool, or MCP support.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,
 hard termination of non-cooperative Wasm, or final WebC/WASIX package

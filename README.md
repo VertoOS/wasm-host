@@ -68,6 +68,10 @@ until the boundaries are stable enough to split.
   Responses SSE `response.output_text.delta` events. It can inject a host-owned
   bearer secret from an opaque `CODEX_MODEL_BEARER_SECRET_REF` without putting
   the token in command args, ordinary env values, or stdout.
+- The `codex-browser` executor can run a deterministic `workspace-edit`
+  fixture that reads a browser workspace file, replaces expected text, writes
+  the file back through the host-owned workspace store, and verifies persistence
+  in the real-browser e2e harness.
 - The browser secret seam includes a deterministic fake device-flow auth broker
   for start/status/external-complete/cancel/logout tests. Completion stores the
   bearer token under a host-owned secret ref; public auth status does not expose

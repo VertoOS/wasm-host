@@ -33,8 +33,10 @@ Current scope:
   through to stdout, while mocked Responses SSE `response.output_text.delta`
   events stream assistant text only. A host-owned secret provider can inject a
   bearer token from the opaque `CODEX_MODEL_BEARER_SECRET_REF` at HTTP dispatch
-  time. This is not full CLI, device-flow auth, app-server, workspace, tool, or
-  MCP execution.
+  time. The same executor has a deterministic `workspace-edit` fixture that
+  reads a file from the host-owned browser workspace store, replaces expected
+  text, writes the file back, and reports the edit result through stdout. This
+  is not full CLI, device-flow auth, app-server, tool, or MCP execution.
 - `src/secrets.js` owns the current browser secret-provider seam: tests can
   supply host-owned bearer tokens by reference, while command messages and
   terminal output continue to carry only opaque secret references. It also
@@ -47,10 +49,11 @@ Current scope:
   workspace id in IndexedDB when available. Memory storage remains the fallback
   and test-injectable store. Whole-snapshot IndexedDB writes are intentionally
   last-write-wins across store instances; OPFS, large-file storage, user
-  directory grants, app-server wiring, and Codex file-edit turns remain later
-  runtime layers. The raw WASI fixture executor can consume an injected store
-  as a writable `/workspace` mount by snapshotting before `_start` and flushing
-  the mutated snapshot after exit.
+  directory grants, app-server wiring, and full Codex file-edit turns remain
+  later runtime layers. The raw WASI fixture executor can consume an injected
+  store as a writable `/workspace` mount by snapshotting before `_start` and
+  flushing the mutated snapshot after exit, and the `codex-browser`
+  `workspace-edit` fixture can read/write the host-owned store directly.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
   stdin by default, writes stdout/stderr to a sink, closes output streams
@@ -164,10 +167,11 @@ Current scope:
   `src/command-worker-entry.js` as a module worker, assert the Codex
   `codex --version` stdout/stderr/exit contract, assert the Codex browser
   request-builder JSON contract, assert a mocked model-turn HTTP bridge
-  contract with local Responses SSE deltas, and drive the terminal UI shell
-  through DOM controls. The terminal shell e2e also applies a package URL source
-  backed by a local data URL, verifies sanitized package metadata, and runs the
-  selected package through the worker smoke executor.
+  contract with local Responses SSE deltas, assert a workspace-edit fixture
+  persists through the browser workspace store, and drive the terminal UI shell
+  through DOM controls. The terminal shell e2e also applies a package URL
+  source backed by a local data URL, verifies sanitized package metadata, and
+  runs the selected package through the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.
@@ -206,6 +210,6 @@ This package should eventually own:
 - full WebC worker startup and package loading
 - persistent package source history and richer release artifact selection
 - xterm.js/readline-grade terminal rendering and TTY compatibility
-- OPFS-backed large workspace persistence and WASI/Codex edit-turn wiring
+- OPFS-backed large workspace persistence and full WASI/Codex edit-turn wiring
 - wiring the command and HTTP worker runtimes into actual WebC execution
 - full interactive browser app e2e wiring

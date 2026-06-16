@@ -2,8 +2,18 @@ const WEBC_MAGIC = new Uint8Array([0x00, 0x77, 0x65, 0x62, 0x63]);
 const WASM_MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
 const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_PACKAGE_CACHE_NAMESPACE = "wasm-host";
+const DEFAULT_PACKAGE_CACHE_DB_NAME = "wasm-host-package-cache";
+const DEFAULT_PACKAGE_CACHE_DB_VERSION = 1;
 const DEFAULT_PACKAGE_BYTES_LIMIT = 128 * 1024 * 1024;
 const CACHE_VERSION = "v1";
+const PACKAGE_SUMMARIES_STORE = "package-summaries";
+const PACKAGE_BYTES_STORE = "package-by-key";
+const MODULE_ARTIFACTS_STORE = "module-artifacts";
+const PACKAGE_CACHE_STORES = [
+  PACKAGE_SUMMARIES_STORE,
+  PACKAGE_BYTES_STORE,
+  MODULE_ARTIFACTS_STORE,
+];
 
 export class BrowserPackageLoaderError extends Error {
   constructor(kind, message, stage = "package_load") {
@@ -16,7 +26,7 @@ export class BrowserPackageLoaderError extends Error {
 
 export class BrowserPackageLoader {
   constructor(options = {}) {
-    this.cache = options.cache ?? new MemoryPackageCache();
+    this.cache = options.cache ?? createDefaultPackageCache(options);
     this.fetchImpl = options.fetchImpl ?? defaultFetchImpl();
     this.packageBytesLimit =
       options.packageBytesLimit ?? DEFAULT_PACKAGE_BYTES_LIMIT;
@@ -150,8 +160,109 @@ export class MemoryPackageCache {
   }
 }
 
+export class IndexedDbPackageCache {
+  constructor(options = {}) {
+    this.dbName = options.dbName ?? DEFAULT_PACKAGE_CACHE_DB_NAME;
+    this.indexedDB =
+      options.indexedDB !== undefined ? options.indexedDB : defaultIndexedDb();
+    this.version = options.version ?? DEFAULT_PACKAGE_CACHE_DB_VERSION;
+    this.dbPromise = null;
+    if (!isIndexedDbFactory(this.indexedDB)) {
+      throw new BrowserPackageLoaderError(
+        "unsupported",
+        "IndexedDB is unavailable for browser package caching",
+      );
+    }
+  }
+
+  async putPackage(record) {
+    const db = await this.open();
+    const transaction = db.transaction(
+      [PACKAGE_SUMMARIES_STORE, PACKAGE_BYTES_STORE],
+      "readwrite",
+    );
+    const done = transactionDone(transaction);
+    transaction
+      .objectStore(PACKAGE_SUMMARIES_STORE)
+      .put(packageSummary(record), record.id);
+    transaction
+      .objectStore(PACKAGE_BYTES_STORE)
+      .put(copyBytes(record.bytes), record.cacheKeys.packageBytes);
+    await done;
+  }
+
+  async getPackage(id) {
+    if (!id) {
+      return null;
+    }
+    return (
+      (await this.getStoreValue(PACKAGE_SUMMARIES_STORE, String(id))) ?? null
+    );
+  }
+
+  async getPackageBytes(recordOrKey) {
+    const key =
+      typeof recordOrKey === "string"
+        ? recordOrKey
+        : recordOrKey?.cacheKeys?.packageBytes;
+    if (!key) {
+      return null;
+    }
+    const value = await this.getStoreValue(PACKAGE_BYTES_STORE, key);
+    return value == null ? null : copyBytes(value);
+  }
+
+  async putModuleArtifact(key, value) {
+    const db = await this.open();
+    const transaction = db.transaction(MODULE_ARTIFACTS_STORE, "readwrite");
+    const done = transactionDone(transaction);
+    transaction.objectStore(MODULE_ARTIFACTS_STORE).put(value, String(key));
+    await done;
+  }
+
+  async getModuleArtifact(key) {
+    if (!key) {
+      return null;
+    }
+    return (
+      (await this.getStoreValue(MODULE_ARTIFACTS_STORE, String(key))) ?? null
+    );
+  }
+
+  async getStoreValue(storeName, key) {
+    const db = await this.open();
+    const transaction = db.transaction(storeName, "readonly");
+    const done = transactionDone(transaction);
+    const value = await requestResult(transaction.objectStore(storeName).get(key));
+    await done;
+    return value;
+  }
+
+  open() {
+    this.dbPromise ??= openPackageCacheDatabase({
+      dbName: this.dbName,
+      indexedDB: this.indexedDB,
+      version: this.version,
+    });
+    return this.dbPromise;
+  }
+}
+
 export function createBrowserPackageLoader(options = {}) {
   return new BrowserPackageLoader(options);
+}
+
+export function createDefaultPackageCache(options = {}) {
+  const indexedDB =
+    options.indexedDB !== undefined ? options.indexedDB : defaultIndexedDb();
+  if (!isIndexedDbFactory(indexedDB)) {
+    return new MemoryPackageCache();
+  }
+  return new IndexedDbPackageCache({
+    dbName: options.packageCacheDbName,
+    indexedDB,
+    version: options.packageCacheDbVersion,
+  });
 }
 
 export function detectPackageFormat(bytes) {
@@ -238,6 +349,67 @@ function normalizePackageMetadata(input, context) {
     },
     source: context.source,
   };
+}
+
+function openPackageCacheDatabase(options) {
+  return new Promise((resolve, reject) => {
+    const request = options.indexedDB.open(options.dbName, options.version);
+    request.onblocked = () => {
+      reject(
+        new BrowserPackageLoaderError(
+          "transport",
+          "IndexedDB package cache open was blocked",
+        ),
+      );
+    };
+    request.onerror = () => {
+      reject(indexedDbError(request.error, "open IndexedDB package cache"));
+    };
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      for (const storeName of PACKAGE_CACHE_STORES) {
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.createObjectStore(storeName);
+        }
+      }
+    };
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+  });
+}
+
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.onerror = () => {
+      reject(indexedDbError(request.error, "read IndexedDB package cache"));
+    };
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+  });
+}
+
+function transactionDone(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.onabort = () => {
+      reject(indexedDbError(transaction.error, "write IndexedDB package cache"));
+    };
+    transaction.onerror = () => {
+      reject(indexedDbError(transaction.error, "write IndexedDB package cache"));
+    };
+    transaction.oncomplete = () => {
+      resolve();
+    };
+  });
+}
+
+function indexedDbError(error, action) {
+  const message = error?.message ? `: ${error.message}` : "";
+  return new BrowserPackageLoaderError(
+    "transport",
+    `failed to ${action}${message}`,
+  );
 }
 
 function normalizeCommands(input) {
@@ -415,6 +587,14 @@ function defaultFetchImpl() {
     : undefined;
 }
 
+function defaultIndexedDb() {
+  return globalThis.indexedDB ?? null;
+}
+
+function isIndexedDbFactory(value) {
+  return typeof value?.open === "function";
+}
+
 function sanitizeUrlForSource(value) {
   try {
     const url = new URL(value);
@@ -456,6 +636,11 @@ function toUint8Array(value) {
     "invalid_package",
     "browser package bytes must be a byte buffer",
   );
+}
+
+function copyBytes(value) {
+  const bytes = toUint8Array(value);
+  return new Uint8Array(bytes);
 }
 
 function nonEmptyString(

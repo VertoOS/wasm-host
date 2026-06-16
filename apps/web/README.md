@@ -52,8 +52,11 @@ Current scope:
 - `src/package-loader.js` implements the first browser package loading surface
   for explicit bytes and Fetch-backed artifacts. It validates WebC/Wasm magic
   bytes, verifies optional sha256 pins, normalizes command metadata for
-  `command.load`, and derives IndexedDB-safe package/module cache paths from
-  content hashes. It does not parse full WebC metadata or execute packages yet.
+  `command.load`, derives IndexedDB-safe package/module cache paths from
+  content hashes, and persists package summaries, package bytes, and module
+  artifacts in IndexedDB when available. Memory cache remains the fallback and
+  test-injectable cache. It does not parse full WebC metadata, execute packages,
+  manage cache eviction, or provide workspace persistence yet.
 - `src/artifact-manifest.js` consumes the interim Codex
   `codex-wasix/dist/artifact-manifest.json` shape. It validates the raw
   `wasi-module` `codex --version` contract, normalizes it into command

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import {
+  IndexedDbPackageCache,
   MemoryPackageCache,
   commandPackageFromRecord,
   createBrowserPackageLoader,
@@ -327,6 +328,148 @@ test("MemoryPackageCache stores module artifacts by explicit cache key", async (
   assert.equal(await cache.getModuleArtifact("missing"), null);
 });
 
+test("IndexedDbPackageCache persists package summaries and bytes", async () => {
+  const indexedDB = fakeIndexedDB();
+  const cache = new IndexedDbPackageCache({
+    dbName: "package-cache-persist",
+    indexedDB,
+  });
+  const loader = createBrowserPackageLoader({ cache });
+  const sourceBytes = webcBytes("persist");
+  const expectedBytes = new Uint8Array(sourceBytes);
+
+  const record = await loader.loadBytes({
+    bytes: sourceBytes,
+    command: "smoke",
+    executorType: "smoke",
+    id: "persist-pkg",
+  });
+
+  const summary = await cache.getPackage("persist-pkg");
+  assert.equal(summary.id, "persist-pkg");
+  assert.equal(summary.sha256, record.sha256);
+  const cachedBytes = await cache.getPackageBytes(record);
+  assert.deepEqual(cachedBytes, record.bytes);
+  assert.notEqual(cachedBytes, record.bytes);
+
+  sourceBytes[0] = 255;
+  assert.deepEqual(await cache.getPackageBytes(record), expectedBytes);
+
+  cachedBytes[1] = 255;
+  assert.deepEqual(await cache.getPackageBytes(record), expectedBytes);
+
+  const secondCache = new IndexedDbPackageCache({
+    dbName: "package-cache-persist",
+    indexedDB,
+  });
+  const persistedBytes = await secondCache.getPackageBytes(
+    record.cacheKeys.packageBytes,
+  );
+  assert.deepEqual(await secondCache.getPackage("persist-pkg"), summary);
+  assert.deepEqual(persistedBytes, expectedBytes);
+  assert.notEqual(persistedBytes, record.bytes);
+  assert.equal(await secondCache.getPackage("missing"), null);
+  assert.equal(await secondCache.getPackageBytes("missing-key"), null);
+});
+
+test("IndexedDbPackageCache persists module artifacts", async () => {
+  const indexedDB = fakeIndexedDB();
+  const cache = new IndexedDbPackageCache({
+    dbName: "module-cache-persist",
+    indexedDB,
+  });
+  const artifact = new Uint8Array([1, 2, 3]);
+
+  await cache.putModuleArtifact("module-key", artifact);
+
+  const secondCache = new IndexedDbPackageCache({
+    dbName: "module-cache-persist",
+    indexedDB,
+  });
+  const persistedArtifact = await secondCache.getModuleArtifact("module-key");
+  assert.deepEqual(persistedArtifact, artifact);
+  assert.notEqual(persistedArtifact, artifact);
+  assert.equal(await secondCache.getModuleArtifact("missing"), null);
+});
+
+test("IndexedDbPackageCache stores only the selected byte view", async () => {
+  const indexedDB = fakeIndexedDB();
+  const cache = new IndexedDbPackageCache({
+    dbName: "package-cache-byte-view",
+    indexedDB,
+  });
+  const bytes = webcBytes("view");
+  const backing = new Uint8Array(bytes.byteLength + 2);
+  backing[0] = 9;
+  backing.set(bytes, 1);
+  backing[backing.byteLength - 1] = 8;
+  const view = new Uint8Array(backing.buffer, 1, bytes.byteLength);
+
+  const record = await createBrowserPackageLoader({ cache }).loadBytes({
+    bytes: view,
+    command: "smoke",
+    id: "view-pkg",
+  });
+
+  const persistedBytes = await cache.getPackageBytes(record);
+  assert.equal(record.byteLength, bytes.byteLength);
+  assert.equal(persistedBytes.byteLength, bytes.byteLength);
+  assert.deepEqual(persistedBytes, bytes);
+});
+
+test("createBrowserPackageLoader defaults to IndexedDB when available", async () => {
+  const indexedDB = fakeIndexedDB();
+  const loader = createBrowserPackageLoader({
+    indexedDB,
+    packageCacheDbName: "default-indexeddb-cache",
+  });
+
+  const record = await loader.loadBytes({
+    bytes: wasmBytes("default-cache"),
+    command: "main",
+    id: "default-cache-pkg",
+  });
+
+  const cache = new IndexedDbPackageCache({
+    dbName: "default-indexeddb-cache",
+    indexedDB,
+  });
+  assert.deepEqual(await cache.getPackageBytes(record), record.bytes);
+  assert.equal((await cache.getPackage("default-cache-pkg")).id, record.id);
+});
+
+test("createBrowserPackageLoader honors an explicit cache over IndexedDB", async () => {
+  const cache = new MemoryPackageCache();
+  const indexedDB = fakeIndexedDB();
+  const loader = createBrowserPackageLoader({
+    cache,
+    indexedDB,
+  });
+
+  const record = await loader.loadBytes({
+    bytes: webcBytes("memory-cache"),
+    command: "smoke",
+    id: "memory-cache-pkg",
+  });
+
+  assert.equal(indexedDB.openCount, 0);
+  assert.deepEqual(await cache.getPackageBytes(record), record.bytes);
+  assert.equal((await cache.getPackage("memory-cache-pkg")).id, record.id);
+});
+
+test("createBrowserPackageLoader falls back to memory without usable IndexedDB", async () => {
+  const loader = createBrowserPackageLoader({ indexedDB: {} });
+
+  const record = await loader.loadBytes({
+    bytes: webcBytes("no-indexeddb"),
+    command: "smoke",
+    id: "no-indexeddb-pkg",
+  });
+
+  assert.deepEqual(await loader.cache.getPackageBytes(record), record.bytes);
+  assert.equal((await loader.cache.getPackage("no-indexeddb-pkg")).id, record.id);
+});
+
 test("package helpers detect formats and expose deterministic browser cache keys", () => {
   assert.equal(detectPackageFormat(webcBytes("x")), "webc");
   assert.equal(detectPackageFormat(wasmBytes("x")), "wasm");
@@ -410,4 +553,137 @@ function readableStream(chunks) {
       controller.close();
     },
   });
+}
+
+function fakeIndexedDB() {
+  const databases = new Map();
+  const factory = {
+    openCount: 0,
+    open(name, version = 1) {
+      factory.openCount += 1;
+      const request = new FakeIdbRequest();
+      queueMicrotask(() => {
+        let database = databases.get(name);
+        const shouldUpgrade = !database || version > database.version;
+        if (!database) {
+          database = {
+            stores: new Map(),
+            version,
+          };
+          databases.set(name, database);
+        } else if (version > database.version) {
+          database.version = version;
+        }
+        request.result = new FakeIdbDatabase(database);
+        if (shouldUpgrade) {
+          request.onupgradeneeded?.({ target: request });
+        }
+        request.onsuccess?.({ target: request });
+      });
+      return request;
+    },
+  };
+  return factory;
+}
+
+class FakeIdbRequest {
+  constructor() {
+    this.error = null;
+    this.onblocked = null;
+    this.onerror = null;
+    this.onsuccess = null;
+    this.onupgradeneeded = null;
+    this.result = undefined;
+  }
+}
+
+class FakeIdbDatabase {
+  constructor(database) {
+    this.database = database;
+    this.objectStoreNames = {
+      contains: (name) => this.database.stores.has(name),
+    };
+  }
+
+  createObjectStore(name) {
+    if (!this.database.stores.has(name)) {
+      this.database.stores.set(name, new Map());
+    }
+    return new FakeIdbObjectStore(this.database.stores.get(name), null);
+  }
+
+  transaction(storeNames) {
+    return new FakeIdbTransaction(
+      this.database,
+      Array.isArray(storeNames) ? storeNames : [storeNames],
+    );
+  }
+}
+
+class FakeIdbTransaction {
+  constructor(database, storeNames) {
+    this.database = database;
+    this.error = null;
+    this.completed = false;
+    this.onabort = null;
+    this.oncomplete = null;
+    this.onerror = null;
+    this.pending = 0;
+    this.storeNames = storeNames;
+  }
+
+  objectStore(name) {
+    if (!this.storeNames.includes(name) || !this.database.stores.has(name)) {
+      throw new Error(`unknown object store: ${name}`);
+    }
+    return new FakeIdbObjectStore(this.database.stores.get(name), this);
+  }
+
+  request(operation) {
+    const request = new FakeIdbRequest();
+    this.pending += 1;
+    queueMicrotask(() => {
+      try {
+        request.result = operation();
+        request.onsuccess?.({ target: request });
+      } catch (error) {
+        this.error = error;
+        request.error = error;
+        request.onerror?.({ target: request });
+        this.onerror?.({ target: this });
+      } finally {
+        this.pending -= 1;
+        this.completeIfIdle();
+      }
+    });
+    return request;
+  }
+
+  completeIfIdle() {
+    if (this.completed || this.pending !== 0) {
+      return;
+    }
+    this.completed = true;
+    queueMicrotask(() => {
+      this.oncomplete?.({ target: this });
+    });
+  }
+}
+
+class FakeIdbObjectStore {
+  constructor(store, transaction) {
+    this.store = store;
+    this.transaction = transaction;
+  }
+
+  put(value, key) {
+    return this.transaction.request(() => {
+      this.store.set(key, structuredClone(value));
+      return key;
+    });
+  }
+
+  get(key) {
+    return this.transaction.request(() => structuredClone(this.store.get(key)));
+  }
 }

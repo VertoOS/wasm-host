@@ -279,6 +279,9 @@ function shellOptionsFromFixture(fixture, source) {
 function packageLoader(options) {
   return options.packageLoader ?? createBrowserPackageLoader({
     fetchImpl: options.fetchImpl,
+    indexedDB: options.indexedDB,
+    packageCacheDbName: options.packageCacheDbName,
+    packageCacheDbVersion: options.packageCacheDbVersion,
   });
 }
 

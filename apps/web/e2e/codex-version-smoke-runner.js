@@ -327,7 +327,7 @@ class DevToolsPage {
 
   static async open(debugPort, url) {
     const target = await fetchJson(
-      `http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`,
+      `http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent("about:blank")}`,
       { method: "PUT" },
     );
     const socket = new WebSocket(target.webSocketDebuggerUrl);
@@ -339,7 +339,9 @@ class DevToolsPage {
       5000,
       "DevTools socket did not open",
     );
-    return new DevToolsPage(socket);
+    const page = new DevToolsPage(socket);
+    await page.navigate(url);
+    return page;
   }
 
   send(method, params = {}, timeoutMs = DEVTOOLS_COMMAND_TIMEOUT_MS) {
@@ -355,6 +357,13 @@ class DevToolsPage {
     });
     this.socket.send(JSON.stringify(message));
     return promise;
+  }
+
+  async navigate(url) {
+    await this.send("Page.enable");
+    await this.send("Runtime.enable");
+    await this.send("Page.navigate", { url });
+    await waitForPageReady(this, url);
   }
 
   close() {
@@ -383,6 +392,32 @@ class DevToolsPage {
     }
     this.events.push(message);
   }
+}
+
+async function waitForPageReady(page, url) {
+  const deadline = Date.now() + BROWSER_STATUS_TIMEOUT_MS;
+  let lastState = null;
+  while (Date.now() < deadline) {
+    const evaluation = await page.send("Runtime.evaluate", {
+      expression: `({
+        href: location.href,
+        readyState: document.readyState,
+      })`,
+      returnByValue: true,
+    });
+    lastState = evaluation.result?.value ?? lastState;
+    if (lastState?.href === url && lastState.readyState !== "loading") {
+      return;
+    }
+    await delay(100);
+  }
+  throw new Error(
+    `timed out waiting for browser page navigation: ${JSON.stringify({
+      events: page.events,
+      lastState,
+      url,
+    })}`,
+  );
 }
 
 async function waitForSmokeStatus(page, options = {}) {

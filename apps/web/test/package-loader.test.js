@@ -130,6 +130,7 @@ test("command lifecycle worker loads package bytes through BrowserPackageLoader"
       command: "smoke",
       executorType: "smoke",
       id: "worker-pkg",
+      source: { kind: "url", label: "data: URL" },
     },
   });
   await runtime.handleMessage({

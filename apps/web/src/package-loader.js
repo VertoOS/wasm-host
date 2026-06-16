@@ -24,16 +24,19 @@ export class BrowserPackageLoader {
 
   async load(input = {}) {
     const source = input.source ?? {};
+    if (source.bytes != null || input.bytes != null) {
+      return this.loadBytes({
+        ...input,
+        bytes: source.bytes ?? input.bytes,
+      });
+    }
     if (source.kind === "url" || input.url != null) {
       return this.loadUrl({
         ...input,
         url: source.url ?? input.url,
       });
     }
-    return this.loadBytes({
-      ...input,
-      bytes: source.bytes ?? input.bytes,
-    });
+    return this.loadBytes(input);
   }
 
   async loadBytes(input = {}) {

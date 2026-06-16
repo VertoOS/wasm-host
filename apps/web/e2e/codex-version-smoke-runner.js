@@ -81,7 +81,7 @@ async function runTerminalShellPage(page) {
   await page.send("Log.enable");
 
   const ready = await waitForTerminalShellStatus(page, { timeoutMs: 15000 });
-  assert.equal(ready.status, "ready", ready.error?.message);
+  assert.equal(ready.status, "ready", terminalStatusMessage(ready));
   assert.equal(ready.packageSource.metadata.packageId, "codex");
 
   await page.send("Runtime.evaluate", {
@@ -97,8 +97,11 @@ async function runTerminalShellPage(page) {
     returnByValue: true,
   });
 
-  const status = await waitForTerminalShellStatus(page, { timeoutMs: 15000 });
-  assert.equal(status.status, "passed", status.error?.message);
+  const status = await waitForTerminalShellStatus(page, {
+    expectedOutputPrefix: "codex-cli ",
+    timeoutMs: 15000,
+  });
+  assert.equal(status.status, "passed", terminalStatusMessage(status));
   assert.equal(status.result.exitCode, 0);
   assert.match(status.output, /^codex-cli /);
   assert.deepEqual(status.size, { columns: "96", rows: "28" });
@@ -136,8 +139,11 @@ async function runTerminalShellPage(page) {
     expression: 'document.querySelector("[data-terminal-run]").click()',
     returnByValue: true,
   });
-  const urlStatus = await waitForTerminalShellStatus(page, { timeoutMs: 15000 });
-  assert.equal(urlStatus.status, "passed", urlStatus.error?.message);
+  const urlStatus = await waitForTerminalShellStatus(page, {
+    expectedOutputPrefix: "BROWSER_SMOKE_OK",
+    timeoutMs: 15000,
+  });
+  assert.equal(urlStatus.status, "passed", terminalStatusMessage(urlStatus));
   assert.equal(urlStatus.result.exitCode, 0);
   assert.match(urlStatus.output, /^BROWSER_SMOKE_OK/);
 
@@ -363,14 +369,25 @@ async function waitForSmokeStatus(page, options = {}) {
 
 async function waitForTerminalShellStatus(page, options = {}) {
   const deadline = Date.now() + (options.timeoutMs ?? 10000);
+  let lastStatus = null;
   while (Date.now() < deadline) {
     const evaluation = await page.send("Runtime.evaluate", {
       expression: "window.__wasmHostTerminalShellStatus",
       returnByValue: true,
     });
     const status = evaluation.result?.value;
-    if (status?.status === "ready" || status?.status === "passed") {
+    lastStatus = status ?? lastStatus;
+    if (status?.status === "ready" && !options.expectedOutputPrefix) {
       return status;
+    }
+    if (status?.status === "passed") {
+      const output = String(status.output ?? "");
+      if (
+        !options.expectedOutputPrefix ||
+        output.startsWith(options.expectedOutputPrefix)
+      ) {
+        return status;
+      }
     }
     if (status?.status === "failed") {
       return status;
@@ -378,8 +395,21 @@ async function waitForTerminalShellStatus(page, options = {}) {
     await delay(100);
   }
   throw new Error(
-    `timed out waiting for terminal shell status: ${JSON.stringify(page.events)}`,
+    `timed out waiting for terminal shell status: ${JSON.stringify({
+      lastStatus,
+      events: page.events,
+    })}`,
   );
+}
+
+function terminalStatusMessage(status) {
+  return JSON.stringify({
+    error: status?.error ?? null,
+    output: status?.output ?? "",
+    phase: status?.phase ?? null,
+    result: status?.result ?? null,
+    status: status?.status ?? null,
+  });
 }
 
 async function waitForPackageSourceStatus(page, options = {}) {

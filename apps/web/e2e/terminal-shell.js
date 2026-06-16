@@ -51,13 +51,15 @@ function updateStatus(terminalState) {
     } else {
       status.status = "failed";
       status.error = {
-        message: "terminal shell output did not match Codex version smoke",
+        message: "terminal shell output did not match expected smoke output",
       };
     }
   }
   if (terminalState.phase === "error" || terminalState.phase === "cancelled") {
     status.status = "failed";
-    status.error = terminalState.error ?? { message: terminalState.status };
+    status.error = serializeError(
+      terminalState.error ?? { message: terminalState.status },
+    );
   }
   window.__wasmHostTerminalShellStatus = status;
 }
@@ -81,11 +83,20 @@ function updatePackageStatus(packageState) {
 
 function failureStatus(error) {
   return {
-    error: {
-      message: error?.message ?? String(error),
-      name: error?.name ?? "Error",
-      stack: error?.stack ?? null,
-    },
+    error: serializeError(error),
     status: "failed",
+  };
+}
+
+function serializeError(error) {
+  if (!error) {
+    return null;
+  }
+  return {
+    kind: error.kind ?? null,
+    message: error.message ?? String(error),
+    name: error.name ?? "Error",
+    stack: error.stack ?? null,
+    stage: error.stage ?? null,
   };
 }

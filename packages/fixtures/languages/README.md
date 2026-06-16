@@ -21,6 +21,15 @@ WASM_HOST_PYTHON_WEBC=/path/to/python.webc tests/e2e/languages/run.sh --require-
 WASM_HOST_GO_WEBC=/path/to/go.webc.gz tests/e2e/languages/run.sh --require-go
 ```
 
+Command overrides:
+
+```sh
+WASM_HOST_GO_WEBC=/path/to/go.webc \
+WASM_HOST_GO_COMMAND=go-smoke \
+WASM_HOST_GO_ARGS='--mode smoke "value with spaces"' \
+tests/e2e/languages/run.sh --require-go
+```
+
 URL-backed inputs:
 
 ```sh

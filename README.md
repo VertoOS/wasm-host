@@ -30,8 +30,12 @@ until the boundaries are stable enough to split.
 - The browser adapter package has a worker entrypoint and local worker-boundary
   HTTP tests for direct Fetch, gateway, and cancellation behavior.
 - The browser adapter package has an initial command lifecycle worker with
-  load/run/cancel/stdin messages, stdout/stderr events, timeout shaping, HTTP
-  transport selection, and a smoke executor for worker-boundary tests.
+  load/run/cancel/stdin/terminal-resize messages, stdout/stderr chunk and close
+  events, timeout shaping, HTTP transport selection, and a smoke executor for
+  worker-boundary tests.
+- The browser adapter package has a minimal terminal/stdio adapter that can
+  attach to a command worker port, display stdout/stderr, send stdin, propagate
+  resize/cancel messages, and resolve final exit status.
 - The browser adapter package has an initial package loader for explicit bytes
   and Fetch-backed WebC/Wasm artifacts, including magic-byte validation,
   optional sha256 pinning, command metadata normalization, and browser-safe
@@ -185,7 +189,7 @@ The browser adapter package currently owns direct Fetch and gateway-backed
 transport code, initial HTTP and command worker message runtimes, a package
 loader/cache boundary, the interim Codex artifact manifest consumer, the narrow
 raw WASI preview1 smoke executor, command-worker-boundary Codex version smoke,
-real-browser Codex version smoke, and deterministic
+real-browser Codex version smoke, a minimal terminal/stdio adapter, and deterministic
 browser-networking/lifecycle/loading tests. Run them with:
 
 ```sh

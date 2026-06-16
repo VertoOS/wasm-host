@@ -16,11 +16,17 @@ Current scope:
   HTTP bridge worker runtime.
 - `src/command-worker.js` implements the first browser command lifecycle
   runtime. It handles `command.load`, `command.run`, `command.cancel`, stdin
-  messages, stdout/stderr events, timeout/cancellation result shaping, and
-  pluggable HTTP bridge transport selection. Its built-in `smoke` executor is a
-  lifecycle fixture only; the `wasi-module` executor supports the interim raw
-  WASI preview1 `codex --version` smoke, while real WebC package execution
-  still depends on package loading and runtime wiring.
+  messages, terminal resize messages, stdout/stderr chunk and close events,
+  timeout/cancellation result shaping, and pluggable HTTP bridge transport
+  selection. Its built-in `smoke` executor is a lifecycle fixture only; the
+  `wasi-module` executor supports the interim raw WASI preview1
+  `codex --version` smoke, while real WebC package execution still depends on
+  package loading and runtime wiring.
+- `src/terminal.js` implements a dependency-free terminal/stdio session adapter
+  that attaches to a worker-style command port, starts a command with open
+  stdin by default, writes stdout/stderr to a sink, closes output streams
+  explicitly, sends stdin chunks/end/errors, propagates terminal resize and
+  cancellation messages, and resolves/rejects with the final status.
 - `src/command-worker-entry.js` is the browser worker entrypoint for starting
   the command lifecycle runtime. The worker-boundary tests run the normalized
   Codex version-smoke fixture through this entrypoint, and the browser e2e
@@ -48,8 +54,12 @@ Current scope:
   scenarios across a real worker message boundary using local HTTP fixtures.
 - `test/command-worker.test.js` and `test/command-worker-entry.test.js` cover
   command lifecycle success, startup failure, stdin, cancellation, timeout,
-  duplicate-run rejection, HTTP transport selection, the smoke command, and the
-  Codex `codex --version` contract across a real worker message boundary.
+  duplicate-run rejection, terminal resize, explicit stream close, HTTP
+  transport selection, the smoke command, and the Codex `codex --version`
+  contract across a real worker message boundary.
+- `test/terminal.test.js` covers the terminal/stdio adapter's message ordering,
+  stdout/stderr transcript capture, stdin forwarding, terminal resize,
+  cancellation, stream close, and exit/error reporting.
 - `fixtures/codex-version-smoke-core.js` owns the browser-safe deterministic
   inline Codex version-smoke manifest and raw WASI fixture. The Node-only
   `fixtures/codex-version-smoke-fixture.js` wrapper adds optional local artifact
@@ -83,13 +93,14 @@ npm --prefix apps/web run test:e2e
 path. It skips when no browser is available unless
 `WASM_HOST_BROWSER_E2E_REQUIRED=1` is set, which is how CI keeps the browser
 smoke required. This e2e smoke only covers the successful page-to-worker
-version run; terminal UI/stdio UX remains #42, and hard termination of
-non-cooperative Wasm remains #50.
+version run; the full interactive terminal UI is tracked separately from the
+dependency-free terminal/stdio adapter, and hard termination of non-cooperative
+Wasm remains #50.
 
 This package should eventually own:
 
 - full WebC worker startup and package loading
-- terminal UI integration
+- interactive terminal UI integration
 - OPFS/IndexedDB workspace persistence
 - wiring the command and HTTP worker runtimes into actual WebC execution
 - full interactive browser app e2e wiring

@@ -149,6 +149,12 @@ function dispatchAndCollect(worker, message) {
       if (event.type === "command.started") {
         return;
       }
+      if (
+        event.type === "command.stdout.close" ||
+        event.type === "command.stderr.close"
+      ) {
+        return;
+      }
       cleanup();
       if (event.type === "command.loaded") {
         resolve({ loaded: event });

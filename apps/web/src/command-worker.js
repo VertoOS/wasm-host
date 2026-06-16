@@ -106,6 +106,9 @@ export class BrowserCommandWorkerRuntime {
       case "command.stdin.error":
         this.handleStdinError(message);
         break;
+      case "command.terminal.resize":
+        this.handleTerminalResize(message);
+        break;
       case "command.cancel":
         this.cancel(message.id);
         break;
@@ -207,6 +210,7 @@ export class BrowserCommandWorkerRuntime {
       http = this.resolveHttpTransport(run.httpTransport);
     } catch (error) {
       const normalized = normalizeRunError(activeRun, error);
+      postOutputStreamClose(this.port, run.id, activeRun);
       postMessageToPort(this.port, {
         type: "command.error",
         id: run.id,
@@ -241,8 +245,10 @@ export class BrowserCommandWorkerRuntime {
         package: packageRecord,
         signal: activeRun.controller.signal,
         stdin: activeRun.stdin,
+        terminal: activeRun.terminal,
       }, output);
       throwIfAborted(activeRun.controller.signal);
+      postOutputStreamClose(this.port, run.id, activeRun);
       postMessageToPort(this.port, {
         type: "command.complete",
         id: run.id,
@@ -250,6 +256,7 @@ export class BrowserCommandWorkerRuntime {
       });
     } catch (error) {
       const normalized = normalizeRunError(activeRun, error);
+      postOutputStreamClose(this.port, run.id, activeRun);
       postMessageToPort(this.port, {
         type: "command.error",
         id: run.id,
@@ -303,6 +310,20 @@ export class BrowserCommandWorkerRuntime {
     this.failStdin(run, errorFromStdinMessage(message));
   }
 
+  handleTerminalResize(message) {
+    const run = this.activeRunForTerminal(message);
+    if (!run) {
+      return;
+    }
+    try {
+      const resize = terminalResizeFromMessage(message);
+      run.terminal.columns = resize.columns;
+      run.terminal.rows = resize.rows;
+    } catch (error) {
+      this.postCommandError(message.id, error);
+    }
+  }
+
   activeRunForStdin(message) {
     if (this.activeRun?.id === message.id) {
       return this.activeRun;
@@ -312,6 +333,21 @@ export class BrowserCommandWorkerRuntime {
       new BrowserCommandWorkerError(
         "invalid_request",
         "unknown browser command stdin stream",
+        "stdio",
+      ),
+    );
+    return null;
+  }
+
+  activeRunForTerminal(message) {
+    if (this.activeRun?.id === message.id) {
+      return this.activeRun;
+    }
+    this.postCommandError(
+      message.id,
+      new BrowserCommandWorkerError(
+        "invalid_request",
+        "unknown browser command terminal stream",
         "stdio",
       ),
     );
@@ -532,8 +568,11 @@ function createActiveRun(id) {
     abortError: null,
     controller: new AbortController(),
     stderrBytes: 0,
+    stderrClosed: false,
     stdin: new CommandInputStream(),
+    terminal: { columns: null, rows: null },
     stdoutBytes: 0,
+    stdoutClosed: false,
     timeout: null,
   };
 }
@@ -714,6 +753,24 @@ function errorFromStdinMessage(message) {
   );
 }
 
+function terminalResizeFromMessage(message) {
+  const columns = terminalSizeValue(message.columns ?? message.cols, "columns");
+  const rows = terminalSizeValue(message.rows, "rows");
+  return { columns, rows };
+}
+
+function terminalSizeValue(value, field) {
+  const size = Number(value);
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    throw new BrowserCommandWorkerError(
+      "invalid_request",
+      `browser terminal ${field} must be a positive integer`,
+      "stdio",
+    );
+  }
+  return size;
+}
+
 async function callExecutor(executor, request, output) {
   if (typeof executor === "function") {
     return executor(request, output);
@@ -861,6 +918,17 @@ function timeoutError() {
     "runtime",
     { exitCode: TIMEOUT_EXIT_CODE, timedOut: true },
   );
+}
+
+function postOutputStreamClose(port, id, activeRun) {
+  if (!activeRun.stdoutClosed) {
+    activeRun.stdoutClosed = true;
+    postMessageToPort(port, { type: "command.stdout.close", id });
+  }
+  if (!activeRun.stderrClosed) {
+    activeRun.stderrClosed = true;
+    postMessageToPort(port, { type: "command.stderr.close", id });
+  }
 }
 
 function postMessageToPort(port, message) {

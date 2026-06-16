@@ -95,6 +95,14 @@ test("BrowserCommandWorkerRuntime loads and runs a command", async () => {
       chunk: encoder.encode("err"),
     },
     {
+      type: "command.stdout.close",
+      id: "run-1",
+    },
+    {
+      type: "command.stderr.close",
+      id: "run-1",
+    },
+    {
       type: "command.complete",
       id: "run-1",
       result: {
@@ -152,6 +160,88 @@ test("BrowserCommandWorkerRuntime streams stdin messages", async () => {
   assert.equal(port.messages.at(-1).type, "command.complete");
 });
 
+test("BrowserCommandWorkerRuntime closes stdout and stderr before final status", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: { direct: {} },
+    executors: {
+      test: async (_request, output) => {
+        await output.writeStdout("one");
+        await output.writeStderr("two");
+        return { exitCode: 0 };
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { id: "pkg", type: "test", commands: ["run"] },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "close-run",
+    packageId: "pkg",
+    command: "run",
+  });
+
+  assert.deepEqual(
+    port.messages
+      .filter((message) => message.id === "close-run")
+      .map((message) => message.type),
+    [
+      "command.started",
+      "command.stdout",
+      "command.stderr",
+      "command.stdout.close",
+      "command.stderr.close",
+      "command.complete",
+    ],
+  );
+});
+
+test("BrowserCommandWorkerRuntime forwards terminal resize to the active run", async () => {
+  const port = recordingPort();
+  let terminal = null;
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: { direct: {} },
+    executors: {
+      test: async (request) => {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          if (request.terminal.columns != null) {
+            break;
+          }
+          await tick();
+        }
+        terminal = { ...request.terminal };
+        return { exitCode: 0 };
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { id: "pkg", type: "test", commands: ["resize"] },
+  });
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "resize-run",
+    packageId: "pkg",
+    command: "resize",
+  });
+  await tick();
+  await runtime.handleMessage({
+    type: "command.terminal.resize",
+    id: "resize-run",
+    columns: 120,
+    rows: 40,
+  });
+  await run;
+
+  assert.deepEqual(terminal, { columns: 120, rows: 40 });
+});
+
 test("BrowserCommandWorkerRuntime reports startup failures", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
@@ -167,6 +257,14 @@ test("BrowserCommandWorkerRuntime reports startup failures", async () => {
   });
 
   assert.deepEqual(port.messages, [
+    {
+      type: "command.stdout.close",
+      id: "missing-package",
+    },
+    {
+      type: "command.stderr.close",
+      id: "missing-package",
+    },
     {
       type: "command.error",
       id: "missing-package",
@@ -256,7 +354,7 @@ test("BrowserCommandWorkerRuntime cancels runs waiting for package load", async 
   load.resolve(packageRecord("slow-pkg"));
   await loadTask;
 
-  assert.deepEqual(port.messages.find((message) => message.id === "run-before-load"), {
+  assert.deepEqual(port.messages.find((message) => message.id === "run-before-load" && message.type === "command.error"), {
     type: "command.error",
     id: "run-before-load",
     error: {

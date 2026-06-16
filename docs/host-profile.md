@@ -228,15 +228,26 @@ The initial browser command lifecycle runtime lives in
 `apps/web/src/command-worker.js`. It accepts `command.load` messages for
 package metadata, `command.run` messages with package id, command, argv, env,
 cwd, stdin, timeout, and HTTP transport selection, `command.cancel` messages for
-the active run, and `command.stdin` / `command.stdin.end` /
-`command.stdin.error` messages for streamed input. It emits `command.loaded`,
-`command.started`, `command.stdout`, `command.stderr`, `command.complete`, and
-`command.error` events. Completion payloads mirror the native runner shape at
-the browser message boundary: exit code, stdout/stderr byte counts, failure
-stage, cancellation state, and timeout state. The first built-in `smoke`
-executor is only a lifecycle fixture for worker-boundary tests; real WebC
-package loading, filesystem wiring, and terminal UI integration remain separate
+the active run, `command.terminal.resize` messages for active terminal
+dimensions, and `command.stdin` / `command.stdin.end` / `command.stdin.error`
+messages for streamed input. It emits `command.loaded`, `command.started`,
+`command.stdout`, `command.stderr`, `command.stdout.close`,
+`command.stderr.close`, `command.complete`, and `command.error` events.
+Completion payloads mirror the native runner shape at the browser message
+boundary: exit code, stdout/stderr byte counts, failure stage, cancellation
+state, and timeout state. The first built-in `smoke` executor is only a
+lifecycle fixture for worker-boundary tests; real WebC package loading,
+filesystem wiring, and interactive terminal UI integration remain separate
 browser adapter layers.
+
+The first browser terminal/stdio adapter lives in `apps/web/src/terminal.js`.
+It is dependency-free and intentionally shaped for a later xterm.js surface: a
+session attaches to a worker-style command port, starts `command.run` with stdin
+open by default, forwards stdin chunks/end/errors, sends terminal resize and
+cancellation messages, writes stdout/stderr chunks to a sink in order, closes
+both output streams explicitly, and resolves or rejects with the final command
+status. This is the message and stream adapter, not the full interactive
+terminal UI.
 
 The initial browser package loading surface lives in
 `apps/web/src/package-loader.js`. It accepts explicit package bytes or a
@@ -282,8 +293,8 @@ with the same browser contract; local runs also exercise
 `codex-wasix/dist/codex-version-smoke.wasm` when that Codex artifact is
 available.
 
-This smoke intentionally does not provide terminal UI behavior, stdin UX,
-hard termination of non-cooperative Wasm, or final WebC/WASIX package execution.
+This smoke intentionally does not provide interactive terminal UI behavior, hard
+termination of non-cooperative Wasm, or final WebC/WASIX package execution.
 Those remain separate browser adapter layers so the successful version path can
 stay small and deterministic.
 

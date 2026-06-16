@@ -65,15 +65,15 @@ Current scope:
   load/run fixture messages, and can fetch artifact bytes through an injectable
   transport while verifying size and sha256.
 - `src/wasi-module.js` implements the narrow raw WASI preview1 fixture runner
-  for modules that import args/env, realtime and monotonic clocks, Web Crypto
-  random bytes, preloaded fd 0 stdin through `fd_read`, stdio descriptor
-  metadata through `fd_fdstat_get` and `fd_fdstat_set_flags`, a read-only
-  `/workspace` package-file preopen through `fd_prestat_get`,
-  `fd_prestat_dir_name`, `path_open`, `path_filestat_get`, `fd_readdir`,
-  `fd_filestat_get`, `fd_close`, and file-backed `fd_read`, `fd_seek`, and
-  `fd_tell`, plus a volatile in-memory `/tmp` scratch preopen for create,
-  `path_create_directory`, write, readback, stat, `fd_allocate`, truncate/sync,
-  directory listing, `path_rename`, and `path_remove_directory` /
+  for modules that import args/env, realtime and monotonic clocks, cooperative
+  `sched_yield`, Web Crypto random bytes, preloaded fd 0 stdin through
+  `fd_read`, stdio descriptor metadata through `fd_fdstat_get` and
+  `fd_fdstat_set_flags`, a read-only `/workspace` package-file preopen through
+  `fd_prestat_get`, `fd_prestat_dir_name`, `path_open`, `path_filestat_get`,
+  `fd_readdir`, `fd_filestat_get`, `fd_close`, and file-backed `fd_read`,
+  `fd_seek`, and `fd_tell`, plus a volatile in-memory `/tmp` scratch preopen
+  for create, `path_create_directory`, write, readback, stat, `fd_allocate`,
+  truncate/sync, directory listing, `path_rename`, and `path_remove_directory` /
   `path_unlink_file`. It captures stdout/stderr and exit status for the interim
   browser smoke; it is not an interactive TTY/readline, persistent filesystem,
   networking, WASIX, or WebC runtime.
@@ -120,12 +120,12 @@ Current scope:
   unsupported capability/artifact cases, fake artifact fetches, size checks,
   streaming overflow, and sha256 mismatch handling.
 - `test/wasi-module.test.js` covers raw WASI module byte loading, argv/env
-  plumbing, clocks, random bytes, stdin, read-only package files, stdio fd
-  stat, path/file metadata, directory listing and cookies, file seek/tell
-  behavior, volatile scratch-file allocation/truncate/sync and directory
-  create/remove operations, scratch path rename behavior, stdout/stderr capture,
-  `proc_exit` status mapping, command worker lifecycle integration, and the
-  local Codex version-smoke artifact when it is present.
+  plumbing, clocks, cooperative yield, random bytes, stdin, read-only package
+  files, stdio fd stat, path/file metadata, directory listing and cookies, file
+  seek/tell behavior, volatile scratch-file allocation/truncate/sync and
+  directory create/remove operations, scratch path rename behavior,
+  stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle
+  integration, and the local Codex version-smoke artifact when it is present.
 
 Run the web adapter checks:
 

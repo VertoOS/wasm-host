@@ -301,7 +301,8 @@ package-file fixtures:
 `fd_fdstat_get`,
 `fd_fdstat_set_flags`, `fd_write`, `path_create_directory`,
 `path_filestat_get`, `path_open`, `path_rename`,
-`path_remove_directory`, `path_unlink_file`, `random_get`, and `proc_exit`.
+`path_remove_directory`, `path_unlink_file`, `random_get`, `sched_yield`, and
+`proc_exit`.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, and provides a volatile in-memory `/tmp` scratch preopen for narrow

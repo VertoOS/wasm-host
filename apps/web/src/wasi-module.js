@@ -509,6 +509,7 @@ class WasiPreview1Runtime {
         this.pathUnlinkFile(fd, pathPtr, pathLen),
       random_get: (bufferPtr, bufferLength) =>
         this.randomGet(bufferPtr, bufferLength),
+      sched_yield: () => this.schedYield(),
       proc_exit: (exitCode) => {
         throw new WasiProcExit(exitCode);
       },
@@ -572,6 +573,11 @@ class WasiPreview1Runtime {
       );
       offset += chunkLength;
     }
+    return ERRNO_SUCCESS;
+  }
+
+  schedYield() {
+    this.throwIfAborted();
     return ERRNO_SUCCESS;
   }
 

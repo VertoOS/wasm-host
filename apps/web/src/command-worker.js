@@ -165,7 +165,11 @@ export class BrowserCommandWorkerRuntime {
       return loadRawWasiModulePackage(value);
     }
     if (packageNeedsBrowserLoader(value)) {
-      return commandPackageFromRecord(await this.packageLoader.load(value));
+      const packageRecord = await this.packageLoader.load(value);
+      if (packageNeedsRawWasiModuleLoader(packageRecord)) {
+        return loadRawWasiModulePackage(packageRecord);
+      }
+      return commandPackageFromRecord(packageRecord);
     }
     return normalizePackage(value);
   }

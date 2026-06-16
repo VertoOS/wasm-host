@@ -1,5 +1,8 @@
 const WEBC_MAGIC = new Uint8Array([0x00, 0x77, 0x65, 0x62, 0x63]);
 const WASM_MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
+const WEBC_ARTIFACT_KIND = "webc-package";
+const RAW_WASI_ARTIFACT_KIND = "wasi-module";
+const RAW_WASI_ENTRYPOINT = "_start";
 const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_PACKAGE_CACHE_NAMESPACE = "wasm-host";
 const DEFAULT_PACKAGE_CACHE_DB_NAME = "wasm-host-package-cache";
@@ -325,9 +328,16 @@ function normalizePackageMetadata(input, context) {
   const id = nonEmptyString(input.id ?? input.packageId ?? DEFAULT_PACKAGE_ID);
   const commands = normalizeCommands(input);
   const defaultCommand = normalizeDefaultCommand(input, commands);
-  const entrypoint = nonEmptyString(input.entrypoint ?? defaultCommand);
+  const entrypoint = nonEmptyString(
+    input.entrypoint ??
+      (context.artifactKind === RAW_WASI_ARTIFACT_KIND
+        ? RAW_WASI_ENTRYPOINT
+        : defaultCommand),
+  );
   const executorType =
-    input.executorType ?? input.commandPackageType ?? context.artifactKind;
+    context.artifactKind === RAW_WASI_ARTIFACT_KIND
+      ? RAW_WASI_ARTIFACT_KIND
+      : input.executorType ?? input.commandPackageType ?? context.artifactKind;
   return {
     artifactKind: context.artifactKind,
     commands,
@@ -467,15 +477,10 @@ function packageSummary(record) {
 
 function normalizeArtifactKind(value, format) {
   const artifactKind =
-    value ?? (format === "webc" ? "webc-package" : "wasm-module");
+    value ?? (format === "webc" ? WEBC_ARTIFACT_KIND : RAW_WASI_ARTIFACT_KIND);
   const normalized = nonEmptyString(artifactKind);
-  if (normalized === "wasi-module") {
-    throw new BrowserPackageLoaderError(
-      "unsupported",
-      "raw WASI module packages are not supported by the browser package loader yet",
-    );
-  }
-  const expected = format === "webc" ? "webc-package" : "wasm-module";
+  const expected =
+    format === "webc" ? WEBC_ARTIFACT_KIND : RAW_WASI_ARTIFACT_KIND;
   if (normalized !== expected) {
     throw new BrowserPackageLoaderError(
       "invalid_package",

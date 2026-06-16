@@ -59,7 +59,9 @@ until the boundaries are stable enough to split.
   through the command worker stdout path.
 - The same `codex-browser` executor can run a mocked model turn by POSTing the
   generated request JSON through the selected browser HTTP transport and
-  streaming local fixture response chunks to command stdout.
+  streaming local fixture response chunks to command stdout. It can inject a
+  host-owned bearer secret from an opaque `CODEX_MODEL_BEARER_SECRET_REF`
+  without putting the token in command args, ordinary env values, or stdout.
 - The browser adapter package can execute the interim raw WASI preview1
   `codex --version` smoke path with args/env, clocks, random bytes, preloaded
   stdin, cooperative yield, read-only package file reads and positioned reads,

@@ -30,8 +30,12 @@ Current scope:
   `codex_build_request`, writes generated Responses API request JSON to the
   command stdout stream, and can run a mocked `model-request` by POSTing that
   JSON through the selected HTTP bridge transport and streaming response chunks
-  to stdout. This is not full CLI, auth, app-server, workspace, tool, or MCP
-  execution.
+  to stdout. A host-owned secret provider can inject a bearer token from the
+  opaque `CODEX_MODEL_BEARER_SECRET_REF` at HTTP dispatch time. This is not full
+  CLI, device-flow auth, app-server, workspace, tool, or MCP execution.
+- `src/secrets.js` owns the current browser secret-provider seam: tests can
+  supply host-owned bearer tokens by reference, while command messages and
+  terminal output continue to carry only opaque secret references.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
   stdin by default, writes stdout/stderr to a sink, closes output streams
@@ -101,7 +105,8 @@ Current scope:
   scenarios across a real worker message boundary using local HTTP fixtures.
 - `test/codex-browser.test.js` covers the custom-export Codex browser
   request-builder executor, mocked model-request dispatch through direct Fetch
-  and gateway transports, export validation, and command error shaping.
+  and gateway transports, host-owned bearer secret injection/redaction, export
+  validation, and command error shaping.
 - `test/command-worker.test.js` and `test/command-worker-entry.test.js` cover
   command lifecycle success, startup failure, stdin, cancellation, timeout,
   duplicate-run rejection, terminal resize, explicit stream close, HTTP

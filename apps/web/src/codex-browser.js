@@ -1,7 +1,10 @@
+import { resolveBrowserBearerSecret } from "./secrets.js";
+
 const WASM_MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
 const DEFAULT_PACKAGE_ID = "codex-browser";
 const DEFAULT_COMMAND = "build-request";
 const MODEL_REQUEST_COMMAND = "model-request";
+const MODEL_BEARER_SECRET_ENV = "CODEX_MODEL_BEARER_SECRET_REF";
 const DEFAULT_ENTRYPOINT = "codex_build_request";
 const DEFAULT_MODEL = "gpt-5";
 const CODEX_BROWSER_ARTIFACT_KIND = "codex-browser";
@@ -106,7 +109,10 @@ export async function runCodexBrowserRequestBuilder(
       { exitCode: 127 },
     );
   }
-  if (request.command !== DEFAULT_COMMAND && request.command !== MODEL_REQUEST_COMMAND) {
+  if (
+    request.command !== DEFAULT_COMMAND &&
+    request.command !== MODEL_REQUEST_COMMAND
+  ) {
     throw new BrowserCodexBrowserError(
       "command_not_found",
       `unsupported codex-browser command: ${request.command}`,
@@ -145,7 +151,13 @@ export async function runCodexBrowserRequestBuilder(
     signal: request.signal,
   });
   if (request.command === MODEL_REQUEST_COMMAND) {
-    return dispatchCodexModelRequest(request, output, requestJson, endpoint, options);
+    return dispatchCodexModelRequest(
+      request,
+      output,
+      requestJson,
+      endpoint,
+      options,
+    );
   }
   await output.writeStdout(`${requestJson}\n`);
   return { exitCode: 0 };
@@ -190,31 +202,33 @@ async function dispatchCodexModelRequest(
     );
   }
   const writer = new ModelResponseWriter(output);
-  await transport.dispatch(
-    {
-      body: encoder.encode(requestJson),
-      headers: [
-        { name: "content-type", value: "application/json" },
-        { name: "accept", value: "text/event-stream, application/json" },
-      ],
-      id: `${request.package.id}:${request.command}`,
-      method: "POST",
-      responseBodyLimit: optionalPositiveInteger(
-        request.env.CODEX_MODEL_RESPONSE_BODY_LIMIT ??
-          options.responseBodyLimit ??
-          DEFAULT_RESPONSE_BODY_LIMIT,
-        "CODEX_MODEL_RESPONSE_BODY_LIMIT",
-      ),
-      timeoutMs: optionalPositiveInteger(
-        request.env.CODEX_MODEL_TIMEOUT_MS ?? options.timeoutMs,
-        "CODEX_MODEL_TIMEOUT_MS",
-        { optional: true },
-      ),
-      url: endpoint,
-    },
-    writer,
-    request.signal,
-  );
+  const { headers, sensitiveValues } = await modelRequestHeaders(request, options);
+  try {
+    await transport.dispatch(
+      {
+        body: encoder.encode(requestJson),
+        headers,
+        id: `${request.package.id}:${request.command}`,
+        method: "POST",
+        responseBodyLimit: optionalPositiveInteger(
+          request.env.CODEX_MODEL_RESPONSE_BODY_LIMIT ??
+            options.responseBodyLimit ??
+            DEFAULT_RESPONSE_BODY_LIMIT,
+          "CODEX_MODEL_RESPONSE_BODY_LIMIT",
+        ),
+        timeoutMs: optionalPositiveInteger(
+          request.env.CODEX_MODEL_TIMEOUT_MS ?? options.timeoutMs,
+          "CODEX_MODEL_TIMEOUT_MS",
+          { optional: true },
+        ),
+        url: endpoint,
+      },
+      writer,
+      request.signal,
+    );
+  } catch (error) {
+    throw redactModelRequestError(error, sensitiveValues);
+  }
   throwIfAborted(request.signal);
   if (!isSuccessfulHttpStatus(writer.status)) {
     throw new BrowserCodexBrowserError(
@@ -225,6 +239,56 @@ async function dispatchCodexModelRequest(
     );
   }
   return { exitCode: 0 };
+}
+
+async function modelRequestHeaders(request, options) {
+  const headers = [
+    { name: "content-type", value: "application/json" },
+    { name: "accept", value: "text/event-stream, application/json" },
+  ];
+  throwIfAborted(request.signal);
+  const bearerToken = await resolveBrowserBearerSecret(
+    options.secretProvider,
+    request.env?.[MODEL_BEARER_SECRET_ENV] ?? options.bearerSecretRef,
+    { purpose: "codex-model-request", signal: request.signal },
+  );
+  throwIfAborted(request.signal);
+  if (bearerToken) {
+    headers.push({ name: "authorization", value: `Bearer ${bearerToken}` });
+    return {
+      headers,
+      sensitiveValues: [`Bearer ${bearerToken}`, bearerToken],
+    };
+  }
+  return { headers, sensitiveValues: [] };
+}
+
+function redactModelRequestError(error, sensitiveValues) {
+  const message = redactSensitiveText(error?.message, sensitiveValues);
+  if (message === error?.message) {
+    return error;
+  }
+  const redacted = new Error(message);
+  redacted.name = error?.name ?? "Error";
+  const source = error && typeof error === "object" ? error : {};
+  for (const key of ["kind", "stage", "exitCode", "cancelled", "timedOut"]) {
+    if (key in source) {
+      redacted[key] = source[key];
+    }
+  }
+  return redacted;
+}
+
+function redactSensitiveText(value, sensitiveValues) {
+  let text = String(value ?? "codex-browser model request failed");
+  const values = [...(sensitiveValues ?? [])]
+    .filter((sensitive) => sensitive != null && String(sensitive).length > 0)
+    .map(String)
+    .sort((left, right) => right.length - left.length);
+  for (const sensitive of values) {
+    text = text.split(sensitive).join("[redacted]");
+  }
+  return text;
 }
 
 class ModelResponseWriter {

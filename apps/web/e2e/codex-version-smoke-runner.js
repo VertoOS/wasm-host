@@ -77,6 +77,14 @@ async function runCodexVersionSmokePage(page) {
     exitCode: 124,
     timedOut: true,
   });
+  assert.deepEqual(status.result.httpBridge, {
+    exitCode: 0,
+    stderr: "",
+    stderrBytes: 0,
+    stdout: "HTTP_BRIDGE_OK\n",
+    stdoutBytes: 15,
+    urlPath: "/e2e/http-bridge-smoke.txt",
+  });
   assert.equal(status.result.workerEntrypoint, "/src/command-worker-entry.js");
   return `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`;
 }
@@ -249,8 +257,8 @@ async function launchBrowser(executable) {
   try {
     await waitForDevTools(debugPort, child);
   } catch (error) {
-    child.kill("SIGTERM");
-    await rm(userDataDir, { force: true, recursive: true });
+    await terminateBrowser(child, exitPromise, () => exited);
+    await removeBrowserProfile(userDataDir);
     throw new Error(
       `browser DevTools endpoint did not start: ${error.message}\n${stderr.join("")}`,
     );
@@ -258,23 +266,36 @@ async function launchBrowser(executable) {
 
   return {
     close: async () => {
-      if (!exited) {
-        child.kill("SIGTERM");
-      }
-      await Promise.race([
-        exitPromise,
-        delay(3000).then(async () => {
-          if (exited) {
-            return;
-          }
-          child.kill("SIGKILL");
-          await exitPromise;
-        }),
-      ]).catch(() => {});
-      await rm(userDataDir, { force: true, recursive: true });
+      await terminateBrowser(child, exitPromise, () => exited);
+      await removeBrowserProfile(userDataDir);
     },
     debugPort,
   };
+}
+
+async function terminateBrowser(child, exitPromise, isExited) {
+  if (!isExited()) {
+    child.kill("SIGTERM");
+  }
+  await Promise.race([
+    exitPromise,
+    delay(3000).then(async () => {
+      if (isExited()) {
+        return;
+      }
+      child.kill("SIGKILL");
+      await exitPromise;
+    }),
+  ]).catch(() => {});
+}
+
+async function removeBrowserProfile(userDataDir) {
+  await rm(userDataDir, {
+    force: true,
+    maxRetries: 5,
+    recursive: true,
+    retryDelay: 100,
+  });
 }
 
 class DevToolsPage {

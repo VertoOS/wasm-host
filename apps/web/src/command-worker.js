@@ -35,6 +35,7 @@ export class BrowserCommandWorkerRuntime {
     this.httpTransports =
       options.httpTransports ?? createDefaultHttpTransports(options);
     this.executors = options.executors ?? {
+      "http-smoke": createHttpSmokeCommandExecutor(options.httpSmoke),
       smoke: createSmokeCommandExecutor(options.smoke),
       "wasi-module": createRawWasiModuleExecutor(options.wasiModule),
     };
@@ -441,6 +442,48 @@ export function createSmokeCommandExecutor(options = {}) {
       }
       throwIfAborted(request.signal);
       await output.writeStdout(`${marker}\n`);
+      return { exitCode: 0 };
+    },
+  };
+}
+
+export function createHttpSmokeCommandExecutor(options = {}) {
+  const responseBodyLimit = options.responseBodyLimit ?? 1024 * 1024;
+  return {
+    async run(request, output) {
+      if (!request.package.commands.includes(request.command)) {
+        throw new BrowserCommandWorkerError(
+          "command_not_found",
+          `browser command not found: ${request.command}`,
+          "command_resolution",
+          { exitCode: 127 },
+        );
+      }
+      if (typeof request.httpBridge?.dispatch !== "function") {
+        throw new BrowserCommandWorkerError(
+          "unsupported_package",
+          "browser HTTP bridge is unavailable",
+          "runtime",
+        );
+      }
+
+      const url = httpSmokeUrl(request, options);
+      throwIfAborted(request.signal);
+      const response = await request.httpBridge.dispatch({
+        method: "GET",
+        responseBodyLimit,
+        timeoutMs: options.timeoutMs,
+        url,
+      });
+      if (!isSuccessfulHttpStatus(response.status)) {
+        throw new BrowserCommandWorkerError(
+          "transport",
+          `browser HTTP smoke request failed with status ${response.status}`,
+          "runtime",
+          { exitCode: 1 },
+        );
+      }
+      await output.writeStdout(response.body);
       return { exitCode: 0 };
     },
   };
@@ -1075,6 +1118,26 @@ function timeoutError() {
     "runtime",
     { exitCode: TIMEOUT_EXIT_CODE, timedOut: true },
   );
+}
+
+function httpSmokeUrl(request, options) {
+  const value =
+    request.args.find((arg) => String(arg ?? "").trim()) ??
+    request.env.WASM_HOST_HTTP_SMOKE_URL ??
+    options.url;
+  const url = String(value ?? "").trim();
+  if (!url) {
+    throw new BrowserCommandWorkerError(
+      "invalid_request",
+      "browser HTTP smoke URL is required",
+      "runtime",
+    );
+  }
+  return url;
+}
+
+function isSuccessfulHttpStatus(status) {
+  return Number.isInteger(status) && status >= 200 && status <= 299;
 }
 
 function httpBridgeTimeoutError() {

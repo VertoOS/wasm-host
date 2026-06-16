@@ -52,6 +52,17 @@ grep -q "WASM_HOST_RESOLVED_AVAILABLE=1" <<<"$go_output"
 grep -q "WASM_HOST_RESOLVED_WEBC=$TMP_ROOT/go.webc" <<<"$go_output"
 grep -q "WASM_HOST_RESOLVED_ARGS_JSON='\\[\"run\",\"/workspace/go/smoke.go\"\\]'" <<<"$go_output"
 
+go_override_output="$(WASM_HOST_GO_WEBC="$TMP_ROOT/go.webc.gz" \
+  WASM_HOST_GO_COMMAND=go-smoke \
+  WASM_HOST_GO_ARGS='--mode smoke "two words"' \
+  "$RESOLVER" \
+  --manifest "$MANIFEST" \
+  --language go \
+  --tmp-root "$TMP_ROOT")"
+grep -q "WASM_HOST_RESOLVED_AVAILABLE=1" <<<"$go_override_output"
+grep -q "WASM_HOST_RESOLVED_COMMAND=go-smoke" <<<"$go_override_output"
+grep -q "WASM_HOST_RESOLVED_ARGS_JSON='\\[\"--mode\",\"smoke\",\"two words\"\\]'" <<<"$go_override_output"
+
 printf '<!doctype html>' > "$TMP_ROOT/bad.webc"
 bad_log="$TMP_ROOT/bad.log"
 if WASM_HOST_PYTHON_WEBC="$TMP_ROOT/bad.webc" "$RESOLVER" \

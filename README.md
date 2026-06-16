@@ -29,6 +29,9 @@ until the boundaries are stable enough to split.
   for pluggable direct/gateway dispatch.
 - The browser adapter package has a worker entrypoint and local worker-boundary
   HTTP tests for direct Fetch, gateway, and cancellation behavior.
+- The browser adapter package has an initial command lifecycle worker with
+  load/run/cancel/stdin messages, stdout/stderr events, timeout shaping, HTTP
+  transport selection, and a smoke executor for worker-boundary tests.
 - C ABI and initial Python/Go binding smoke tests are implemented, including
   generated WebC success-path fixtures.
 - Browser worker/runtime wiring, packaged runtime artifacts, and full language
@@ -163,8 +166,8 @@ with `WASM_HOST_GO_COMMAND` and `WASM_HOST_GO_ARGS`.
 ## Web Adapter Tests
 
 The browser adapter package currently owns direct Fetch and gateway-backed
-transport code, an initial HTTP worker message runtime, and deterministic
-browser-networking tests. Run them with:
+transport code, initial HTTP and command worker message runtimes, and
+deterministic browser-networking/lifecycle tests. Run them with:
 
 ```sh
 npm --prefix apps/web run check

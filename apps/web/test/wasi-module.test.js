@@ -48,12 +48,16 @@ const READ_FILE_WASM = base64ToBytes(
   "AGFzbQEAAAABLwdgAn9/AX9gA39/fwF/YAl/f39/f35+f38Bf2AEf39/fwF/YAF/AX9gAX8AYAAAAqoCCBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDmZkX3ByZXN0YXRfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRNmZF9wcmVzdGF0X2Rpcl9uYW1lAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwYXRoX29wZW4AAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxD2ZkX2ZpbGVzdGF0X2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAADFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfY2xvc2UABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQABQMDAgUGBQMBAAEGPAp/AEEAC38AQcAAC38AQaABC38AQbABC38AQbQBC38AQbgBC38AQcABC38AQYACC38AQYAEC38AQaAECwcTAgZtZW1vcnkCAAZfc3RhcnQACQqxBAIGACAAEAcLpwQBAn9BAyMAEAAhACAABEBBChAICyMALQAAQQBHBEBBCxAICyMAQQRqKAIAQQpHBEBBDBAIC0EDIwZBChABIQAgAARAQQ0QCAsjBi0AAEEvRwRAQQ4QCAsjBkEJai0AAEHlAEcEQEEPEAgLQQMQBSEAIABBCEcEQEEQEAgLIwIjBzYCACMCQQRqQSA2AgBBAyMCQQEjAxAEIQAgAEEfRwRAQREQCAsjBUHjADYCAEEDQQAjCUELQQBCAkIAQQAjBRACIQAgAEEsRwRAQRQQCAsjBSgCAEHjAEcEQEEVEAgLQQlBACMIQQlBAEICQgBBACMFEAIhACAAQQhHBEBBFhAIC0EBQQAjCEEJQQBCAkIAQQAjBRACIQAgAEHMAEcEQEEXEAgLQQNBACMIQQlBAUICQgBBACMFEAIhACAAQcwARwRAQRgQCAtBA0EAIwhBCUEAQgJCAEEAIwUQAiEAIAAEQEEeEAgLIwUoAgAhASABQQNNBEBBHxAICyABIwEQAyEAIAAEQEEgEAgLIwFBEGotAABBBEcEQEEhEAgLIwFBIGopAwBCDVIEQEEiEAgLIwIjBzYCACMCQQRqQSA2AgAgASMCQQEjAxAEIQAgAARAQSgQCAsjAygCAEENRwRAQSkQCAsgARAFIQAgAARAQSoQCAsgASMCQQEjAxAEIQAgAEEIRwRAQSsQCAsjAiMHNgIAIwJBBGpBDTYCAEEBIwJBASMEEAYaCwshAgBBgAQLCWhlbGxvLnR4dABBoAQLC21pc3NpbmcudHh0",
 );
 
+const SEEK_TELL_WASM = base64ToBytes(
+  "AGFzbQEAAAABOAhgCX9/f39/fn5/fwF/YAR/fn9/AX9gAn9/AX9gBH9/f38Bf2ABfwF/YAR/f39/AX9gAX8AYAAAAu4BBxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXBhdGhfb3BlbgAAFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfc2VlawABFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfdGVsbAACFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAADFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfY2xvc2UABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAUWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQABgMDAgYHBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAgKiQYCBwAgABAGAAv+BQEBf0EDQQBBgAhBCEEAQiZCAEEAQSAQAEEARwRAQQoQBwtBICgCACEAIABBKBACQQBHBEBBCxAHC0EoKQMAQgBSBEBBDBAHCyAAQgZBAEEoEAFBAEcEQEENEAcLQSgpAwBCBlIEQEEOEAcLIABBKBACQQBHBEBBDxAHC0EoKQMAQgZSBEBBEBAHC0HAAEGAEDYCAEHEAEEFNgIAIABBwABBAUE4EANBAEcEQEEREAcLQTgoAgBBBUcEQEESEAcLQYAQLQAAQfcARwRAQRMQBwtBgRAtAABB7wBHBEBBFBAHC0GCEC0AAEHyAEcEQEEVEAcLQYMQLQAAQewARwRAQRYQBwtBhBAtAABB5ABHBEBBFxAHCyAAQSgQAkEARwRAQRgQBwtBKCkDAEILUgRAQRkQBwsgAEJ6QQFBKBABQQBHBEBBGhAHC0EoKQMAQgVSBEBBGxAHCyAAQntBAkEoEAFBAEcEQEEcEAcLQSgpAwBCB1IEQEEdEAcLIABCf0EAQSgQAUEcRwRAQR4QBwsgAEJ4QQFBKBABQRxHBEBBHxAHCyAAQnNBAkEoEAFBHEcEQEEgEAcLIABCACAAQhxBAEEoEAFBAEcEQEEuEAcLQSgpAwBCHFIEQEEvEAcLIABCB0EAQSgQAUEARwRAQTAQBwtBKCkDAEIHUgRAQTEQBwtB4wBBKBABQRxHBEBBIRAHCyAAQv///////////wBBAEEoEAFBPUcEQEEiEAcLIABBKBACQQBHBEBBIxAHC0EoKQMAQgdSBEBBJBAHC0HjAEEoEAJBCEcEQEElEAcLQQNCAEEAQSgQAUECRwRAQSYQBwtBAEEoEAJBAkcEQEEnEAcLQQFCAEEAQSgQAUECRwRAQSgQBwtBAkEoEAJBAkcEQEEpEAcLIAAQBEEARwRAQSoQBwsgAEEoEAJBCEcEQEErEAcLIABCAEEAQSgQAUEIRwRAQSwQBwtBwABBiAg2AgBBxABBDTYCAEEBQcAAQQFBOBAFQQBHBEBBLRAHCwsLIgIAQYAICwhzZWVrLnR4dABBiAgLDXNlZWstdGVsbC1vawo=",
+);
+
 const MISSING_MEMORY_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABwoBBl9zdGFydAAACgQBAgAL",
 );
 
 const UNSUPPORTED_IMPORT_WASM = base64ToBytes(
-  "AGFzbQEAAAABDAJgBH9+f38Bf2AAAAIiARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3NlZWsAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoPAQ0AQQBCAEEAQRAQABoL",
+  "AGFzbQEAAAABDQJgBX9/f35/AX9gAAACJQEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQpmZF9yZWFkZGlyAAADAgEBBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAEKEQEPAEEAQQBBAEIAQQAQABoL",
 );
 
 const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
@@ -360,6 +364,35 @@ test("raw WASI executor reads packaged files through a workspace preopen", async
   assert.equal(output.stderr, "");
 });
 
+test("raw WASI executor seeks and tells packaged files", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: SEEK_TELL_WASM,
+    command: "seek-tell",
+    files: {
+      "seek.txt": "hello world\n",
+    },
+    id: "seek-tell",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "seek-tell",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "seek-tell-ok\n");
+  assert.equal(output.stderr, "");
+});
+
 test("raw WASI worker executor forwards output and exit status", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleWorkerExecutor({
@@ -651,6 +684,59 @@ test("command worker runs raw WASI modules with packaged files", async () => {
   });
 });
 
+test("command worker runs raw WASI modules that seek packaged files", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-seek-tell",
+    package: {
+      artifactKind: "wasi-module",
+      command: "seek-tell",
+      id: "seek-tell",
+      wasiModule: {
+        bytes: SEEK_TELL_WASM,
+        files: [
+          {
+            content: "hello world\n",
+            path: "/workspace/seek.txt",
+          },
+        ],
+      },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-seek-tell",
+    packageId: "seek-tell",
+    command: "seek-tell",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.type === "command.loaded",
+  );
+  assert.equal(loaded.artifactKind, "wasi-module");
+  assert.equal(loaded.packageType, "wasi-module");
+  assert.equal(stdoutText(port.messages), "seek-tell-ok\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-seek-tell",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 13,
+      timedOut: false,
+    },
+  });
+});
+
 test("command worker preloads streaming stdin before raw WASI start", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
@@ -831,7 +917,7 @@ test("raw WASI executor reports invalid modules and unsupported imports", async 
     executor.run(baseRunRequest(unsupportedImport), recordingOutput()),
     (error) => {
       assert.equal(error.kind, "runtime");
-      assert.match(error.message, /fd_seek/);
+      assert.match(error.message, /fd_readdir/);
       return true;
     },
   );

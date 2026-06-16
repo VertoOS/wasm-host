@@ -50,6 +50,9 @@ until the boundaries are stable enough to split.
   and Fetch-backed WebC/Wasm artifacts, including magic-byte validation,
   optional sha256 pinning, command metadata normalization, and browser-safe
   cache path derivation.
+- The browser adapter package has a first browser workspace store with
+  canonical `/workspace` paths, in-memory operations, snapshot import/export,
+  and IndexedDB-backed snapshot persistence when browser storage is available.
 - The browser adapter package can consume the interim Codex artifact manifest
   for the raw WASI `codex --version` smoke, normalize it into command load/run
   fixture messages, and verify fetched artifact bytes by size and sha256.
@@ -224,8 +227,9 @@ loader/cache boundary, the interim Codex artifact manifest consumer, the narrow
 raw WASI preview1 smoke executor, command-worker-boundary Codex version smoke,
 command-worker-boundary Codex browser request-builder smoke, real-browser Codex
 version and request-builder smoke, a terminal/stdio adapter, an interactive
-terminal UI shell, package source controls, and deterministic
-browser-networking/lifecycle/loading tests. Run them with:
+terminal UI shell, package source controls, a browser workspace store, and
+deterministic browser-networking/lifecycle/loading/workspace tests. Run them
+with:
 
 ```sh
 npm --prefix apps/web run check

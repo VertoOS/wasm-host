@@ -21,6 +21,7 @@ test("BrowserTerminalSession maps worker stdio and exit messages to a transcript
     id: "term-run",
     packageId: "pkg",
     command: "cat",
+    terminal: { cols: 90, rows: 30 },
   });
 
   assert.deepEqual(port.sent, [
@@ -31,6 +32,7 @@ test("BrowserTerminalSession maps worker stdio and exit messages to a transcript
       command: "cat",
       cwd: "/workspace",
       stdinOpen: true,
+      terminal: { columns: 90, rows: 30 },
     },
   ]);
 

@@ -36,6 +36,10 @@ until the boundaries are stable enough to split.
 - The browser adapter package has a minimal terminal/stdio adapter that can
   attach to a command worker port, display stdout/stderr, send stdin, propagate
   resize/cancel messages, and resolve final exit status.
+- The browser adapter package has a first interactive terminal UI shell that
+  renders command output, accepts typed or pasted stdin, propagates resize,
+  EOF, and cancellation controls, and runs the Codex version smoke through the
+  real browser command worker.
 - The browser adapter package has an initial package loader for explicit bytes
   and Fetch-backed WebC/Wasm artifacts, including magic-byte validation,
   optional sha256 pinning, command metadata normalization, and browser-safe
@@ -189,8 +193,9 @@ The browser adapter package currently owns direct Fetch and gateway-backed
 transport code, initial HTTP and command worker message runtimes, a package
 loader/cache boundary, the interim Codex artifact manifest consumer, the narrow
 raw WASI preview1 smoke executor, command-worker-boundary Codex version smoke,
-real-browser Codex version smoke, a minimal terminal/stdio adapter, and deterministic
-browser-networking/lifecycle/loading tests. Run them with:
+real-browser Codex version smoke, a terminal/stdio adapter, an interactive
+terminal UI shell, and deterministic browser-networking/lifecycle/loading tests.
+Run them with:
 
 ```sh
 npm --prefix apps/web run check

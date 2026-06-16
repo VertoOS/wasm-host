@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const E2E_PAGE_PATH = "/e2e/codex-version-smoke.html";
+const TERMINAL_SHELL_PAGE_PATH = "/e2e/terminal-shell.html";
 const BROWSER_REQUIRED = process.env.WASM_HOST_BROWSER_E2E_REQUIRED === "1";
 const BROWSER_EXECUTABLE = resolveBrowserExecutable();
 const CDP_AVAILABLE = typeof globalThis.WebSocket === "function";
@@ -26,7 +27,7 @@ const CDP_AVAILABLE = typeof globalThis.WebSocket === "function";
 async function runBrowserE2e() {
   const skip = skipReason();
   if (skip) {
-    return `SKIP browser Codex version smoke e2e: ${skip}`;
+    return `SKIP browser e2e: ${skip}`;
   }
   assert.ok(
     BROWSER_EXECUTABLE,
@@ -41,25 +42,66 @@ async function runBrowserE2e() {
     server = await startStaticServer(APP_ROOT);
     browser = await launchBrowser(BROWSER_EXECUTABLE);
 
-    const pageUrl = `${server.origin}${E2E_PAGE_PATH}`;
-    page = await DevToolsPage.open(browser.debugPort, pageUrl);
+    page = await DevToolsPage.open(
+      browser.debugPort,
+      `${server.origin}${E2E_PAGE_PATH}`,
+    );
+    const smoke = await runCodexVersionSmokePage(page);
+    page.close();
 
-    await page.send("Runtime.enable");
-    await page.send("Log.enable");
-
-    const status = await waitForSmokeStatus(page, { timeoutMs: 15000 });
-    assert.equal(status.status, "passed", status.error?.message);
-    assert.equal(status.result.exitCode, 0);
-    assert.equal(status.result.stderr, "");
-    assert.match(status.result.stdout, /^codex-cli /);
-    assert.equal(status.result.artifactKind, "wasi-module");
-    assert.equal(status.result.workerEntrypoint, "/src/command-worker-entry.js");
-    return `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`;
+    page = await DevToolsPage.open(
+      browser.debugPort,
+      `${server.origin}${TERMINAL_SHELL_PAGE_PATH}`,
+    );
+    const terminal = await runTerminalShellPage(page);
+    return `${smoke}\n${terminal}`;
   } finally {
     page?.close();
     await browser?.close();
     await server?.close();
   }
+}
+
+async function runCodexVersionSmokePage(page) {
+  await page.send("Runtime.enable");
+  await page.send("Log.enable");
+
+  const status = await waitForSmokeStatus(page, { timeoutMs: 15000 });
+  assert.equal(status.status, "passed", status.error?.message);
+  assert.equal(status.result.exitCode, 0);
+  assert.equal(status.result.stderr, "");
+  assert.match(status.result.stdout, /^codex-cli /);
+  assert.equal(status.result.artifactKind, "wasi-module");
+  assert.equal(status.result.workerEntrypoint, "/src/command-worker-entry.js");
+  return `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`;
+}
+
+async function runTerminalShellPage(page) {
+  await page.send("Runtime.enable");
+  await page.send("Log.enable");
+
+  const ready = await waitForTerminalShellStatus(page, { timeoutMs: 15000 });
+  assert.equal(ready.status, "ready", ready.error?.message);
+
+  await page.send("Runtime.evaluate", {
+    expression: `
+      (() => {
+        document.querySelector("[data-terminal-columns]").value = "96";
+        document.querySelector("[data-terminal-rows]").value = "28";
+        document.querySelector("[data-terminal-resize]").click();
+        document.querySelector("[data-terminal-run]").click();
+        return true;
+      })()
+    `,
+    returnByValue: true,
+  });
+
+  const status = await waitForTerminalShellStatus(page, { timeoutMs: 15000 });
+  assert.equal(status.status, "passed", status.error?.message);
+  assert.equal(status.result.exitCode, 0);
+  assert.match(status.output, /^codex-cli /);
+  assert.deepEqual(status.size, { columns: "96", rows: "28" });
+  return `PASS browser terminal shell e2e: ${status.output.trim()}`;
 }
 
 function skipReason() {
@@ -276,6 +318,27 @@ async function waitForSmokeStatus(page, options = {}) {
   );
 }
 
+async function waitForTerminalShellStatus(page, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? 10000);
+  while (Date.now() < deadline) {
+    const evaluation = await page.send("Runtime.evaluate", {
+      expression: "window.__wasmHostTerminalShellStatus",
+      returnByValue: true,
+    });
+    const status = evaluation.result?.value;
+    if (status?.status === "ready" || status?.status === "passed") {
+      return status;
+    }
+    if (status?.status === "failed") {
+      return status;
+    }
+    await delay(100);
+  }
+  throw new Error(
+    `timed out waiting for terminal shell status: ${JSON.stringify(page.events)}`,
+  );
+}
+
 async function waitForDevTools(debugPort, child) {
   let exit = null;
   child.once("exit", (code, signal) => {
@@ -390,6 +453,8 @@ function contentType(filePath) {
       return "text/javascript; charset=utf-8";
     case ".json":
       return "application/json; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
     case ".wasm":
       return "application/wasm";
     default:

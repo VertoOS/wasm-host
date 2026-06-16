@@ -243,13 +243,18 @@ export function createTerminalTranscript() {
 function normalizeRunMessage(value = {}) {
   const run = value.run ?? value;
   const id = nonEmptyString(run.id ?? value.id, "run id is required");
-  return {
+  const message = {
     ...run,
     cwd: run.cwd ?? DEFAULT_CWD,
     id,
     stdinOpen: run.stdinOpen ?? true,
     type: "command.run",
   };
+  const terminal = run.terminal ?? value.terminal;
+  if (terminal != null) {
+    message.terminal = normalizeTerminalSize(terminal);
+  }
+  return message;
 }
 
 function normalizeTerminalSize(value) {

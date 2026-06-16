@@ -146,6 +146,56 @@ test("DirectFetchHttpTransport honors per-request response body limits", async (
   );
 });
 
+test("DirectFetchHttpTransport honors per-request timeouts", async () => {
+  const transport = new DirectFetchHttpTransport({
+    fetchImpl: fetchThatWaitsForAbort,
+  });
+
+  await assert.rejects(
+    transport.dispatch(
+      {
+        id: 22,
+        method: "GET",
+        url: "https://example.test/timeout",
+        headers: [],
+        body: null,
+        timeoutMs: 1,
+      },
+      recordingWriter(),
+      new AbortController().signal,
+    ),
+    (error) => {
+      assert.equal(error.kind, "timeout");
+      assert.equal(error.message, "HTTP request exceeded wall time limit");
+      return true;
+    },
+  );
+});
+
+test("dispatchFetchRequest maps non-policy failures to transport errors", async () => {
+  await assert.rejects(
+    dispatchFetchRequest(
+      {
+        id: 23,
+        method: "GET",
+        url: "https://example.test/transport",
+        headers: [],
+        body: null,
+      },
+      {
+        fetchImpl: async () => {
+          throw new Error("socket exploded");
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.kind, "transport");
+      assert.equal(error.message, "Browser Fetch failed: socket exploded");
+      return true;
+    },
+  );
+});
+
 test("GatewayFetchHttpTransport maps buffered gateway requests and responses", async () => {
   const seen = {};
   const transport = new GatewayFetchHttpTransport({

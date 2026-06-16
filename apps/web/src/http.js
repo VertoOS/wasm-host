@@ -87,7 +87,10 @@ export async function dispatchFetchRequest(request, options = {}) {
     throw new HttpBridgeError("transport", "Fetch API is unavailable");
   }
 
-  const abort = createAbortController(options.cancellation, options.timeoutMs);
+  const abort = createAbortController(
+    options.cancellation,
+    options.timeoutMs ?? request.timeoutMs,
+  );
   const cleanup = abort.cleanup;
   try {
     const body = await requestBodyForFetch(request, {

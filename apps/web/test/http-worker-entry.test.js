@@ -85,6 +85,91 @@ test("HTTP worker entry streams direct Fetch request bodies", async () => {
   }
 });
 
+test("HTTP worker entry enforces direct Fetch response body limits", async () => {
+  const server = await localHttpServer(async (_request, response) => {
+    response.writeHead(200, { "Content-Type": "text/plain" });
+    response.end("too-large");
+  });
+  const worker = createHttpWorker();
+  try {
+    await assert.rejects(
+      dispatchAndCollect(worker, {
+        type: "http.dispatch",
+        id: "direct-limit-1",
+        request: {
+          method: "GET",
+          url: `${server.url}/large`,
+          headers: [],
+          responseBodyLimit: 4,
+        },
+      }),
+      (error) => {
+        assert.equal(error.kind, "response_too_large");
+        assert.equal(error.message, "HTTP response body exceeded 4 bytes");
+        return true;
+      },
+    );
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
+test("HTTP worker entry maps direct Fetch request timeouts", async () => {
+  const server = await localHttpServer(async (_request, response) => {
+    await delay(250);
+    response.writeHead(200, { "Content-Type": "text/plain" });
+    response.end("late");
+  });
+  const worker = createHttpWorker();
+  try {
+    await assert.rejects(
+      dispatchAndCollect(worker, {
+        type: "http.dispatch",
+        id: "direct-timeout-1",
+        request: {
+          method: "GET",
+          url: `${server.url}/slow`,
+          headers: [],
+          timeoutMs: 25,
+        },
+      }),
+      (error) => {
+        assert.equal(error.kind, "timeout");
+        assert.equal(error.message, "HTTP request exceeded wall time limit");
+        return true;
+      },
+    );
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
+test("HTTP worker entry maps direct Fetch failures to browser policy errors", async () => {
+  const worker = createHttpWorker();
+  try {
+    await assert.rejects(
+      dispatchAndCollect(worker, {
+        type: "http.dispatch",
+        id: "direct-fetch-failure-1",
+        request: {
+          method: "GET",
+          url: await closedLocalHttpUrl("/closed"),
+          headers: [],
+        },
+      }),
+      (error) => {
+        assert.equal(error.kind, "cors");
+        assert.equal(error.message, "Browser Fetch blocked or failed the request");
+        return true;
+      },
+    );
+  } finally {
+    await worker.terminate();
+  }
+});
+
 test("HTTP worker entry dispatches gateway requests through worker messages", async () => {
   let captured = null;
   const server = await localHttpServer(async (request, response) => {
@@ -136,6 +221,103 @@ test("HTTP worker entry dispatches gateway requests through worker messages", as
       { name: "x-gateway", value: "yes" },
     ]);
     assert.equal(chunksText(result.bodyChunks), "gateway-ok");
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
+test("HTTP worker entry maps gateway unavailable failures", async () => {
+  const worker = createHttpWorker({
+    gatewayEndpoint: await closedLocalHttpUrl("/bridge"),
+  });
+  try {
+    await assert.rejects(
+      dispatchAndCollect(worker, {
+        type: "http.dispatch",
+        id: "gateway-unavailable-1",
+        transport: "gateway",
+        request: {
+          method: "GET",
+          url: "https://example.test/api",
+          headers: [],
+        },
+      }),
+      (error) => {
+        assert.equal(error.kind, "gateway_unavailable");
+        assert.equal(error.message, "HTTP gateway endpoint is unavailable");
+        return true;
+      },
+    );
+  } finally {
+    await worker.terminate();
+  }
+});
+
+test("HTTP worker entry maps invalid gateway responses", async () => {
+  const server = await localHttpServer(async (_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end("{");
+  });
+  const worker = createHttpWorker({ gatewayEndpoint: `${server.url}/bridge` });
+  try {
+    await assert.rejects(
+      dispatchAndCollect(worker, {
+        type: "http.dispatch",
+        id: "gateway-invalid-1",
+        transport: "gateway",
+        request: {
+          method: "GET",
+          url: "https://example.test/api",
+          headers: [],
+        },
+      }),
+      (error) => {
+        assert.equal(error.kind, "invalid_response");
+        assert.match(error.message, /invalid HTTP gateway response JSON/);
+        return true;
+      },
+    );
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
+test("HTTP worker entry enforces gateway response body limits", async () => {
+  const server = await localHttpServer(async (_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        ok: true,
+        response: {
+          status: 200,
+          headers: [],
+          body_chunks_base64: ["dG9vLWxhcmdl"],
+        },
+      }),
+    );
+  });
+  const worker = createHttpWorker({ gatewayEndpoint: `${server.url}/bridge` });
+  try {
+    await assert.rejects(
+      dispatchAndCollect(worker, {
+        type: "http.dispatch",
+        id: "gateway-limit-1",
+        transport: "gateway",
+        request: {
+          method: "GET",
+          url: "https://example.test/api",
+          headers: [],
+          responseBodyLimit: 4,
+        },
+      }),
+      (error) => {
+        assert.equal(error.kind, "response_too_large");
+        assert.equal(error.message, "HTTP response body exceeded 4 bytes");
+        return true;
+      },
+    );
   } finally {
     await worker.terminate();
     await server.close();
@@ -240,6 +422,16 @@ async function localHttpServer(handler) {
   };
 }
 
+async function closedLocalHttpUrl(path) {
+  const server = await localHttpServer(async (_request, response) => {
+    response.writeHead(500, { "Content-Type": "text/plain" });
+    response.end("should be closed");
+  });
+  const url = `${server.url}${path}`;
+  await server.close();
+  return url;
+}
+
 function readRequestText(request) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -247,6 +439,10 @@ function readRequestText(request) {
     request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     request.on("error", reject);
   });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function chunksText(chunks) {

@@ -66,9 +66,10 @@ Current scope:
   transport while verifying size and sha256.
 - `src/wasi-module.js` implements the narrow raw WASI preview1 fixture runner
   for modules that import args/env, preloaded fd 0 stdin through `fd_read`,
-  `fd_write`, and `proc_exit`. It captures stdout/stderr and exit status for
-  the interim browser smoke; it is not an interactive TTY/readline,
-  filesystem, networking, WASIX, or WebC runtime.
+  stdio descriptor metadata through `fd_fdstat_get` and
+  `fd_fdstat_set_flags`, `fd_write`, and `proc_exit`. It captures
+  stdout/stderr and exit status for the interim browser smoke; it is not an
+  interactive TTY/readline, filesystem, networking, WASIX, or WebC runtime.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.
@@ -112,9 +113,9 @@ Current scope:
   unsupported capability/artifact cases, fake artifact fetches, size checks,
   streaming overflow, and sha256 mismatch handling.
 - `test/wasi-module.test.js` covers raw WASI module byte loading, argv/env
-  plumbing, stdout/stderr capture, `proc_exit` status mapping, command worker
-  lifecycle integration, and the local Codex version-smoke artifact when it is
-  present.
+  plumbing, stdin, stdio fd stat, stdout/stderr capture, `proc_exit` status
+  mapping, command worker lifecycle integration, and the local Codex
+  version-smoke artifact when it is present.
 
 Run the web adapter checks:
 

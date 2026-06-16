@@ -293,11 +293,11 @@ The interim raw WASI preview1 fixture runner lives in
 package type `wasi-module`. It loads explicit raw Wasm bytes, verifies optional
 SHA-256 pins, instantiates modules that export `_start` and memory, and
 implements only the preview1 calls required by the Codex version-smoke fixture:
-`args_sizes_get`, `args_get`, `environ_sizes_get`, `environ_get`, `fd_write`,
-and `proc_exit`. This runner captures stdout, stderr, and exit status for the
-interim browser smoke path. It is not a general WASIX runtime and does not
-provide filesystem, stdin, clocks, random, sockets, threads, or WebC metadata
-execution.
+`args_sizes_get`, `args_get`, `environ_sizes_get`, `environ_get`, `fd_read`,
+`fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_write`, and `proc_exit`. This
+runner captures stdout, stderr, and exit status for the interim browser smoke
+path. It is not a general WASIX runtime and does not provide filesystem,
+clocks, random, sockets, threads, or WebC metadata execution.
 
 The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex

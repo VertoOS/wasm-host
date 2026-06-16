@@ -7,6 +7,16 @@ const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
 const ERRNO_SUCCESS = 0;
 const ERRNO_BADF = 8;
 const STDIN_FD = 0;
+const STDOUT_FD = 1;
+const STDERR_FD = 2;
+const WASI_FILETYPE_CHARACTER_DEVICE = 2;
+const WASI_RIGHT_FD_READ = 1n << 1n;
+const WASI_RIGHT_FD_FDSTAT_SET_FLAGS = 1n << 3n;
+const WASI_RIGHT_FD_WRITE = 1n << 6n;
+const WASI_STDIN_RIGHTS =
+  WASI_RIGHT_FD_READ | WASI_RIGHT_FD_FDSTAT_SET_FLAGS;
+const WASI_STDOUT_RIGHTS =
+  WASI_RIGHT_FD_WRITE | WASI_RIGHT_FD_FDSTAT_SET_FLAGS;
 let workerRunCounter = 0;
 
 export class BrowserWasiModuleError extends Error {
@@ -316,6 +326,8 @@ class WasiPreview1Runtime {
         this.writeSizes(this.env, environCountPtr, environBufSizePtr),
       fd_read: (fd, iovsPtr, iovsLen, nreadPtr) =>
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
+      fd_fdstat_get: (fd, fdstatPtr) => this.fdFdstatGet(fd, fdstatPtr),
+      fd_fdstat_set_flags: (fd, flags) => this.fdFdstatSetFlags(fd, flags),
       fd_write: (fd, iovsPtr, iovsLen, nwrittenPtr) =>
         this.fdWrite(fd, iovsPtr, iovsLen, nwrittenPtr),
       proc_exit: (exitCode) => {
@@ -345,7 +357,7 @@ class WasiPreview1Runtime {
 
   fdWrite(fd, iovsPtr, iovsLen, nwrittenPtr) {
     this.throwIfAborted();
-    if (fd !== 1 && fd !== 2) {
+    if (fd !== STDOUT_FD && fd !== STDERR_FD) {
       this.writeU32(nwrittenPtr, 0);
       return ERRNO_BADF;
     }
@@ -363,7 +375,7 @@ class WasiPreview1Runtime {
     this.writeU32(nwrittenPtr, total);
 
     for (const chunk of chunks) {
-      if (fd === 1) {
+      if (fd === STDOUT_FD) {
         void this.output.writeStdout(chunk);
       } else {
         void this.output.writeStderr(chunk);
@@ -402,12 +414,44 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
+  fdFdstatGet(fd, fdstatPtr) {
+    this.throwIfAborted();
+    const rights = stdioRights(fd);
+    if (rights == null) {
+      return ERRNO_BADF;
+    }
+    this.writeU8(fdstatPtr, WASI_FILETYPE_CHARACTER_DEVICE);
+    this.writeU8(fdstatPtr + 1, 0);
+    this.writeU16(fdstatPtr + 2, 0);
+    this.writeU32(fdstatPtr + 4, 0);
+    this.writeU64(fdstatPtr + 8, rights);
+    this.writeU64(fdstatPtr + 16, 0n);
+    return ERRNO_SUCCESS;
+  }
+
+  fdFdstatSetFlags(fd, _flags) {
+    this.throwIfAborted();
+    return stdioRights(fd) == null ? ERRNO_BADF : ERRNO_SUCCESS;
+  }
+
   readU32(ptr) {
     return this.view().getUint32(ptr, true);
   }
 
+  writeU8(ptr, value) {
+    this.view().setUint8(ptr, value);
+  }
+
+  writeU16(ptr, value) {
+    this.view().setUint16(ptr, value, true);
+  }
+
   writeU32(ptr, value) {
     this.view().setUint32(ptr, value >>> 0, true);
+  }
+
+  writeU64(ptr, value) {
+    this.view().setBigUint64(ptr, BigInt(value), true);
   }
 
   view() {
@@ -430,6 +474,18 @@ class WasiPreview1Runtime {
 
   throwIfAborted() {
     throwIfAborted(this.signal);
+  }
+}
+
+function stdioRights(fd) {
+  switch (fd) {
+    case STDIN_FD:
+      return WASI_STDIN_RIGHTS;
+    case STDOUT_FD:
+    case STDERR_FD:
+      return WASI_STDOUT_RIGHTS;
+    default:
+      return null;
   }
 }
 

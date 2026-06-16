@@ -36,6 +36,10 @@ const STDIN_BADF_WASM = base64ToBytes(
   "AGFzbQEAAAABEANgBH9/f38Bf2ABfwBgAAACRQIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAQMCAQIFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAgofAR0AQQBBwAA2AgBBBEEINgIAQQNBAEEBQRAQABABCw==",
 );
 
+const FDSTAT_WASM = base64ToBytes(
+  "AGFzbQEAAAABFgRgAn9/AX9gBH9/f38Bf2ABfwBgAAACmgEEFndhc2lfc25hcHNob3RfcHJldmlldzENZmRfZmRzdGF0X2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzETZmRfZmRzdGF0X3NldF9mbGFncwAAFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwMCAgMFAwEAAQYQA38AQQALfwBBIAt/AEEwCwcTAgZtZW1vcnkCAAZfc3RhcnQABQqSAwIGACAAEAMLiAMBAX9BACMAEAAhACAABEBBChAECyMALQAAQQJHBEBBCxAECyMAQQJqLwEAQQBHBEBBDBAECyMAQQhqKQMAQgpSBEBBDRAECyMAQRBqKQMAQgBSBEBBDhAEC0EAQQQQASEAIAAEQEEPEAQLQQAjABAAIQAgAARAQRAQBAsjAEECai8BAEEARwRAQREQBAtBASMAEAAhACAABEBBFBAECyMALQAAQQJHBEBBFRAECyMAQQJqLwEAQQBHBEBBFhAECyMAQQhqKQMAQsgAUgRAQRcQBAsjAEEQaikDAEIAUgRAQRgQBAtBAUEEEAEhACAABEBBGRAEC0ECIwAQACEAIAAEQEEeEAQLIwBBCGopAwBCyABSBEBBHxAEC0ECQQQQASEAIAAEQEEgEAQLIwBB4wA6AABBCSMAEAAhACAAQQhHBEBBKBAECyMALQAAQeMARwRAQSkQBAtBCUEEEAEhACAAQQhHBEBBKhAECyMBQcAANgIAIwFBBGpBCjYCAEEBIwFBASMCEAIaCwsRAQBBwAALCmZkc3RhdC1vawo=",
+);
+
 const MISSING_MEMORY_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABwoBBl9zdGFydAAACgQBAgAL",
 );
@@ -253,6 +257,32 @@ test("raw WASI fd_read reports BADF for non-stdin fds", async () => {
   assert.equal(output.stderr, "");
 });
 
+test("raw WASI executor supports stdio fd stat imports", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: FDSTAT_WASM,
+    command: "fdstat",
+    id: "fdstat",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "fdstat",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "fdstat-ok\n");
+  assert.equal(output.stderr, "");
+});
+
 test("raw WASI worker executor forwards output and exit status", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleWorkerExecutor({
@@ -386,6 +416,53 @@ test("command worker passes initial stdin to raw WASI modules", async () => {
   assert.deepEqual(port.messages.at(-1), {
     type: "command.complete",
     id: "run-cat",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 10,
+      timedOut: false,
+    },
+  });
+});
+
+test("command worker runs raw WASI modules that inspect stdio fd stat", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-fdstat",
+    package: {
+      artifactKind: "wasi-module",
+      command: "fdstat",
+      id: "fdstat",
+      wasiModule: {
+        bytes: FDSTAT_WASM,
+      },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-fdstat",
+    packageId: "fdstat",
+    command: "fdstat",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.type === "command.loaded",
+  );
+  assert.equal(loaded.artifactKind, "wasi-module");
+  assert.equal(loaded.packageType, "wasi-module");
+  assert.equal(stdoutText(port.messages), "fdstat-ok\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-fdstat",
     result: {
       cancelled: false,
       exitCode: 0,

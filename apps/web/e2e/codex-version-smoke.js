@@ -1,4 +1,8 @@
 import {
+  assertCodexBrowserRequestPayload,
+  codexBrowserRequestBuilderFixture,
+} from "../fixtures/codex-browser-request-builder-core.js";
+import {
   CODEX_VERSION_SMOKE_STDOUT_PREFIX,
   CODEX_VERSION_SMOKE_WASM,
   codexVersionSmokeManifest,
@@ -62,6 +66,7 @@ export async function runCodexVersionSmoke() {
     assert(stderr === fixture.expected.stderr, "Codex stderr should be empty");
     const hardTimeout = await runNonCooperativeTimeout(worker);
     const httpBridge = await runHttpBridgeSmoke(worker);
+    const requestBuilder = await runCodexBrowserRequestBuilder(worker);
 
     return {
       artifactKind: load.loaded.artifactKind,
@@ -69,6 +74,7 @@ export async function runCodexVersionSmoke() {
       exitCode: result.exitCode,
       hardTimeout,
       httpBridge,
+      requestBuilder,
       stderr,
       stdout,
       stdoutBytes: result.stdoutBytes,
@@ -80,6 +86,33 @@ export async function runCodexVersionSmoke() {
   } finally {
     worker.terminate();
   }
+}
+
+async function runCodexBrowserRequestBuilder(worker) {
+  const fixture = await codexBrowserRequestBuilderFixture();
+  const load = await dispatchAndCollect(worker, fixture.commandLoad);
+  assert(
+    load.loaded.artifactKind === "codex-browser",
+    "Codex browser request-builder package should load",
+  );
+  assert(
+    load.loaded.packageType === "codex-browser",
+    "Codex browser request-builder package should use the custom executor",
+  );
+  const run = await dispatchAndCollect(worker, fixture.commandRun);
+  const stdout = chunksText(run.stdout);
+  const stderr = chunksText(run.stderr);
+  const payload = JSON.parse(stdout);
+  assertCodexBrowserRequestPayload(payload, fixture.expected);
+  assert(stderr === "", "Codex browser request-builder stderr should be empty");
+  return {
+    exitCode: run.complete.result.exitCode,
+    metadata: payload.metadata,
+    model: payload.model,
+    prompt: payload.input?.[0]?.content?.[0]?.text,
+    stderr,
+    stdoutBytes: run.complete.result.stdoutBytes,
+  };
 }
 
 async function runHttpBridgeSmoke(worker) {

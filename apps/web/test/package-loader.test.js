@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CODEX_BROWSER_REQUEST_BUILDER_WASM,
+  codexBrowserRequestBuilderFixture,
+} from "../fixtures/codex-browser-request-builder-core.js";
+import {
   CODEX_VERSION_SMOKE_STDOUT,
   CODEX_VERSION_SMOKE_WASM,
 } from "../fixtures/codex-version-smoke-core.js";
@@ -192,6 +196,48 @@ test("command lifecycle worker loads raw WASI bytes through BrowserPackageLoader
   );
   assert.equal(port.messages.at(-1).type, "command.complete");
   assert.equal(port.messages.at(-1).result.exitCode, 0);
+});
+
+test("command lifecycle worker loads codex-browser Wasm bytes through BrowserPackageLoader", async () => {
+  const fixture = await codexBrowserRequestBuilderFixture();
+  const loader = createBrowserPackageLoader();
+  const record = await loader.loadBytes({
+    artifactKind: "codex-browser",
+    bytes: CODEX_BROWSER_REQUEST_BUILDER_WASM,
+    command: "build-request",
+    id: "codex-browser",
+    source: { kind: "bytes", label: "codex_browser.wasm" },
+  });
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-codex-browser-bytes",
+    package: {
+      ...commandPackageFromRecord(record),
+      bytes: record.bytes,
+      expectedSha256: record.sha256,
+      source: record.source,
+    },
+  });
+  await runtime.handleMessage(fixture.commandRun);
+
+  assert.equal(port.messages[0].type, "command.loaded");
+  assert.equal(port.messages[0].artifactKind, "codex-browser");
+  assert.equal(port.messages[0].entrypoint, "codex_build_request");
+  assert.equal(port.messages[0].packageId, "codex-browser");
+  assert.equal(port.messages[0].packageType, "codex-browser");
+  assert.deepEqual(port.messages[0].commands, ["build-request"]);
+  assert.match(port.messages[0].contentSha256, /^[a-f0-9]{64}$/);
+  assert.equal(port.messages[0].cache.backend, "indexeddb");
+  assert.equal(
+    JSON.parse(chunksText(stdoutChunks(port.messages))).model,
+    "gpt-5.1",
+  );
 });
 
 test("BrowserPackageLoader loads URL-backed Wasm bytes without external network", async () => {

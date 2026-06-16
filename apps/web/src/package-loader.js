@@ -2,7 +2,9 @@ const WEBC_MAGIC = new Uint8Array([0x00, 0x77, 0x65, 0x62, 0x63]);
 const WASM_MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
 const WEBC_ARTIFACT_KIND = "webc-package";
 const RAW_WASI_ARTIFACT_KIND = "wasi-module";
+const CODEX_BROWSER_ARTIFACT_KIND = "codex-browser";
 const RAW_WASI_ENTRYPOINT = "_start";
+const CODEX_BROWSER_ENTRYPOINT = "codex_build_request";
 const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_PACKAGE_CACHE_NAMESPACE = "wasm-host";
 const DEFAULT_PACKAGE_CACHE_DB_NAME = "wasm-host-package-cache";
@@ -62,7 +64,13 @@ export class BrowserPackageLoader {
     const metadata = normalizePackageMetadata(input, {
       byteLength: bytes.byteLength,
       cacheKeys,
-      artifactKind: normalizeArtifactKind(input.artifactKind, format),
+      artifactKind: normalizeArtifactKind(
+        input.artifactKind ??
+          (input.executorType === CODEX_BROWSER_ARTIFACT_KIND
+            ? CODEX_BROWSER_ARTIFACT_KIND
+            : undefined),
+        format,
+      ),
       format,
       sha256,
       source: normalizeSource(input.source),
@@ -332,6 +340,8 @@ function normalizePackageMetadata(input, context) {
     input.entrypoint ??
       (context.artifactKind === RAW_WASI_ARTIFACT_KIND
         ? RAW_WASI_ENTRYPOINT
+        : context.artifactKind === CODEX_BROWSER_ARTIFACT_KIND
+          ? CODEX_BROWSER_ENTRYPOINT
         : defaultCommand),
   );
   const executorType =
@@ -480,8 +490,10 @@ function normalizeArtifactKind(value, format) {
     value ?? (format === "webc" ? WEBC_ARTIFACT_KIND : RAW_WASI_ARTIFACT_KIND);
   const normalized = nonEmptyString(artifactKind);
   const expected =
-    format === "webc" ? WEBC_ARTIFACT_KIND : RAW_WASI_ARTIFACT_KIND;
-  if (normalized !== expected) {
+    format === "webc"
+      ? [WEBC_ARTIFACT_KIND]
+      : [RAW_WASI_ARTIFACT_KIND, CODEX_BROWSER_ARTIFACT_KIND];
+  if (!expected.includes(normalized)) {
     throw new BrowserPackageLoaderError(
       "invalid_package",
       `browser package artifactKind ${normalized} does not match ${format} bytes`,

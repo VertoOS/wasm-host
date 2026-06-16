@@ -1,4 +1,9 @@
 import { HttpBridgeError } from "./http.js";
+import {
+  createCodexBrowserRequestBuilderExecutor,
+  loadCodexBrowserPackage,
+  packageNeedsCodexBrowserLoader,
+} from "./codex-browser.js";
 import { createDefaultHttpTransports } from "./http-worker.js";
 import {
   commandPackageFromRecord,
@@ -35,6 +40,9 @@ export class BrowserCommandWorkerRuntime {
     this.httpTransports =
       options.httpTransports ?? createDefaultHttpTransports(options);
     this.executors = options.executors ?? {
+      "codex-browser": createCodexBrowserRequestBuilderExecutor(
+        options.codexBrowser,
+      ),
       "http-smoke": createHttpSmokeCommandExecutor(options.httpSmoke),
       smoke: createSmokeCommandExecutor(options.smoke),
       "wasi-module": createRawWasiModuleExecutor(options.wasiModule),
@@ -161,6 +169,9 @@ export class BrowserCommandWorkerRuntime {
 
   async packageFromLoadMessage(message) {
     const value = message.package ?? message;
+    if (packageNeedsCodexBrowserLoader(value)) {
+      return loadCodexBrowserPackage(value);
+    }
     if (packageNeedsRawWasiModuleLoader(value)) {
       return loadRawWasiModulePackage(value);
     }
@@ -168,6 +179,9 @@ export class BrowserCommandWorkerRuntime {
       const packageRecord = await this.packageLoader.load(value);
       if (packageNeedsRawWasiModuleLoader(packageRecord)) {
         return loadRawWasiModulePackage(packageRecord);
+      }
+      if (packageNeedsCodexBrowserLoader(packageRecord)) {
+        return loadCodexBrowserPackage(packageRecord);
       }
       return commandPackageFromRecord(packageRecord);
     }

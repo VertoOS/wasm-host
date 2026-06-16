@@ -1,13 +1,18 @@
 const SUPPORTED_SCHEMA_VERSION = 1;
-const SUPPORTED_PACKAGE_NAME = "codex";
-const SUPPORTED_ARTIFACT_KIND = "wasi-module";
-const SUPPORTED_COMMAND = "codex";
-const SUPPORTED_ENTRYPOINT = "_start";
+const RAW_WASI_PACKAGE_NAME = "codex";
+const RAW_WASI_ARTIFACT_KIND = "wasi-module";
+const RAW_WASI_COMMAND = "codex";
+const RAW_WASI_ENTRYPOINT = "_start";
 const SUPPORTED_WASI = "preview1";
 const SUPPORTED_STDOUT_PREFIX = "codex-cli ";
 const SUPPORTED_EXPECTED_STDERR = "";
+const CODEX_BROWSER_PACKAGE_NAME = "codex-browser";
+const CODEX_BROWSER_ARTIFACT_KIND = "codex-browser";
+const CODEX_BROWSER_COMMAND = "build-request";
+const CODEX_BROWSER_ENTRYPOINT = "codex_build_request";
+const CODEX_BROWSER_RUNTIME = "wasm32-unknown-unknown";
 
-const REQUIRED_FIELDS = [
+const COMMON_REQUIRED_FIELDS = [
   "schemaVersion",
   "packageName",
   "artifactKind",
@@ -18,13 +23,22 @@ const REQUIRED_FIELDS = [
   "entrypoint",
   "args",
   "expectedExitCode",
-  "stdoutPrefix",
-  "expectedStderr",
-  "wasi",
   "requiresNetwork",
   "requiresWorkspace",
   "requiresHostCommand",
   "requiresTerminal",
+];
+
+const RAW_WASI_REQUIRED_FIELDS = [
+  ...COMMON_REQUIRED_FIELDS,
+  "stdoutPrefix",
+  "expectedStderr",
+  "wasi",
+];
+
+const CODEX_BROWSER_REQUIRED_FIELDS = [
+  ...COMMON_REQUIRED_FIELDS,
+  "runtime",
 ];
 
 export class ArtifactManifestError extends Error {
@@ -51,30 +65,10 @@ export function parseArtifactManifestJson(text) {
 
 export function validateCodexArtifactManifest(manifest) {
   validateObject(manifest);
-  validateRequiredFields(manifest);
+  validateRequiredFields(manifest, COMMON_REQUIRED_FIELDS);
   validateExact(manifest.schemaVersion, SUPPORTED_SCHEMA_VERSION, {
     field: "schemaVersion",
     kind: "invalid_manifest",
-  });
-  validateExact(manifest.packageName, SUPPORTED_PACKAGE_NAME, {
-    field: "packageName",
-    reason: "package_name",
-  });
-  validateExact(manifest.artifactKind, SUPPORTED_ARTIFACT_KIND, {
-    field: "artifactKind",
-    reason: "artifact_kind",
-  });
-  validateExact(manifest.command, SUPPORTED_COMMAND, {
-    field: "command",
-    reason: "command",
-  });
-  validateExact(manifest.entrypoint, SUPPORTED_ENTRYPOINT, {
-    field: "entrypoint",
-    reason: "entrypoint",
-  });
-  validateExact(manifest.wasi, SUPPORTED_WASI, {
-    field: "wasi",
-    reason: "wasi",
   });
   validateArtifactPath(manifest.artifactPath);
   validateArtifactSize(manifest.artifactSizeBytes);
@@ -87,12 +81,31 @@ export function validateCodexArtifactManifest(manifest) {
     "requires_host_command",
   );
   validateCapabilityFlag(manifest, "requiresTerminal", "requires_terminal");
-  validateVersionSmoke(manifest);
+  switch (manifest.artifactKind) {
+    case RAW_WASI_ARTIFACT_KIND:
+      validateRawWasiCodexManifest(manifest);
+      break;
+    case CODEX_BROWSER_ARTIFACT_KIND:
+      validateCodexBrowserRequestManifest(manifest);
+      break;
+    default:
+      validateExact(manifest.artifactKind, RAW_WASI_ARTIFACT_KIND, {
+        field: "artifactKind",
+        reason: "artifact_kind",
+      });
+  }
   return manifest;
 }
 
 export function normalizeCodexBrowserRunFixture(manifest) {
   validateCodexArtifactManifest(manifest);
+  if (manifest.artifactKind === CODEX_BROWSER_ARTIFACT_KIND) {
+    return normalizeCodexBrowserRequestFixture(manifest);
+  }
+  return normalizeRawWasiCodexFixture(manifest);
+}
+
+function normalizeRawWasiCodexFixture(manifest) {
   const artifactSha256 = normalizeSha256(manifest.artifactSha256);
   const packageId = manifest.packageName;
   const command = manifest.command;
@@ -144,6 +157,60 @@ export function normalizeCodexBrowserRunFixture(manifest) {
     wasi: {
       imports: ["wasi_snapshot_preview1"],
       preview: manifest.wasi,
+    },
+  };
+}
+
+function normalizeCodexBrowserRequestFixture(manifest) {
+  const artifactSha256 = normalizeSha256(manifest.artifactSha256);
+  const packageId = manifest.packageName;
+  const command = manifest.command;
+  const [prompt, model] = manifest.args;
+
+  return {
+    type: "codex-browser-request-builder-fixture",
+    id: `${packageId}-request-builder`,
+    artifact: {
+      kind: manifest.artifactKind,
+      path: manifest.artifactPath,
+      sha256: artifactSha256,
+      sizeBytes: manifest.artifactSizeBytes,
+    },
+    commandLoad: {
+      type: "command.load",
+      id: `load-${packageId}`,
+      package: {
+        artifactKind: manifest.artifactKind,
+        commands: [command],
+        defaultCommand: command,
+        entrypoint: manifest.entrypoint,
+        executorType: manifest.artifactKind,
+        id: packageId,
+        metadata: manifestMetadata(manifest, artifactSha256),
+        type: manifest.artifactKind,
+      },
+    },
+    commandRun: {
+      type: "command.run",
+      id: `run-${packageId}-request-builder`,
+      packageId,
+      command,
+      args: [...manifest.args],
+      env: {},
+      cwd: "/workspace",
+      stdinOpen: false,
+    },
+    expected: {
+      exitCode: manifest.expectedExitCode,
+      model,
+      prompt,
+      runtime: manifest.runtime,
+    },
+    requirements: {
+      hostCommand: manifest.requiresHostCommand,
+      network: manifest.requiresNetwork,
+      terminal: manifest.requiresTerminal,
+      workspace: manifest.requiresWorkspace,
     },
   };
 }
@@ -230,8 +297,8 @@ function defaultFetchImpl() {
     : undefined;
 }
 
-function validateRequiredFields(manifest) {
-  for (const field of REQUIRED_FIELDS) {
+function validateRequiredFields(manifest, fields) {
+  for (const field of fields) {
     if (!(field in manifest)) {
       throw new ArtifactManifestError(
         "invalid_manifest",
@@ -240,6 +307,52 @@ function validateRequiredFields(manifest) {
       );
     }
   }
+}
+
+function validateRawWasiCodexManifest(manifest) {
+  validateRequiredFields(manifest, RAW_WASI_REQUIRED_FIELDS);
+  validateExact(manifest.packageName, RAW_WASI_PACKAGE_NAME, {
+    field: "packageName",
+    reason: "package_name",
+  });
+  validateExact(manifest.command, RAW_WASI_COMMAND, {
+    field: "command",
+    reason: "command",
+  });
+  validateExact(manifest.entrypoint, RAW_WASI_ENTRYPOINT, {
+    field: "entrypoint",
+    reason: "entrypoint",
+  });
+  validateExact(manifest.wasi, SUPPORTED_WASI, {
+    field: "wasi",
+    reason: "wasi",
+  });
+  validateVersionSmoke(manifest);
+}
+
+function validateCodexBrowserRequestManifest(manifest) {
+  validateRequiredFields(manifest, CODEX_BROWSER_REQUIRED_FIELDS);
+  validateExact(manifest.packageName, CODEX_BROWSER_PACKAGE_NAME, {
+    field: "packageName",
+    reason: "package_name",
+  });
+  validateExact(manifest.command, CODEX_BROWSER_COMMAND, {
+    field: "command",
+    reason: "command",
+  });
+  validateExact(manifest.entrypoint, CODEX_BROWSER_ENTRYPOINT, {
+    field: "entrypoint",
+    reason: "entrypoint",
+  });
+  validateExact(manifest.runtime, CODEX_BROWSER_RUNTIME, {
+    field: "runtime",
+    reason: "runtime",
+  });
+  validateRequestBuilderArgs(manifest);
+  validateExact(manifest.expectedExitCode, 0, {
+    field: "expectedExitCode",
+    reason: "expected_exit_code",
+  });
 }
 
 function validateExact(value, expected, options = {}) {
@@ -317,6 +430,20 @@ function validateVersionSmoke(manifest) {
   });
 }
 
+function validateRequestBuilderArgs(manifest) {
+  if (
+    !Array.isArray(manifest.args) ||
+    manifest.args.length !== 2 ||
+    !manifest.args.every((arg) => typeof arg === "string" && arg.length > 0)
+  ) {
+    throw new ArtifactManifestError(
+      "unsupported",
+      "codex-browser request builder requires args [prompt, model]",
+      { field: "args", reason: "args" },
+    );
+  }
+}
+
 function manifestMetadata(manifest, artifactSha256) {
   return {
     artifactKind: manifest.artifactKind,
@@ -326,26 +453,41 @@ function manifestMetadata(manifest, artifactSha256) {
     command: manifest.command,
     entrypoint: manifest.entrypoint,
     expectedExitCode: manifest.expectedExitCode,
-    expectedStderr: manifest.expectedStderr,
+    ...(manifest.expectedStderr != null
+      ? { expectedStderr: manifest.expectedStderr }
+      : {}),
     packageName: manifest.packageName,
+    ...(manifest.runtime != null ? { runtime: manifest.runtime } : {}),
     schemaVersion: manifest.schemaVersion,
-    stdoutPrefix: manifest.stdoutPrefix,
-    wasi: manifest.wasi,
+    ...(manifest.stdoutPrefix != null ? { stdoutPrefix: manifest.stdoutPrefix } : {}),
+    ...(manifest.wasi != null ? { wasi: manifest.wasi } : {}),
   };
 }
 
 function fixtureWithArtifactBytes(fixture, bytes) {
+  const artifactBytes =
+    fixture.artifact.kind === CODEX_BROWSER_ARTIFACT_KIND
+      ? {
+          codexBrowser: {
+            byteLength: bytes.byteLength,
+            bytes,
+            expectedSha256: fixture.artifact.sha256,
+          },
+        }
+      : {
+          wasiModule: {
+            byteLength: bytes.byteLength,
+            bytes,
+            expectedSha256: fixture.artifact.sha256,
+          },
+        };
   return {
     ...fixture,
     commandLoad: {
       ...fixture.commandLoad,
       package: {
         ...fixture.commandLoad.package,
-        wasiModule: {
-          byteLength: bytes.byteLength,
-          bytes,
-          expectedSha256: fixture.artifact.sha256,
-        },
+        ...artifactBytes,
       },
     },
   };

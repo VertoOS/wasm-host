@@ -155,6 +155,7 @@ crates/
   wasm-host-fixtures/  # generated WebC fixtures for tests and examples
   wasm-host-runner/    # native terminal runner
 docs/
+  codex-browser-runtime-contract.md # Codex-specific browser runtime contract
   host-profile.md      # browser-compatible host contract
   repo-layout.md       # monorepo layout and future split rules
 packages/
@@ -241,6 +242,7 @@ Planning and task tracking live in GitHub issues. Design/reference docs live in
 the repo:
 
 - [`docs/host-profile.md`](docs/host-profile.md)
+- [`docs/codex-browser-runtime-contract.md`](docs/codex-browser-runtime-contract.md)
 - [`docs/repo-layout.md`](docs/repo-layout.md)
 
 ## Attribution

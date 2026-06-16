@@ -334,6 +334,12 @@ termination of non-cooperative Wasm, or final WebC/WASIX package execution.
 Those remain separate browser adapter layers so the successful version path can
 stay small and deterministic.
 
+The Codex-specific runtime contract is tracked in
+[`codex-browser-runtime-contract.md`](codex-browser-runtime-contract.md). That
+document separates the current raw WASI version smoke and Codex
+`wasm32-unknown-unknown` request-builder bundle from the full browser-hosted
+Codex runtime target.
+
 The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json

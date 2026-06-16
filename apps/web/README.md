@@ -41,6 +41,14 @@ Current scope:
   includes a deterministic fake device-flow auth broker for start/status,
   host-side completion, cancellation, and logout tests. It is not a real
   provider login, refresh, persistence, or browser credential UI.
+- `src/workspace.js` owns the first browser workspace store. It keeps
+  canonical `/workspace` paths, supports in-memory file/directory operations,
+  exports and imports deterministic snapshots, and persists one snapshot per
+  workspace id in IndexedDB when available. Memory storage remains the fallback
+  and test-injectable store. Whole-snapshot IndexedDB writes are intentionally
+  last-write-wins across store instances; OPFS, large-file storage, user
+  directory grants, WASI filesystem wiring, and Codex file-edit turns remain
+  later runtime layers.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
   stdin by default, writes stdout/stderr to a sink, closes output streams
@@ -75,7 +83,7 @@ Current scope:
   the raw WASI module executor; WebC sources keep their selected executor type.
   Memory cache remains the fallback and test-injectable cache. It does not parse
   full WebC metadata, execute WebC/WASIX packages, manage cache eviction, or
-  provide workspace persistence yet.
+  wire workspace persistence into package execution yet.
 - `src/artifact-manifest.js` consumes the interim Codex artifact manifest
   shapes. It validates the raw `wasi-module` `codex --version` contract and
   the `codex-browser` request-builder contract, normalizes them into command
@@ -116,6 +124,9 @@ Current scope:
 - `test/secrets.test.js` covers the in-memory browser secret provider and fake
   device-flow broker, including external completion, classified denied/expired/
   cancelled errors, logout, and token redaction.
+- `test/workspace.test.js` covers the browser workspace store's file,
+  directory, rename, snapshot import/export, invalid path, copied byte, default
+  memory fallback, and fake IndexedDB persistence behavior.
 - `test/command-worker.test.js` and `test/command-worker-entry.test.js` cover
   command lifecycle success, startup failure, stdin, cancellation, timeout,
   duplicate-run rejection, terminal resize, explicit stream close, HTTP
@@ -189,6 +200,6 @@ This package should eventually own:
 - full WebC worker startup and package loading
 - persistent package source history and richer release artifact selection
 - xterm.js/readline-grade terminal rendering and TTY compatibility
-- OPFS/IndexedDB workspace persistence
+- OPFS-backed large workspace persistence and WASI/Codex edit-turn wiring
 - wiring the command and HTTP worker runtimes into actual WebC execution
 - full interactive browser app e2e wiring

@@ -279,6 +279,15 @@ only the package input/cache boundary: full WebC metadata parsing, compiled
 module cache persistence, filesystem mounts, and actual WebC/Wasm execution are
 later browser runtime layers.
 
+The initial browser workspace store lives in `apps/web/src/workspace.js`. It
+keeps host-visible paths canonical under `/workspace`, supports in-memory
+file/directory operations, exports and imports deterministic snapshots, and
+persists one whole-workspace snapshot per workspace id in IndexedDB when
+available. Memory storage is the fallback. This is the first workspace state
+boundary only: OPFS-backed large-file storage, user-granted directories, WASI
+filesystem mounting, and Codex file-edit turn wiring remain later browser
+runtime layers.
+
 The interim Codex browser smoke manifest consumer lives in
 `apps/web/src/artifact-manifest.js`. It validates
 `codex-wasix/dist/artifact-manifest.json` for the raw `wasi-module`
@@ -314,8 +323,8 @@ advise/allocate/create/write/positioned-write/readback/positioned-read/stat,
 rights-reduction/renumber/rename, fd/path set-times/truncate/sync/unlink
 fixtures. Link/symlink/readlink, `poll_oneoff`, `proc_raise`, and socket
 imports are present only as deterministic browser-safe unsupported/no-op
-handlers. It is not a general WASIX runtime and does not provide persistent
-filesystems, sockets, threads, or WebC metadata execution.
+handlers. It is not a general WASIX runtime and does not itself provide
+persistent filesystems, sockets, threads, or WebC metadata execution.
 
 The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex

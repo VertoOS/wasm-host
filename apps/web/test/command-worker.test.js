@@ -68,6 +68,10 @@ test("BrowserCommandWorkerRuntime loads and runs a command", async () => {
     {
       type: "command.loaded",
       id: "load-1",
+      artifactKind: null,
+      cache: null,
+      contentSha256: null,
+      entrypoint: "run-test",
       packageId: "pkg",
       packageType: "test",
       commands: ["run-test"],
@@ -215,6 +219,177 @@ test("BrowserCommandWorkerRuntime reports malformed run messages", async () => {
       },
     },
   ]);
+});
+
+test("BrowserCommandWorkerRuntime cancels runs waiting for package load", async () => {
+  const port = recordingPort();
+  const load = deferred();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    packageLoader: { load: async () => load.promise },
+    port,
+  });
+
+  const loadTask = runtime.handleMessage({
+    type: "command.load",
+    id: "load-slow",
+    package: {
+      bytes: new Uint8Array([0]),
+      command: "smoke",
+      executorType: "smoke",
+      id: "slow-pkg",
+    },
+  });
+  await tick();
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "run-before-load",
+    packageId: "slow-pkg",
+    command: "smoke",
+  });
+  await tick();
+  await runtime.handleMessage({
+    type: "command.cancel",
+    id: "run-before-load",
+  });
+  await run;
+  load.resolve(packageRecord("slow-pkg"));
+  await loadTask;
+
+  assert.deepEqual(port.messages.find((message) => message.id === "run-before-load"), {
+    type: "command.error",
+    id: "run-before-load",
+    error: {
+      kind: "cancelled",
+      message: "browser command cancelled",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: true,
+      exitCode: 130,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+  assert.equal(
+    port.messages.some((message) => message.id === "run-before-load" && message.type === "command.started"),
+    false,
+  );
+});
+
+test("BrowserCommandWorkerRuntime rejects duplicate runs while package load is pending", async () => {
+  const port = recordingPort();
+  const load = deferred();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    packageLoader: { load: async () => load.promise },
+    port,
+  });
+
+  const loadTask = runtime.handleMessage({
+    type: "command.load",
+    id: "load-pending",
+    package: {
+      bytes: new Uint8Array([0]),
+      command: "smoke",
+      executorType: "smoke",
+      id: "pending-pkg",
+    },
+  });
+  await tick();
+  const firstRun = runtime.handleMessage({
+    type: "command.run",
+    id: "pending-run-a",
+    packageId: "pending-pkg",
+    command: "smoke",
+  });
+  await tick();
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "pending-run-b",
+    packageId: "pending-pkg",
+    command: "smoke",
+  });
+  load.resolve(packageRecord("pending-pkg"));
+  await loadTask;
+  await firstRun;
+
+  assert.deepEqual(port.messages.find((message) => message.id === "pending-run-b"), {
+    type: "command.error",
+    id: "pending-run-b",
+    error: {
+      kind: "invalid_request",
+      message: "another browser command is already running",
+      stage: "startup",
+    },
+    result: {
+      cancelled: false,
+      exitCode: null,
+      failureStage: "startup",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+  assert.equal(
+    port.messages.filter((message) => message.type === "command.started").length,
+    1,
+  );
+});
+
+test("BrowserCommandWorkerRuntime rejects duplicate package loads", async () => {
+  const port = recordingPort();
+  const load = deferred();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    packageLoader: { load: async () => load.promise },
+    port,
+  });
+
+  const firstLoad = runtime.handleMessage({
+    type: "command.load",
+    id: "load-a",
+    package: {
+      bytes: new Uint8Array([0]),
+      command: "smoke",
+      executorType: "smoke",
+      id: "same-pkg",
+    },
+  });
+  await tick();
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-b",
+    package: {
+      bytes: new Uint8Array([1]),
+      command: "smoke",
+      executorType: "smoke",
+      id: "same-pkg",
+    },
+  });
+  load.resolve(packageRecord("same-pkg"));
+  await firstLoad;
+
+  assert.deepEqual(port.messages.find((message) => message.id === "load-b"), {
+    type: "command.error",
+    id: "load-b",
+    error: {
+      kind: "invalid_request",
+      message: "browser command package is already loading: same-pkg",
+      stage: "package_load",
+    },
+    result: {
+      cancelled: false,
+      exitCode: null,
+      failureStage: "package_load",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+  assert.equal(port.messages.filter((message) => message.type === "command.loaded").length, 1);
 });
 
 test("BrowserCommandWorkerRuntime maps smoke command resolution failures", async () => {
@@ -517,6 +692,35 @@ function loadBlockingPackage(runtime) {
     type: "command.load",
     package: { id: "pkg", type: "blocking", commands: ["block"] },
   });
+}
+
+function packageRecord(id) {
+  return {
+    artifactKind: "webc-package",
+    byteLength: 5,
+    cache: { backend: "memory", modulePath: "module", packagePath: "package" },
+    cacheKeys: {},
+    commands: ["smoke"],
+    contentSha256: "a".repeat(64),
+    defaultCommand: "smoke",
+    entrypoint: "smoke",
+    executorType: "smoke",
+    format: "webc",
+    id,
+    metadata: {},
+    sha256: "a".repeat(64),
+    source: { kind: "bytes", label: "test" },
+  };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, reject, resolve };
 }
 
 function recordingPort() {

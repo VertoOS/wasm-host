@@ -1,4 +1,8 @@
 import { createDefaultHttpTransports } from "./http-worker.js";
+import {
+  commandPackageFromRecord,
+  createBrowserPackageLoader,
+} from "./package-loader.js";
 
 const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_HTTP_TRANSPORT = "direct";
@@ -27,7 +31,11 @@ export class BrowserCommandWorkerRuntime {
     this.executors = options.executors ?? {
       smoke: createSmokeCommandExecutor(options.smoke),
     };
+    this.packageLoader =
+      options.packageLoader ??
+      createBrowserPackageLoader(options.packageLoaderOptions ?? options);
     this.packages = new Map();
+    this.packageLoads = new Map();
     this.activeRun = null;
     this.listener = null;
     this.detach = null;
@@ -78,7 +86,7 @@ export class BrowserCommandWorkerRuntime {
     }
     switch (message.type) {
       case "command.load":
-        this.loadPackage(message);
+        await this.loadPackage(message);
         break;
       case "command.run":
         await this.runCommand(message);
@@ -98,21 +106,54 @@ export class BrowserCommandWorkerRuntime {
     }
   }
 
-  loadPackage(message) {
+  async loadPackage(message) {
+    const value = message.package ?? message;
+    const packageId = packageLoadKey(value);
+    if (this.packageLoads.has(packageId)) {
+      this.postCommandError(
+        message.id ?? packageId,
+        new BrowserCommandWorkerError(
+          "invalid_request",
+          `browser command package is already loading: ${packageId}`,
+          "package_load",
+        ),
+      );
+      return;
+    }
+    const loadRecord = { promise: this.packageFromLoadMessage(message) };
+    this.packageLoads.set(packageId, loadRecord);
     try {
-      const packageRecord = normalizePackage(message.package ?? message);
-      this.resolveExecutor(packageRecord.type);
+      const packageRecord = await loadRecord.promise;
+      if (this.packageLoads.get(packageId) !== loadRecord) {
+        return;
+      }
       this.packages.set(packageRecord.id, packageRecord);
       postMessageToPort(this.port, {
         type: "command.loaded",
         id: message.id ?? packageRecord.id,
+        artifactKind: packageRecord.artifactKind,
+        cache: packageRecord.cache,
+        contentSha256: packageRecord.contentSha256,
+        entrypoint: packageRecord.entrypoint,
         packageId: packageRecord.id,
         packageType: packageRecord.type,
         commands: packageRecord.commands,
       });
     } catch (error) {
       this.postCommandError(message.id ?? message.package?.id, error);
+    } finally {
+      if (this.packageLoads.get(packageId) === loadRecord) {
+        this.packageLoads.delete(packageId);
+      }
     }
+  }
+
+  async packageFromLoadMessage(message) {
+    const value = message.package ?? message;
+    if (packageNeedsBrowserLoader(value)) {
+      return commandPackageFromRecord(await this.packageLoader.load(value));
+    }
+    return normalizePackage(value);
   }
 
   async runCommand(message) {
@@ -135,18 +176,6 @@ export class BrowserCommandWorkerRuntime {
       return;
     }
 
-    let packageRecord;
-    let executor;
-    let http;
-    try {
-      packageRecord = this.packageForRun(run);
-      executor = this.resolveExecutor(packageRecord.type);
-      http = this.resolveHttpTransport(run.httpTransport);
-    } catch (error) {
-      this.postCommandError(run.id, error);
-      return;
-    }
-
     const activeRun = createActiveRun(run.id);
     this.activeRun = activeRun;
     enqueueInitialStdin(activeRun.stdin, run);
@@ -157,6 +186,29 @@ export class BrowserCommandWorkerRuntime {
       activeRun.timeout = setTimeout(() => {
         this.abortRun(activeRun, timeoutError());
       }, run.timeoutMs);
+    }
+
+    let packageRecord;
+    let executor;
+    let http;
+    try {
+      packageRecord = await waitForRunAbort(this.packageForRun(run), activeRun);
+      throwIfAborted(activeRun.controller.signal);
+      executor = this.resolveExecutor(packageRecord.type);
+      http = this.resolveHttpTransport(run.httpTransport);
+    } catch (error) {
+      const normalized = normalizeRunError(activeRun, error);
+      postMessageToPort(this.port, {
+        type: "command.error",
+        id: run.id,
+        error: commandErrorPayload(normalized),
+        result: errorResult(activeRun, normalized),
+      });
+      clearTimeout(activeRun.timeout);
+      if (this.activeRun === activeRun) {
+        this.activeRun = null;
+      }
+      return;
     }
 
     try {
@@ -268,7 +320,11 @@ export class BrowserCommandWorkerRuntime {
     run.controller.abort(run.abortError);
   }
 
-  packageForRun(run) {
+  async packageForRun(run) {
+    const loadRecord = this.packageLoads.get(run.packageId);
+    if (loadRecord) {
+      await loadRecord.promise;
+    }
     const packageRecord = this.packages.get(run.packageId);
     if (!packageRecord) {
       throw new BrowserCommandWorkerError(
@@ -491,11 +547,28 @@ function normalizePackage(value) {
     "package_load",
   );
   return {
+    artifactKind: value.artifactKind ?? null,
+    cache: value.cache ?? null,
     commands,
+    contentSha256: value.contentSha256 ?? null,
+    entrypoint: value.entrypoint ?? commands[0],
     id,
     metadata: value.metadata ?? {},
     type,
   };
+}
+
+function packageLoadKey(value) {
+  return String(value?.id ?? value?.packageId ?? DEFAULT_PACKAGE_ID);
+}
+
+function packageNeedsBrowserLoader(value) {
+  return (
+    value?.bytes != null ||
+    value?.url != null ||
+    value?.source?.kind === "bytes" ||
+    value?.source?.kind === "url"
+  );
 }
 
 function normalizeRunMessage(message) {
@@ -655,6 +728,18 @@ async function callExecutorWithAbort(executor, request, output) {
   const abort = abortRejection(request.signal);
   try {
     return await Promise.race([executorPromise, abort.promise]);
+  } finally {
+    abort.cleanup();
+  }
+}
+
+async function waitForRunAbort(promise, activeRun) {
+  const runPromise = Promise.resolve(promise);
+  runPromise.catch(() => {});
+
+  const abort = abortRejection(activeRun.controller.signal);
+  try {
+    return await Promise.race([runPromise, abort.promise]);
   } finally {
     abort.cleanup();
   }

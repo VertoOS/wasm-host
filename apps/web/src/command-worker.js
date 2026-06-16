@@ -3,6 +3,11 @@ import {
   commandPackageFromRecord,
   createBrowserPackageLoader,
 } from "./package-loader.js";
+import {
+  createRawWasiModuleExecutor,
+  loadRawWasiModulePackage,
+  packageNeedsRawWasiModuleLoader,
+} from "./wasi-module.js";
 
 const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_HTTP_TRANSPORT = "direct";
@@ -30,6 +35,7 @@ export class BrowserCommandWorkerRuntime {
       options.httpTransports ?? createDefaultHttpTransports(options);
     this.executors = options.executors ?? {
       smoke: createSmokeCommandExecutor(options.smoke),
+      "wasi-module": createRawWasiModuleExecutor(options.wasiModule),
     };
     this.packageLoader =
       options.packageLoader ??
@@ -150,6 +156,9 @@ export class BrowserCommandWorkerRuntime {
 
   async packageFromLoadMessage(message) {
     const value = message.package ?? message;
+    if (packageNeedsRawWasiModuleLoader(value)) {
+      return loadRawWasiModulePackage(value);
+    }
     if (packageNeedsBrowserLoader(value)) {
       return commandPackageFromRecord(await this.packageLoader.load(value));
     }
@@ -402,11 +411,11 @@ class CommandOutputWriter {
     this.activeRun = activeRun;
   }
 
-  async writeStdout(chunk) {
+  writeStdout(chunk) {
     this.write("command.stdout", chunk, "stdoutBytes");
   }
 
-  async writeStderr(chunk) {
+  writeStderr(chunk) {
     this.write("command.stderr", chunk, "stderrBytes");
   }
 

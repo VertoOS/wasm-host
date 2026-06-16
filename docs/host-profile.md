@@ -257,8 +257,18 @@ The interim Codex browser smoke manifest consumer lives in
 host-command, terminal, non-preview1 WASI, or non-WASI artifact support, and
 normalizes accepted manifests into command lifecycle load/run fixture messages.
 It can fetch artifact bytes through an injectable transport and verify the
-declared size and SHA-256. It still does not instantiate or execute the Wasm
-module; raw WASI execution remains a later browser runtime layer.
+declared size and SHA-256.
+
+The interim raw WASI preview1 fixture runner lives in
+`apps/web/src/wasi-module.js` and is wired into the command lifecycle worker as
+package type `wasi-module`. It loads explicit raw Wasm bytes, verifies optional
+SHA-256 pins, instantiates modules that export `_start` and memory, and
+implements only the preview1 calls required by the Codex version-smoke fixture:
+`args_sizes_get`, `args_get`, `environ_sizes_get`, `environ_get`, `fd_write`,
+and `proc_exit`. This runner captures stdout, stderr, and exit status for the
+interim browser smoke path. It is not a general WASIX runtime and does not
+provide filesystem, stdin, clocks, random, sockets, threads, or WebC metadata
+execution.
 
 The terminal gateway uses JSON over `POST` for buffered requests:
 

@@ -189,7 +189,7 @@ export async function fetchCodexArtifactBytes(manifest, options = {}) {
   return {
     artifactUrl,
     bytes,
-    fixture,
+    fixture: fixtureWithArtifactBytes(fixture, bytes),
   };
 }
 
@@ -324,6 +324,23 @@ function manifestMetadata(manifest, artifactSha256) {
     schemaVersion: manifest.schemaVersion,
     stdoutPrefix: manifest.stdoutPrefix,
     wasi: manifest.wasi,
+  };
+}
+
+function fixtureWithArtifactBytes(fixture, bytes) {
+  return {
+    ...fixture,
+    commandLoad: {
+      ...fixture.commandLoad,
+      package: {
+        ...fixture.commandLoad.package,
+        wasiModule: {
+          byteLength: bytes.byteLength,
+          bytes,
+          expectedSha256: fixture.artifact.sha256,
+        },
+      },
+    },
   };
 }
 

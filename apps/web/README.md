@@ -23,7 +23,8 @@ Current scope:
   still depends on package loading and runtime wiring.
 - `src/command-worker-entry.js` is the browser worker entrypoint for starting
   the command lifecycle runtime. The worker-boundary tests run the normalized
-  Codex version-smoke fixture through this entrypoint.
+  Codex version-smoke fixture through this entrypoint, and the browser e2e
+  smoke starts this entrypoint from a real module worker.
 - `src/package-loader.js` implements the first browser package loading surface
   for explicit bytes and Fetch-backed artifacts. It validates WebC/Wasm magic
   bytes, verifies optional sha256 pins, normalizes command metadata for
@@ -49,9 +50,15 @@ Current scope:
   command lifecycle success, startup failure, stdin, cancellation, timeout,
   duplicate-run rejection, HTTP transport selection, the smoke command, and the
   Codex `codex --version` contract across a real worker message boundary.
-- `fixtures/codex-version-smoke-fixture.js` owns the deterministic inline Codex
-  version-smoke manifest and raw WASI fixture used by worker-boundary tests, and
-  the optional local artifact path lookup for `codex-wasix/dist` outputs.
+- `fixtures/codex-version-smoke-core.js` owns the browser-safe deterministic
+  inline Codex version-smoke manifest and raw WASI fixture. The Node-only
+  `fixtures/codex-version-smoke-fixture.js` wrapper adds optional local artifact
+  path lookup for `codex-wasix/dist` outputs.
+- `e2e/codex-version-smoke.html`, `e2e/codex-version-smoke.js`, and
+  `e2e/codex-version-smoke-runner.js` serve `apps/web`, launch a real
+  Chromium/Chrome page through the DevTools protocol, start
+  `src/command-worker-entry.js` as a module worker, and assert the Codex
+  `codex --version` stdout/stderr/exit contract.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.
@@ -68,7 +75,16 @@ Run the web adapter checks:
 ```sh
 npm --prefix apps/web run check
 npm --prefix apps/web test
+npm --prefix apps/web run test:e2e
 ```
+
+`test:e2e` looks for `chromium`, `chromium-browser`, `google-chrome`,
+`google-chrome-stable`, `microsoft-edge`, or an explicit `WASM_HOST_BROWSER`
+path. It skips when no browser is available unless
+`WASM_HOST_BROWSER_E2E_REQUIRED=1` is set, which is how CI keeps the browser
+smoke required. This e2e smoke only covers the successful page-to-worker
+version run; terminal UI/stdio UX remains #42, and hard termination of
+non-cooperative Wasm remains #50.
 
 This package should eventually own:
 
@@ -76,4 +92,4 @@ This package should eventually own:
 - terminal UI integration
 - OPFS/IndexedDB workspace persistence
 - wiring the command and HTTP worker runtimes into actual WebC execution
-- browser e2e wiring
+- full interactive browser app e2e wiring

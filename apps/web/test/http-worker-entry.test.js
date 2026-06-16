@@ -227,6 +227,166 @@ test("HTTP worker entry dispatches gateway requests through worker messages", as
   }
 });
 
+test("HTTP worker entry streams gateway request bodies", async () => {
+  let captured = null;
+  const server = await localHttpServer(async (request, response) => {
+    captured = {
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      frames: ndjsonLines(await readRequestText(request)).map((line) =>
+        JSON.parse(line),
+      ),
+    };
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        ok: true,
+        response: {
+          status: 211,
+          headers: [{ name: "x-gateway", value: "upload" }],
+          body_chunks_base64: ["Z2F0ZXdheS11cGxvYWQ="],
+        },
+      }),
+    );
+  });
+  const worker = createHttpWorker({ gatewayEndpoint: `${server.url}/bridge` });
+  try {
+    const result = dispatchAndCollect(worker, {
+      type: "http.dispatch",
+      id: "gateway-stream-upload-1",
+      transport: "gateway",
+      request: {
+        method: "PUT",
+        url: "https://example.test/upload",
+        headers: [{ name: "x-test", value: "yes" }],
+        streamingBody: true,
+      },
+    });
+    await delay(25);
+    worker.postMessage({
+      type: "http.request.body",
+      id: "gateway-stream-upload-1",
+      chunk: "hello ",
+    });
+    worker.postMessage({
+      type: "http.request.body",
+      id: "gateway-stream-upload-1",
+      chunkBase64: "d29ybGQ=",
+    });
+    worker.postMessage({
+      type: "http.request.body.end",
+      id: "gateway-stream-upload-1",
+    });
+
+    const response = await result;
+    assert.equal(captured.method, "POST");
+    assert.equal(captured.url, "/bridge");
+    assert.equal(captured.headers["content-type"], "application/x-ndjson");
+    assert.deepEqual(captured.frames, [
+      {
+        type: "request",
+        schema: 1,
+        id: "gateway-stream-upload-1",
+        method: "PUT",
+        url: "https://example.test/upload",
+        headers: [{ name: "x-test", value: "yes" }],
+      },
+      { type: "body_chunk", body_base64: "aGVsbG8g" },
+      { type: "body_chunk", body_base64: "d29ybGQ=" },
+      { type: "body_end" },
+    ]);
+    assert.equal(response.complete.status, 211);
+    assert.deepEqual(response.complete.headers, [
+      { name: "x-gateway", value: "upload" },
+    ]);
+    assert.equal(chunksText(response.bodyChunks), "gateway-upload");
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
+test("HTTP worker entry streams gateway response frames", async () => {
+  const server = await localHttpServer(async (_request, response) => {
+    response.writeHead(200, {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+    });
+    response.write(
+      `${JSON.stringify({
+        type: "response",
+        status: 206,
+        headers: [{ name: "X-Gateway", value: " stream " }],
+      })}\n`,
+    );
+    response.write(
+      `${JSON.stringify({ type: "body_chunk", body_base64: "c3RyZWFtLQ==" })}\n`,
+    );
+    response.write(
+      `${JSON.stringify({ type: "body_chunk", body_base64: "b2s=" })}\n`,
+    );
+    response.end(`${JSON.stringify({ type: "body_end" })}\n`);
+  });
+  const worker = createHttpWorker({ gatewayEndpoint: `${server.url}/bridge` });
+  try {
+    const result = await dispatchAndCollect(worker, {
+      type: "http.dispatch",
+      id: "gateway-stream-response-1",
+      transport: "gateway",
+      request: {
+        method: "GET",
+        url: "https://example.test/stream",
+        headers: [],
+      },
+    });
+
+    assert.equal(result.complete.status, 206);
+    assert.deepEqual(result.complete.headers, [
+      { name: "x-gateway", value: "stream" },
+    ]);
+    assert.equal(chunksText(result.bodyChunks), "stream-ok");
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
+test("HTTP worker entry maps gateway stream error frames", async () => {
+  const server = await localHttpServer(async (_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/x-ndjson" });
+    response.end(
+      `${JSON.stringify({
+        type: "error",
+        kind: "transport",
+        message: "upstream connection reset",
+      })}\n`,
+    );
+  });
+  const worker = createHttpWorker({ gatewayEndpoint: `${server.url}/bridge` });
+  try {
+    await assert.rejects(
+      dispatchAndCollect(worker, {
+        type: "http.dispatch",
+        id: "gateway-stream-error-1",
+        transport: "gateway",
+        request: {
+          method: "GET",
+          url: "https://example.test/error",
+          headers: [],
+        },
+      }),
+      (error) => {
+        assert.equal(error.kind, "transport");
+        assert.equal(error.message, "upstream connection reset");
+        return true;
+      },
+    );
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
 test("HTTP worker entry maps gateway unavailable failures", async () => {
   const worker = createHttpWorker({
     gatewayEndpoint: await closedLocalHttpUrl("/bridge"),
@@ -443,6 +603,13 @@ function readRequestText(request) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function ndjsonLines(text) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 function chunksText(chunks) {

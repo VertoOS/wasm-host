@@ -18,9 +18,9 @@ Current scope:
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.
 - `test/http-worker-entry.test.js` runs direct Fetch, gateway, streaming body,
-  timeout, response-limit, unavailable-gateway, invalid-gateway-response, and
-  cancellation scenarios across a real worker message boundary using local HTTP
-  fixtures.
+  gateway streaming upload/response, timeout, response-limit,
+  unavailable-gateway, invalid-gateway-response, stream-error, and cancellation
+  scenarios across a real worker message boundary using local HTTP fixtures.
 
 Run the web adapter checks:
 

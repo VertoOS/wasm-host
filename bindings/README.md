@@ -34,6 +34,12 @@ when Go is installed. The C, Python, and Go checks all execute the generated
 package through the C ABI and assert that the compiled header ABI version
 matches the linked library.
 
+The harness also includes development smoke tests for future release packaging:
+it stages the Python package into a temporary import path and creates a
+temporary Go consumer module with a local `replace` to the monorepo binding.
+Those checks prove out-of-tree consumers can load the shared C ABI artifact
+before final release publishing is defined.
+
 ## Split Criteria
 
 Keep bindings in this monorepo until at least one of these is true:

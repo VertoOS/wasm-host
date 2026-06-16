@@ -5,11 +5,13 @@ const RAW_WASI_ARTIFACT_KIND = "wasi-module";
 const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
 
 const ERRNO_SUCCESS = 0;
+const ERRNO_ACCESS = 2;
 const ERRNO_BADF = 8;
 const ERRNO_FAULT = 21;
 const ERRNO_INVAL = 28;
 const ERRNO_ISDIR = 31;
 const ERRNO_NOENT = 44;
+const ERRNO_OVERFLOW = 61;
 const ERRNO_NOTCAPABLE = 76;
 const STDIN_FD = 0;
 const STDOUT_FD = 1;
@@ -28,6 +30,9 @@ const WASI_OFLAGS_EXCL = 1 << 2;
 const WASI_OFLAGS_TRUNC = 1 << 3;
 const WASI_LOOKUP_SYMLINK_FOLLOW = 1 << 0;
 const WASI_FDFLAGS_APPEND = 1 << 0;
+const WASI_WHENCE_SET = 0;
+const WASI_WHENCE_CUR = 1;
+const WASI_WHENCE_END = 2;
 const WASI_RIGHT_FD_DATASYNC = 1n << 0n;
 const WASI_RIGHT_FD_READ = 1n << 1n;
 const WASI_RIGHT_FD_SEEK = 1n << 2n;
@@ -401,6 +406,9 @@ class WasiPreview1Runtime {
         this.writeSizes(this.env, environCountPtr, environBufSizePtr),
       fd_read: (fd, iovsPtr, iovsLen, nreadPtr) =>
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
+      fd_seek: (fd, offset, whence, newOffsetPtr) =>
+        this.fdSeek(fd, offset, whence, newOffsetPtr),
+      fd_tell: (fd, offsetPtr) => this.fdTell(fd, offsetPtr),
       fd_fdstat_get: (fd, fdstatPtr) => this.fdFdstatGet(fd, fdstatPtr),
       fd_fdstat_set_flags: (fd, flags) => this.fdFdstatSetFlags(fd, flags),
       fd_close: (fd) => this.fdClose(fd),
@@ -568,6 +576,33 @@ class WasiPreview1Runtime {
       }
     }
     this.writeU32(nreadPtr, total);
+    return ERRNO_SUCCESS;
+  }
+
+  fdSeek(fd, offset, whence, newOffsetPtr) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    if (!file) {
+      return this.fdStat(fd) ? ERRNO_ACCESS : ERRNO_BADF;
+    }
+
+    const seek = resolveFileSeekOffset(file, offset, whence);
+    if (seek.errno != null) {
+      return seek.errno;
+    }
+    file.offset = seek.offset;
+    this.writeU64(newOffsetPtr, BigInt(seek.offset));
+    return ERRNO_SUCCESS;
+  }
+
+  fdTell(fd, offsetPtr) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    if (!file) {
+      return this.fdStat(fd) ? ERRNO_ACCESS : ERRNO_BADF;
+    }
+
+    this.writeU64(offsetPtr, BigInt(file.offset));
     return ERRNO_SUCCESS;
   }
 
@@ -821,6 +856,32 @@ function checkedMemoryRange(start, length, memoryLength) {
 
 function requestsWriteRights(rights) {
   return (BigInt(rights) & WASI_WRITE_RIGHTS) !== 0n;
+}
+
+function resolveFileSeekOffset(file, offset, whence) {
+  let base;
+  switch (whence) {
+    case WASI_WHENCE_SET:
+      base = 0n;
+      break;
+    case WASI_WHENCE_CUR:
+      base = BigInt(file.offset);
+      break;
+    case WASI_WHENCE_END:
+      base = BigInt(file.bytes.byteLength);
+      break;
+    default:
+      return { errno: ERRNO_INVAL };
+  }
+
+  const nextOffset = base + BigInt(offset);
+  if (nextOffset < 0n) {
+    return { errno: ERRNO_INVAL };
+  }
+  if (nextOffset > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return { errno: ERRNO_OVERFLOW };
+  }
+  return { offset: Number(nextOffset) };
 }
 
 function stdioRights(fd) {

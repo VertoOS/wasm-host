@@ -445,6 +445,8 @@ class WasiPreview1Runtime {
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
       fd_pread: (fd, iovsPtr, iovsLen, offset, nreadPtr) =>
         this.fdPread(fd, iovsPtr, iovsLen, offset, nreadPtr),
+      fd_pwrite: (fd, iovsPtr, iovsLen, offset, nwrittenPtr) =>
+        this.fdPwrite(fd, iovsPtr, iovsLen, offset, nwrittenPtr),
       fd_allocate: (fd, offset, length) =>
         this.fdAllocate(fd, offset, length),
       fd_advise: (fd, offset, length, advice) =>
@@ -601,16 +603,7 @@ class WasiPreview1Runtime {
       return ERRNO_NOTCAPABLE;
     }
 
-    const chunks = [];
-    let total = 0;
-    for (let index = 0; index < iovsLen; index += 1) {
-      const iovPtr = iovsPtr + index * 8;
-      const dataPtr = this.readU32(iovPtr);
-      const dataLength = this.readU32(iovPtr + 4);
-      const chunk = this.bytes().slice(dataPtr, dataPtr + dataLength);
-      chunks.push(chunk);
-      total += dataLength;
-    }
+    const { chunks, total } = this.readIovChunks(iovsPtr, iovsLen);
     this.writeU32(nwrittenPtr, total);
 
     if (file) {
@@ -626,6 +619,48 @@ class WasiPreview1Runtime {
       }
     }
     return ERRNO_SUCCESS;
+  }
+
+  fdPwrite(fd, iovsPtr, iovsLen, offset, nwrittenPtr) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    this.writeU32(nwrittenPtr, 0);
+    if (fd === WORKSPACE_FD || fd === TMP_FD || isOpenDirectory(file)) {
+      return ERRNO_ISDIR;
+    }
+    if (!file) {
+      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
+    }
+    if (!canWriteFile(file)) {
+      return ERRNO_NOTCAPABLE;
+    }
+    const start = resolveFileSize(offset);
+    if (start.errno != null) {
+      return start.errno;
+    }
+
+    const { chunks, total } = this.readIovChunks(iovsPtr, iovsLen);
+    const range = resolveFileRange(start.size, total);
+    if (range.errno != null) {
+      return range.errno;
+    }
+    this.writeOpenFileAt(file, chunks, start.size);
+    this.writeU32(nwrittenPtr, total);
+    return ERRNO_SUCCESS;
+  }
+
+  readIovChunks(iovsPtr, iovsLen) {
+    const chunks = [];
+    let total = 0;
+    for (let index = 0; index < iovsLen; index += 1) {
+      const iovPtr = iovsPtr + index * 8;
+      const dataPtr = this.readU32(iovPtr);
+      const dataLength = this.readU32(iovPtr + 4);
+      const chunk = this.bytes().slice(dataPtr, dataPtr + dataLength);
+      chunks.push(chunk);
+      total += dataLength;
+    }
+    return { chunks, total };
   }
 
   fdRead(fd, iovsPtr, iovsLen, nreadPtr) {
@@ -705,6 +740,10 @@ class WasiPreview1Runtime {
       (file.fdflags & WASI_FDFLAGS_APPEND) !== 0
         ? file.record.bytes.byteLength
         : file.offset;
+    file.offset = this.writeOpenFileAt(file, chunks, offset);
+  }
+
+  writeOpenFileAt(file, chunks, offset) {
     for (const chunk of chunks) {
       const end = offset + chunk.byteLength;
       if (end > file.record.bytes.byteLength) {
@@ -715,7 +754,7 @@ class WasiPreview1Runtime {
       file.record.bytes.set(chunk, offset);
       offset = end;
     }
-    file.offset = offset;
+    return offset;
   }
 
   fdReaddir(fd, bufferPtr, bufferLength, cookie, bufferUsedPtr) {

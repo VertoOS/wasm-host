@@ -27,9 +27,11 @@ Current scope:
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
   artifact. It validates the expected exports, calls `codex_version` and
-  `codex_build_request`, and writes generated Responses API request JSON to the
-  command stdout stream. This is not full CLI, auth, app-server, workspace,
-  tool, or MCP execution.
+  `codex_build_request`, writes generated Responses API request JSON to the
+  command stdout stream, and can run a mocked `model-request` by POSTing that
+  JSON through the selected HTTP bridge transport and streaming response chunks
+  to stdout. This is not full CLI, auth, app-server, workspace, tool, or MCP
+  execution.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
   stdin by default, writes stdout/stderr to a sink, closes output streams
@@ -98,7 +100,8 @@ Current scope:
   unavailable-gateway, invalid-gateway-response, stream-error, and cancellation
   scenarios across a real worker message boundary using local HTTP fixtures.
 - `test/codex-browser.test.js` covers the custom-export Codex browser
-  request-builder executor, export validation, and command error shaping.
+  request-builder executor, mocked model-request dispatch through direct Fetch
+  and gateway transports, export validation, and command error shaping.
 - `test/command-worker.test.js` and `test/command-worker-entry.test.js` cover
   command lifecycle success, startup failure, stdin, cancellation, timeout,
   duplicate-run rejection, terminal resize, explicit stream close, HTTP
@@ -130,10 +133,11 @@ Current scope:
   Chromium/Chrome pages through the DevTools protocol, start
   `src/command-worker-entry.js` as a module worker, assert the Codex
   `codex --version` stdout/stderr/exit contract, assert the Codex browser
-  request-builder JSON contract, and drive the terminal UI shell through DOM
-  controls. The terminal shell e2e also applies a package URL source backed by a
-  local data URL, verifies sanitized package metadata, and runs the selected
-  package through the worker smoke executor.
+  request-builder JSON contract, assert a mocked model-turn HTTP bridge
+  contract, and drive the terminal UI shell through DOM controls. The terminal
+  shell e2e also applies a package URL source backed by a local data URL,
+  verifies sanitized package metadata, and runs the selected package through the
+  worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.

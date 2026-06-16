@@ -42,6 +42,7 @@ export class DirectFetchHttpTransport {
       responseBodyLimit: request.responseBodyLimit ?? this.responseBodyLimit,
       streamUploads: this.streamUploads,
     });
+    await startResponse(responseWriter, response.status, response.headers);
     for (const chunk of response.bodyChunks) {
       await writeResponseChunk(responseWriter, chunk);
     }
@@ -378,6 +379,11 @@ export async function readGatewayStreamResponse(
           status: validateGatewayResponseStatus(frame.status),
           headers: gatewayWireHeaders(frame.headers ?? []),
         };
+        await startResponse(
+          responseWriter,
+          responseHead.status,
+          responseHead.headers,
+        );
         return;
       case "body_chunk": {
         if (!responseHead) {
@@ -476,6 +482,7 @@ async function readGatewayJsonResponse(response, options) {
 
 async function writeGatewayResponse(responseWriter, response, options) {
   let total = 0;
+  await startResponse(responseWriter, response.status, response.headers);
   for (const chunk of response.bodyChunks) {
     total = enforceResponseBodyLimit(
       total,
@@ -877,6 +884,18 @@ async function writeResponseChunk(responseWriter, chunk) {
     "transport",
     "HTTP bridge response writer does not support body chunks",
   );
+}
+
+async function startResponse(responseWriter, status, headers) {
+  if (typeof responseWriter.start === "function") {
+    return responseWriter.start(status, headers);
+  }
+  if (typeof responseWriter.startAsync === "function") {
+    return responseWriter.startAsync(status, headers);
+  }
+  if (typeof responseWriter.start_async === "function") {
+    return responseWriter.start_async(status, headers);
+  }
 }
 
 async function finishResponse(responseWriter, status, headers) {

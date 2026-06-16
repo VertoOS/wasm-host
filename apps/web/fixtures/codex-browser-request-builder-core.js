@@ -1,5 +1,6 @@
 export const CODEX_BROWSER_REQUEST_BUILDER_ARTIFACT_KIND = "codex-browser";
 export const CODEX_BROWSER_REQUEST_BUILDER_COMMAND = "build-request";
+export const CODEX_BROWSER_MODEL_REQUEST_COMMAND = "model-request";
 export const CODEX_BROWSER_REQUEST_BUILDER_ID = "codex-browser";
 export const CODEX_BROWSER_REQUEST_BUILDER_MODEL = "gpt-5.1";
 export const CODEX_BROWSER_REQUEST_BUILDER_PROMPT = "Explain wasm-host";
@@ -13,11 +14,41 @@ export async function codexBrowserRequestBuilderFixture(
   bytes = CODEX_BROWSER_REQUEST_BUILDER_WASM,
   options = {},
 ) {
+  return codexBrowserFixture(bytes, {
+    command: options.command ?? CODEX_BROWSER_REQUEST_BUILDER_COMMAND,
+    commands: options.commands,
+    model: options.model,
+    packageId: options.packageId,
+    prompt: options.prompt,
+  });
+}
+
+export async function codexBrowserModelRequestFixture(endpoint, options = {}) {
+  return codexBrowserFixture(
+    options.bytes ?? CODEX_BROWSER_REQUEST_BUILDER_WASM,
+    {
+      command: options.command ?? CODEX_BROWSER_MODEL_REQUEST_COMMAND,
+      commands: options.commands ?? [
+        CODEX_BROWSER_REQUEST_BUILDER_COMMAND,
+        CODEX_BROWSER_MODEL_REQUEST_COMMAND,
+      ],
+      endpoint,
+      model: options.model,
+      packageId: options.packageId,
+      prompt: options.prompt,
+    },
+  );
+}
+
+async function codexBrowserFixture(bytes, options = {}) {
   const artifactSha256 = await sha256Hex(bytes);
   const packageId = options.packageId ?? CODEX_BROWSER_REQUEST_BUILDER_ID;
   const command = options.command ?? CODEX_BROWSER_REQUEST_BUILDER_COMMAND;
+  const commands = options.commands ?? [command];
   const prompt = options.prompt ?? CODEX_BROWSER_REQUEST_BUILDER_PROMPT;
   const model = options.model ?? CODEX_BROWSER_REQUEST_BUILDER_MODEL;
+  const args =
+    options.endpoint == null ? [prompt, model] : [prompt, model, options.endpoint];
   return {
     commandLoad: {
       type: "command.load",
@@ -28,7 +59,7 @@ export async function codexBrowserRequestBuilderFixture(
           bytes,
           expectedSha256: artifactSha256,
         },
-        commands: [command],
+        commands,
         defaultCommand: command,
         entrypoint: "codex_build_request",
         id: packageId,
@@ -45,7 +76,7 @@ export async function codexBrowserRequestBuilderFixture(
       id: `run-${packageId}-${command}`,
       packageId,
       command,
-      args: [prompt, model],
+      args,
       env: {},
       cwd: "/workspace",
       stdinOpen: false,

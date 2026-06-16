@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 
 import {
   assertCodexBrowserRequestPayload,
+  codexBrowserModelRequestFixture,
   codexBrowserRequestBuilderFixture,
 } from "../fixtures/codex-browser-request-builder-core.js";
 import {
@@ -108,6 +110,31 @@ test("command worker entry runs the Codex browser request builder across a worke
   }
 });
 
+test("command worker entry runs a mocked Codex model request across a worker boundary", async () => {
+  const server = await startModelServer();
+  const fixture = await codexBrowserModelRequestFixture(server.url);
+  const worker = createCommandWorker();
+  try {
+    const load = await dispatchAndCollect(worker, fixture.commandLoad);
+    const run = await dispatchAndCollect(worker, fixture.commandRun);
+
+    assert.equal(load.loaded.packageId, "codex-browser");
+    assert.equal(load.loaded.artifactKind, "codex-browser");
+    assert.equal(server.seen.method, "POST");
+    assert.equal(server.seen.headers["content-type"], "application/json");
+    assertCodexBrowserRequestPayload(
+      JSON.parse(server.seen.body),
+      fixture.expected,
+    );
+    assert.equal(chunksText(run.stdout), "mock model response\n");
+    assert.equal(chunksText(run.stderr), "");
+    assert.equal(run.complete.result.exitCode, 0);
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
 test(
   "command worker entry runs the local Codex version-smoke artifact when available",
   {
@@ -178,6 +205,41 @@ function createCommandWorker(workerData = {}) {
       workerData,
     },
   );
+}
+
+function startModelServer() {
+  const seen = {};
+  const server = createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      seen.method = request.method;
+      seen.headers = request.headers;
+      seen.body = Buffer.concat(chunks).toString("utf8");
+      response.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+      });
+      response.write("mock ");
+      response.end("model response\n");
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const { port } = server.address();
+      resolve({
+        close: () =>
+          new Promise((resolveClose, rejectClose) => {
+            server.close((error) =>
+              error ? rejectClose(error) : resolveClose(),
+            );
+          }),
+        seen,
+        url: `http://127.0.0.1:${port}/v1/responses`,
+      });
+    });
+  });
 }
 
 async function codexVersionSmokeFixture(manifest, bytes) {

@@ -434,16 +434,20 @@ class WasiPreview1Runtime {
         this.writeSizes(this.env, environCountPtr, environBufSizePtr),
       fd_read: (fd, iovsPtr, iovsLen, nreadPtr) =>
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
+      fd_datasync: (fd) => this.fdSync(fd, WASI_RIGHT_FD_DATASYNC),
       fd_readdir: (fd, bufferPtr, bufferLength, cookie, bufferUsedPtr) =>
         this.fdReaddir(fd, bufferPtr, bufferLength, cookie, bufferUsedPtr),
       fd_seek: (fd, offset, whence, newOffsetPtr) =>
         this.fdSeek(fd, offset, whence, newOffsetPtr),
+      fd_sync: (fd) => this.fdSync(fd, WASI_RIGHT_FD_SYNC),
       fd_tell: (fd, offsetPtr) => this.fdTell(fd, offsetPtr),
       fd_fdstat_get: (fd, fdstatPtr) => this.fdFdstatGet(fd, fdstatPtr),
       fd_fdstat_set_flags: (fd, flags) => this.fdFdstatSetFlags(fd, flags),
       fd_close: (fd) => this.fdClose(fd),
       fd_filestat_get: (fd, filestatPtr) =>
         this.fdFilestatGet(fd, filestatPtr),
+      fd_filestat_set_size: (fd, size) =>
+        this.fdFilestatSetSize(fd, size),
       fd_prestat_dir_name: (fd, pathPtr, pathLen) =>
         this.fdPrestatDirName(fd, pathPtr, pathLen),
       fd_prestat_get: (fd, prestatPtr) => this.fdPrestatGet(fd, prestatPtr),
@@ -743,6 +747,52 @@ class WasiPreview1Runtime {
     }
     this.writeFilestat(filestatPtr, stat.filetype, stat.size ?? 0);
     return ERRNO_SUCCESS;
+  }
+
+  fdFilestatSetSize(fd, size) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    if (!file) {
+      const stat = this.fdStat(fd);
+      if (!stat) {
+        return ERRNO_BADF;
+      }
+      return stat.filetype === WASI_FILETYPE_DIRECTORY
+        ? ERRNO_ISDIR
+        : ERRNO_NOTCAPABLE;
+    }
+    if (isOpenDirectory(file)) {
+      return ERRNO_ISDIR;
+    }
+    if (!canResizeFile(file)) {
+      return ERRNO_NOTCAPABLE;
+    }
+    const nextSize = resolveFileSize(size);
+    if (nextSize.errno != null) {
+      return nextSize.errno;
+    }
+    resizeOpenFile(file, nextSize.size);
+    return ERRNO_SUCCESS;
+  }
+
+  fdSync(fd, requiredRight) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    if (!file) {
+      const stat = this.fdStat(fd);
+      if (!stat) {
+        return ERRNO_BADF;
+      }
+      return stat.filetype === WASI_FILETYPE_DIRECTORY
+        ? ERRNO_ISDIR
+        : ERRNO_NOTCAPABLE;
+    }
+    if (isOpenDirectory(file)) {
+      return ERRNO_ISDIR;
+    }
+    return file.writable && (file.rights & requiredRight) !== 0n
+      ? ERRNO_SUCCESS
+      : ERRNO_NOTCAPABLE;
   }
 
   directoryForFd(fd) {
@@ -1299,8 +1349,34 @@ function canWriteFile(file) {
   return file.writable && (file.rights & WASI_RIGHT_FD_WRITE) !== 0n;
 }
 
+function canResizeFile(file) {
+  return (
+    file.writable && (file.rights & WASI_RIGHT_FD_FILESTAT_SET_SIZE) !== 0n
+  );
+}
+
 function isOpenDirectory(file) {
   return file?.kind === "directory";
+}
+
+function resizeOpenFile(file, size) {
+  if (file.record.bytes.byteLength === size) {
+    return;
+  }
+  const next = new Uint8Array(size);
+  next.set(file.record.bytes.subarray(0, size));
+  file.record.bytes = next;
+}
+
+function resolveFileSize(size) {
+  const value = BigInt(size);
+  if (value < 0n) {
+    return { errno: ERRNO_INVAL };
+  }
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return { errno: ERRNO_OVERFLOW };
+  }
+  return { size: Number(value) };
 }
 
 function resolveFileSeekOffset(file, offset, whence) {

@@ -295,17 +295,19 @@ SHA-256 pins, instantiates modules that export `_start` and memory, and
 implements only the preview1 calls required by the current browser smoke and
 package-file fixtures:
 `args_sizes_get`, `args_get`, `clock_res_get`, `clock_time_get`,
-`environ_sizes_get`, `environ_get`, `fd_close`, `fd_filestat_get`,
-`fd_prestat_dir_name`, `fd_prestat_get`, `fd_read`, `fd_readdir`, `fd_seek`,
-`fd_tell`, `fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_write`,
-`path_create_directory`, `path_filestat_get`, `path_open`,
+`environ_sizes_get`, `environ_get`, `fd_close`, `fd_datasync`, `fd_filestat_get`,
+`fd_filestat_set_size`, `fd_prestat_dir_name`, `fd_prestat_get`, `fd_read`,
+`fd_readdir`, `fd_seek`, `fd_sync`, `fd_tell`, `fd_fdstat_get`,
+`fd_fdstat_set_flags`, `fd_write`, `path_create_directory`,
+`path_filestat_get`, `path_open`,
 `path_remove_directory`, `path_unlink_file`, `random_get`, and `proc_exit`.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, and provides a volatile in-memory `/tmp` scratch preopen for narrow
-directory create/list/remove and file create/write/readback/stat/unlink
-fixtures. It is not a general WASIX runtime and does not provide persistent
-filesystems, sockets, threads, or WebC metadata execution.
+directory create/list/remove and file
+create/write/readback/stat/truncate/sync/unlink fixtures. It is not a general
+WASIX runtime and does not provide persistent filesystems, sockets, threads, or
+WebC metadata execution.
 
 The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex

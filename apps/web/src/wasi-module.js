@@ -11,6 +11,7 @@ const ERRNO_FAULT = 21;
 const ERRNO_INVAL = 28;
 const ERRNO_ISDIR = 31;
 const ERRNO_NOENT = 44;
+const ERRNO_NOTDIR = 54;
 const ERRNO_OVERFLOW = 61;
 const ERRNO_NOTCAPABLE = 76;
 const STDIN_FD = 0;
@@ -23,6 +24,7 @@ const WASI_CLOCK_MONOTONIC = 1;
 const WASI_FILETYPE_CHARACTER_DEVICE = 2;
 const WASI_FILETYPE_DIRECTORY = 3;
 const WASI_FILETYPE_REGULAR_FILE = 4;
+const WASI_DIRENT_SIZE = 24;
 const WASI_PREOPENTYPE_DIR = 0;
 const WASI_OFLAGS_CREAT = 1 << 0;
 const WASI_OFLAGS_DIRECTORY = 1 << 1;
@@ -44,6 +46,7 @@ const WASI_RIGHT_FD_ALLOCATE = 1n << 8n;
 const WASI_RIGHT_PATH_CREATE_DIRECTORY = 1n << 9n;
 const WASI_RIGHT_PATH_CREATE_FILE = 1n << 10n;
 const WASI_RIGHT_PATH_OPEN = 1n << 13n;
+const WASI_RIGHT_FD_READDIR = 1n << 14n;
 const WASI_RIGHT_PATH_FILESTAT_GET = 1n << 18n;
 const WASI_RIGHT_PATH_FILESTAT_SET_SIZE = 1n << 19n;
 const WASI_RIGHT_PATH_FILESTAT_SET_TIMES = 1n << 20n;
@@ -56,6 +59,7 @@ const WASI_STDIN_RIGHTS =
 const WASI_STDOUT_RIGHTS =
   WASI_RIGHT_FD_WRITE | WASI_RIGHT_FD_FDSTAT_SET_FLAGS;
 const WASI_WORKSPACE_RIGHTS =
+  WASI_RIGHT_FD_READDIR |
   WASI_RIGHT_PATH_OPEN |
   WASI_RIGHT_PATH_FILESTAT_GET |
   WASI_RIGHT_FD_FILESTAT_GET;
@@ -406,6 +410,8 @@ class WasiPreview1Runtime {
         this.writeSizes(this.env, environCountPtr, environBufSizePtr),
       fd_read: (fd, iovsPtr, iovsLen, nreadPtr) =>
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
+      fd_readdir: (fd, bufferPtr, bufferLength, cookie, bufferUsedPtr) =>
+        this.fdReaddir(fd, bufferPtr, bufferLength, cookie, bufferUsedPtr),
       fd_seek: (fd, offset, whence, newOffsetPtr) =>
         this.fdSeek(fd, offset, whence, newOffsetPtr),
       fd_tell: (fd, offsetPtr) => this.fdTell(fd, offsetPtr),
@@ -581,6 +587,40 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
+  fdReaddir(fd, bufferPtr, bufferLength, cookie, bufferUsedPtr) {
+    this.throwIfAborted();
+    if (fd !== WORKSPACE_FD) {
+      return this.fdStat(fd) ? ERRNO_NOTDIR : ERRNO_BADF;
+    }
+    const startIndex = readdirStartIndex(cookie);
+    if (startIndex == null) {
+      return ERRNO_INVAL;
+    }
+
+    const entries = this.workspaceDirectoryEntries();
+    const bytes = this.bytes();
+    const output = bytes.subarray(bufferPtr, bufferPtr + (bufferLength >>> 0));
+    let used = 0;
+    for (let index = startIndex; index < entries.length; index += 1) {
+      const entry = entries[index];
+      const dirent = direntBytes(entry, index + 1);
+      const wroteDirent = copyPartial(dirent, output, used);
+      used += wroteDirent;
+      if (wroteDirent !== dirent.byteLength) {
+        break;
+      }
+
+      const name = encodeText(entry.name);
+      const wroteName = copyPartial(name, output, used);
+      used += wroteName;
+      if (wroteName !== name.byteLength) {
+        break;
+      }
+    }
+    this.writeU32(bufferUsedPtr, used);
+    return ERRNO_SUCCESS;
+  }
+
   fdSeek(fd, offset, whence, newOffsetPtr) {
     this.throwIfAborted();
     const file = this.openFiles.get(fd);
@@ -750,6 +790,12 @@ class WasiPreview1Runtime {
         size: 0,
       };
     }
+    if (this.pathHasChildren(path)) {
+      return {
+        filetype: WASI_FILETYPE_DIRECTORY,
+        size: 0,
+      };
+    }
     const file = this.files.get(path);
     if (!file) {
       return { errno: ERRNO_NOENT };
@@ -758,6 +804,40 @@ class WasiPreview1Runtime {
       filetype: WASI_FILETYPE_REGULAR_FILE,
       size: file.bytes.byteLength,
     };
+  }
+
+  workspaceDirectoryEntries() {
+    const entries = new Map();
+    for (const path of this.files.keys()) {
+      const [name, ...rest] = path.split("/");
+      if (!name) {
+        continue;
+      }
+      if (rest.length > 0) {
+        entries.set(name, {
+          filetype: WASI_FILETYPE_DIRECTORY,
+          name,
+        });
+      } else if (!entries.has(name)) {
+        entries.set(name, {
+          filetype: WASI_FILETYPE_REGULAR_FILE,
+          name,
+        });
+      }
+    }
+    return [...entries.values()].sort((left, right) =>
+      compareStrings(left.name, right.name),
+    );
+  }
+
+  pathHasChildren(path) {
+    const prefix = `${path}/`;
+    for (const filePath of this.files.keys()) {
+      if (filePath.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   fdStat(fd) {
@@ -926,6 +1006,43 @@ function resolveFileSeekOffset(file, offset, whence) {
     return { errno: ERRNO_OVERFLOW };
   }
   return { offset: Number(nextOffset) };
+}
+
+function readdirStartIndex(cookie) {
+  const value = BigInt(cookie);
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return null;
+  }
+  return Number(value);
+}
+
+function direntBytes(entry, nextCookie) {
+  const bytes = new Uint8Array(WASI_DIRENT_SIZE);
+  const view = new DataView(bytes.buffer);
+  view.setBigUint64(0, BigInt(nextCookie), true);
+  view.setBigUint64(8, BigInt(nextCookie), true);
+  view.setUint32(16, encodeText(entry.name).byteLength, true);
+  view.setUint8(20, entry.filetype);
+  return bytes;
+}
+
+function copyPartial(source, target, offset) {
+  const writable = Math.min(source.byteLength, target.byteLength - offset);
+  if (writable <= 0) {
+    return 0;
+  }
+  target.set(source.subarray(0, writable), offset);
+  return writable;
+}
+
+function compareStrings(left, right) {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
 }
 
 function stdioRights(fd) {

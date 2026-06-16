@@ -71,8 +71,9 @@ Current scope:
   `fd_fdstat_set_flags`, a read-only `/workspace` package-file preopen through
   `fd_prestat_get`, `fd_prestat_dir_name`, `path_open`, `path_filestat_get`,
   `fd_readdir`, `fd_filestat_get`, `fd_close`, and file-backed `fd_read`,
-  `fd_seek`, and `fd_tell`, plus a volatile in-memory `/tmp` scratch preopen
-  for create, `path_create_directory`, write, readback, stat, `fd_allocate`,
+  `fd_seek`, `fd_tell`, and `fd_advise`, plus a volatile in-memory `/tmp`
+  scratch preopen for create, `path_create_directory`, write, readback, stat,
+  `fd_allocate`, `fd_advise`,
   truncate/sync, directory listing, `path_rename`, and `path_remove_directory` /
   `path_unlink_file`. It captures stdout/stderr and exit status for the interim
   browser smoke; it is not an interactive TTY/readline, persistent filesystem,
@@ -122,7 +123,7 @@ Current scope:
 - `test/wasi-module.test.js` covers raw WASI module byte loading, argv/env
   plumbing, clocks, cooperative yield, random bytes, stdin, read-only package
   files, stdio fd stat, path/file metadata, directory listing and cookies, file
-  seek/tell behavior, volatile scratch-file allocation/truncate/sync and
+  seek/tell/advice behavior, volatile scratch-file allocation/truncate/sync and
   directory create/remove operations, scratch path rename behavior,
   stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle
   integration, and the local Codex version-smoke artifact when it is present.

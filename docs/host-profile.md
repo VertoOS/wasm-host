@@ -297,8 +297,9 @@ package-file fixtures:
 `args_sizes_get`, `args_get`, `clock_res_get`, `clock_time_get`,
 `environ_sizes_get`, `environ_get`, `fd_allocate`, `fd_advise`, `fd_close`,
 `fd_datasync`, `fd_filestat_get`, `fd_filestat_set_size`,
-`fd_pread`, `fd_prestat_dir_name`, `fd_prestat_get`, `fd_pwrite`, `fd_read`,
-`fd_readdir`, `fd_renumber`, `fd_seek`, `fd_sync`, `fd_tell`,
+`fd_filestat_set_times`, `fd_pread`, `fd_prestat_dir_name`, `fd_prestat_get`,
+`fd_pwrite`, `fd_read`, `fd_readdir`, `fd_renumber`, `fd_seek`, `fd_sync`,
+`fd_tell`,
 `fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_fdstat_set_rights`, `fd_write`,
 `path_create_directory`, `path_filestat_get`, `path_open`, `path_rename`,
 `path_remove_directory`, `path_unlink_file`, `random_get`, `sched_yield`, and
@@ -308,9 +309,9 @@ smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, and provides a volatile in-memory `/tmp` scratch preopen for narrow
 directory create/list/rename/remove and file
 advise/allocate/create/write/positioned-write/readback/positioned-read/stat,
-rights-reduction/renumber/rename, truncate/sync/unlink fixtures. It is not a
-general WASIX runtime and does not provide persistent filesystems, sockets,
-threads, or WebC metadata execution.
+rights-reduction/renumber/rename, set-times/truncate/sync/unlink
+fixtures. It is not a general WASIX runtime and does not provide persistent
+filesystems, sockets, threads, or WebC metadata execution.
 
 The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex

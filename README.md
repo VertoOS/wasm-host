@@ -55,7 +55,8 @@ until the boundaries are stable enough to split.
   fixture messages, and verify fetched artifact bytes by size and sha256.
 - The browser adapter package can execute the interim raw WASI preview1
   `codex --version` smoke path with args/env, clocks, random bytes, preloaded
-  stdin, cooperative yield, read-only package file reads, metadata, and
+  stdin, cooperative yield, read-only package file reads and positioned reads,
+  metadata, and
   directory listing, volatile `/tmp` scratch directory create/rename/remove and
   file advise/allocate/write/renumber/rename/truncate/sync, stdio fd stat,
   stdout/stderr, and exit status capture for the narrow fixture import set.

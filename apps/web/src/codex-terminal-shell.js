@@ -1,9 +1,8 @@
 import {
-  CODEX_VERSION_SMOKE_STDOUT_PREFIX,
-  CODEX_VERSION_SMOKE_WASM,
-  codexVersionSmokeManifest,
-} from "../fixtures/codex-version-smoke-core.js";
-import { fetchCodexArtifactBytes } from "./artifact-manifest.js";
+  builtinCodexPackageSourceOptions,
+  inlineCodexFetch,
+} from "./package-source.js";
+import { mountBrowserPackageTerminalShell } from "./package-source-ui.js";
 import {
   createDefaultCommandWorker,
   mountBrowserTerminalShell,
@@ -17,31 +16,16 @@ export async function mountCodexVersionTerminalShell(options = {}) {
   });
 }
 
-export async function codexVersionTerminalShellOptions(options = {}) {
-  const manifest = await codexVersionSmokeManifest();
-  const { artifactUrl, fixture } = await fetchCodexArtifactBytes(manifest, {
-    fetchImpl: options.fetchImpl ?? inlineCodexArtifactFetch,
-  });
-  return {
-    commandLabel: "codex --version",
-    createWorker: options.createWorker ?? createDefaultCommandWorker,
-    expected: {
-      exitCode: fixture.expected.exitCode,
-      stderr: fixture.expected.stderr,
-      stdoutPrefix: CODEX_VERSION_SMOKE_STDOUT_PREFIX,
-    },
-    loadMessage: fixture.commandLoad,
-    runMessage: fixture.commandRun,
-    subtitle: `Loaded from ${artifactUrl}`,
-    title: "wasm-host terminal",
-  };
+export async function mountCodexPackageTerminalShell(options = {}) {
+  return mountBrowserPackageTerminalShell(options);
 }
 
-export async function inlineCodexArtifactFetch() {
-  return new Response(CODEX_VERSION_SMOKE_WASM, {
-    headers: {
-      "Content-Length": String(CODEX_VERSION_SMOKE_WASM.byteLength),
-    },
-    status: 200,
-  });
+export async function codexVersionTerminalShellOptions(options = {}) {
+  return {
+    ...(await builtinCodexPackageSourceOptions({
+      ...options,
+      codexFetchImpl: options.fetchImpl ?? inlineCodexFetch,
+    })),
+    createWorker: options.createWorker ?? createDefaultCommandWorker,
+  };
 }

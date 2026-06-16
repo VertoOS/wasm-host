@@ -177,6 +177,16 @@ test("BrowserPackageLoader loads URL-backed Wasm bytes without external network"
     kind: "url",
     label: "https://example.test/pkg.wasm",
   });
+
+  const dataRecord = await loader.loadUrl({
+    command: "main",
+    id: "data-pkg",
+    url: "data:application/octet-stream;base64,AGFzbQAAAAA=",
+  });
+  assert.deepEqual(dataRecord.source, {
+    kind: "url",
+    label: "data: URL",
+  });
 });
 
 test("BrowserPackageLoader verifies expected sha256 pins", async () => {

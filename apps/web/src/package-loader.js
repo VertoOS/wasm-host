@@ -409,6 +409,9 @@ function normalizeSource(source) {
 function sanitizeUrlForSource(value) {
   try {
     const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return `${url.protocol} URL`;
+    }
     url.username = "";
     url.password = "";
     url.search = "";

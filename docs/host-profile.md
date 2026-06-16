@@ -256,6 +256,17 @@ the command session dimensions. This shell proves the page-to-worker terminal
 path for the interim Codex version smoke; readline-grade TTY behavior and a
 future xterm.js renderer remain part of the Bash/terminal compatibility work.
 
+The browser app wraps that terminal with package source controls in
+`apps/web/src/package-source.js` and `apps/web/src/package-source-ui.js`.
+Built-in Codex smoke and artifact manifest inputs are normalized through the
+Codex manifest consumer and raw WASI module loader path. Uploaded package bytes
+and package URLs are normalized through the browser package loader, then passed
+to the command worker with explicit bytes, command metadata, and sanitized
+source labels so the worker still owns package loading and cache derivation.
+This is the browser app selection surface; full WebC/WASIX execution,
+credentialed artifact fetching, and persistent package-source history remain
+separate runtime and packaging concerns.
+
 The initial browser package loading surface lives in
 `apps/web/src/package-loader.js`. It accepts explicit package bytes or a
 Fetch-backed URL, validates WebC (`\0webc`) and Wasm (`\0asm`) magic bytes,

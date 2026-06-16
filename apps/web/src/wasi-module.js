@@ -14,6 +14,7 @@ const ERRNO_ISDIR = 31;
 const ERRNO_NOENT = 44;
 const ERRNO_NOTDIR = 54;
 const ERRNO_NOTEMPTY = 55;
+const ERRNO_NOTSUP = 58;
 const ERRNO_OVERFLOW = 61;
 const ERRNO_NOTCAPABLE = 76;
 const STDIN_FD = 0;
@@ -83,6 +84,7 @@ const WASI_TMP_RIGHTS =
   WASI_RIGHT_FD_READDIR |
   WASI_RIGHT_PATH_OPEN |
   WASI_RIGHT_PATH_FILESTAT_GET |
+  WASI_RIGHT_PATH_FILESTAT_SET_TIMES |
   WASI_RIGHT_PATH_CREATE_FILE |
   WASI_RIGHT_PATH_CREATE_DIRECTORY |
   WASI_RIGHT_PATH_UNLINK_FILE |
@@ -509,8 +511,46 @@ class WasiPreview1Runtime {
         ),
       path_filestat_get: (fd, flags, pathPtr, pathLen, filestatPtr) =>
         this.pathFilestatGet(fd, flags, pathPtr, pathLen, filestatPtr),
+      path_filestat_set_times: (
+        fd,
+        flags,
+        pathPtr,
+        pathLen,
+        atim,
+        mtim,
+        fstFlags,
+      ) =>
+        this.pathFilestatSetTimes(
+          fd,
+          flags,
+          pathPtr,
+          pathLen,
+          atim,
+          mtim,
+          fstFlags,
+        ),
       path_create_directory: (fd, pathPtr, pathLen) =>
         this.pathCreateDirectory(fd, pathPtr, pathLen),
+      path_link: (
+        oldFd,
+        oldFlags,
+        oldPathPtr,
+        oldPathLen,
+        newFd,
+        newPathPtr,
+        newPathLen,
+      ) =>
+        this.pathLink(
+          oldFd,
+          oldFlags,
+          oldPathPtr,
+          oldPathLen,
+          newFd,
+          newPathPtr,
+          newPathLen,
+        ),
+      path_readlink: (fd, pathPtr, pathLen, bufPtr, bufLen, bufUsedPtr) =>
+        this.pathReadlink(fd, pathPtr, pathLen, bufPtr, bufLen, bufUsedPtr),
       path_rename: (
         oldFd,
         oldPathPtr,
@@ -529,11 +569,33 @@ class WasiPreview1Runtime {
         ),
       path_remove_directory: (fd, pathPtr, pathLen) =>
         this.pathRemoveDirectory(fd, pathPtr, pathLen),
+      path_symlink: (oldPathPtr, oldPathLen, fd, newPathPtr, newPathLen) =>
+        this.pathSymlink(oldPathPtr, oldPathLen, fd, newPathPtr, newPathLen),
       path_unlink_file: (fd, pathPtr, pathLen) =>
         this.pathUnlinkFile(fd, pathPtr, pathLen),
+      poll_oneoff: (
+        subscriptionsPtr,
+        eventsPtr,
+        subscriptionsLen,
+        eventsUsedPtr,
+      ) =>
+        this.pollOneoff(
+          subscriptionsPtr,
+          eventsPtr,
+          subscriptionsLen,
+          eventsUsedPtr,
+        ),
+      proc_raise: (signal) => this.procRaise(signal),
       random_get: (bufferPtr, bufferLength) =>
         this.randomGet(bufferPtr, bufferLength),
       sched_yield: () => this.schedYield(),
+      sock_accept: (fd, flags, acceptedFdPtr) =>
+        this.sockAccept(fd, flags, acceptedFdPtr),
+      sock_recv: (fd, iovsPtr, iovsLen, flags, nreadPtr, roFlagsPtr) =>
+        this.sockRecv(fd, iovsPtr, iovsLen, flags, nreadPtr, roFlagsPtr),
+      sock_send: (fd, iovsPtr, iovsLen, flags, nwrittenPtr) =>
+        this.sockSend(fd, iovsPtr, iovsLen, flags, nwrittenPtr),
+      sock_shutdown: (fd, how) => this.sockShutdown(fd, how),
       proc_exit: (exitCode) => {
         throw new WasiProcExit(exitCode);
       },
@@ -1078,6 +1140,93 @@ class WasiPreview1Runtime {
     }
     this.writeFilestat(filestatPtr, stat.filetype, stat.size ?? 0);
     return ERRNO_SUCCESS;
+  }
+
+  pathFilestatSetTimes(fd, flags, pathPtr, pathLen, _atim, _mtim, fstFlags) {
+    this.throwIfAborted();
+    if (
+      (flags & ~WASI_LOOKUP_SYMLINK_FOLLOW) !== 0 ||
+      !isSupportedFilestatSetTimesFlags(fstFlags)
+    ) {
+      return ERRNO_INVAL;
+    }
+
+    const base = this.scratchBasePathForRight(
+      fd,
+      WASI_RIGHT_PATH_FILESTAT_SET_TIMES,
+    );
+    if (base.errno != null) {
+      return base.errno;
+    }
+
+    const path = resolveScratchPath(
+      base.value,
+      this.readString(pathPtr, pathLen),
+      { lookup: true },
+    );
+    if (path.errno != null) {
+      return path.errno;
+    }
+    if (
+      this.scratchDirs.has(path.value) ||
+      pathHasChildren(this.scratchFiles, this.scratchDirs, path.value)
+    ) {
+      return ERRNO_ISDIR;
+    }
+    return this.scratchFiles.has(path.value) ? ERRNO_SUCCESS : ERRNO_NOENT;
+  }
+
+  pathLink(
+    oldFd,
+    oldFlags,
+    oldPathPtr,
+    oldPathLen,
+    newFd,
+    newPathPtr,
+    newPathLen,
+  ) {
+    this.throwIfAborted();
+    if ((oldFlags & ~WASI_LOOKUP_SYMLINK_FOLLOW) !== 0) {
+      return ERRNO_INVAL;
+    }
+
+    const oldStat = this.pathStatForFd(
+      oldFd,
+      this.readString(oldPathPtr, oldPathLen),
+    );
+    if (oldStat.errno != null) {
+      return oldStat.errno;
+    }
+    const targetPath = this.resolvePathForFd(
+      newFd,
+      this.readString(newPathPtr, newPathLen),
+    );
+    if (targetPath.errno != null) {
+      return targetPath.errno;
+    }
+    return ERRNO_NOTSUP;
+  }
+
+  pathReadlink(fd, pathPtr, pathLen, _bufPtr, _bufLen, _bufUsedPtr) {
+    this.throwIfAborted();
+    const stat = this.pathStatForFd(fd, this.readString(pathPtr, pathLen));
+    if (stat.errno != null) {
+      return stat.errno;
+    }
+    return ERRNO_INVAL;
+  }
+
+  pathSymlink(oldPathPtr, oldPathLen, fd, newPathPtr, newPathLen) {
+    this.throwIfAborted();
+    this.readString(oldPathPtr, oldPathLen);
+    const targetPath = this.resolvePathForFd(
+      fd,
+      this.readString(newPathPtr, newPathLen),
+    );
+    if (targetPath.errno != null) {
+      return targetPath.errno;
+    }
+    return ERRNO_NOTSUP;
   }
 
   scratchPathStat(fd, pathValue) {
@@ -1655,6 +1804,30 @@ class WasiPreview1Runtime {
     return null;
   }
 
+  pathStatForFd(fd, pathValue) {
+    const stat =
+      fd === WORKSPACE_FD
+        ? this.pathStat(fd, pathValue)
+        : this.scratchPathStat(fd, pathValue);
+    if (stat == null) {
+      return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
+    }
+    return stat;
+  }
+
+  resolvePathForFd(fd, pathValue) {
+    if (fd === WORKSPACE_FD) {
+      return normalizeWasiLookupPath(pathValue) == null
+        ? { errno: ERRNO_NOTCAPABLE }
+        : {};
+    }
+    const base = this.scratchBasePath(fd);
+    if (base == null) {
+      return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
+    }
+    return resolveScratchPath(base, pathValue, { lookup: true });
+  }
+
   readString(ptr, length) {
     return decodeText(this.bytes().slice(ptr, ptr + (length >>> 0)));
   }
@@ -1713,6 +1886,39 @@ class WasiPreview1Runtime {
 
   throwIfAborted() {
     throwIfAborted(this.signal);
+  }
+
+  pollOneoff(_subscriptionsPtr, _eventsPtr, subscriptionsLen, _eventsUsedPtr) {
+    this.throwIfAborted();
+    return subscriptionsLen === 0 ? ERRNO_INVAL : ERRNO_NOTSUP;
+  }
+
+  procRaise(_signal) {
+    this.throwIfAborted();
+    return ERRNO_SUCCESS;
+  }
+
+  sockAccept(fd, _flags, _acceptedFdPtr) {
+    this.throwIfAborted();
+    return this.fdStat(fd) ? ERRNO_NOTSUP : ERRNO_BADF;
+  }
+
+  sockRecv(fd, _iovsPtr, _iovsLen, _flags, _nreadPtr, _roFlagsPtr) {
+    this.throwIfAborted();
+    return this.fdStat(fd) ? ERRNO_NOTSUP : ERRNO_BADF;
+  }
+
+  sockSend(fd, _iovsPtr, _iovsLen, _flags, _nwrittenPtr) {
+    this.throwIfAborted();
+    return this.fdStat(fd) ? ERRNO_NOTSUP : ERRNO_BADF;
+  }
+
+  sockShutdown(fd, how) {
+    this.throwIfAborted();
+    if (how !== 1 && how !== 2 && how !== 3) {
+      return ERRNO_INVAL;
+    }
+    return this.fdStat(fd) ? ERRNO_NOTSUP : ERRNO_BADF;
   }
 }
 

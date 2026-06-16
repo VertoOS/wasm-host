@@ -301,16 +301,20 @@ package-file fixtures:
 `fd_pwrite`, `fd_read`, `fd_readdir`, `fd_renumber`, `fd_seek`, `fd_sync`,
 `fd_tell`,
 `fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_fdstat_set_rights`, `fd_write`,
-`path_create_directory`, `path_filestat_get`, `path_open`, `path_rename`,
-`path_remove_directory`, `path_unlink_file`, `random_get`, `sched_yield`, and
-`proc_exit`.
+`path_create_directory`, `path_filestat_get`, `path_filestat_set_times`,
+`path_link`, `path_open`, `path_readlink`, `path_rename`,
+`path_remove_directory`, `path_symlink`, `path_unlink_file`, `poll_oneoff`,
+`proc_exit`, `proc_raise`, `random_get`, `sched_yield`, `sock_accept`,
+`sock_recv`, `sock_send`, and `sock_shutdown`.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, and provides a volatile in-memory `/tmp` scratch preopen for narrow
 directory create/list/rename/remove and file
 advise/allocate/create/write/positioned-write/readback/positioned-read/stat,
-rights-reduction/renumber/rename, set-times/truncate/sync/unlink
-fixtures. It is not a general WASIX runtime and does not provide persistent
+rights-reduction/renumber/rename, fd/path set-times/truncate/sync/unlink
+fixtures. Link/symlink/readlink, `poll_oneoff`, `proc_raise`, and socket
+imports are present only as deterministic browser-safe unsupported/no-op
+handlers. It is not a general WASIX runtime and does not provide persistent
 filesystems, sockets, threads, or WebC metadata execution.
 
 The automated Codex browser smoke path runs this contract across

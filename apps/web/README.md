@@ -71,15 +71,19 @@ Current scope:
   `fd_fdstat_set_flags`, descriptor rights reduction through
   `fd_fdstat_set_rights`, a read-only `/workspace` package-file preopen through
   `fd_prestat_get`, `fd_prestat_dir_name`, `path_open`, `path_filestat_get`,
-  `fd_readdir`, `fd_filestat_get`, `fd_close`, `fd_renumber`, and file-backed
-  `fd_read`, `fd_pread`, `fd_pwrite`, `fd_seek`, `fd_tell`, and `fd_advise`,
+  `path_filestat_set_times`, `fd_readdir`, `fd_filestat_get`, `fd_close`,
+  `fd_renumber`, and file-backed `fd_read`, `fd_pread`, `fd_pwrite`,
+  `fd_seek`, `fd_tell`, and `fd_advise`,
   plus a volatile in-memory `/tmp` scratch preopen for create,
   `path_create_directory`, write, positioned write, readback, positioned read,
   stat, `fd_allocate`, `fd_advise`, `fd_filestat_set_times`,
   truncate/sync, directory listing, `path_rename`, and `path_remove_directory` /
-  `path_unlink_file`. It captures stdout/stderr and exit status for the interim
-  browser smoke; it is not an interactive TTY/readline, persistent filesystem,
-  networking, WASIX, or WebC runtime.
+  `path_unlink_file`. Remaining Preview1 imports for link/symlink/readlink,
+  `poll_oneoff`, `proc_raise`, and sockets are wired with deterministic
+  browser-safe error/no-op behavior so modules can instantiate without implying
+  symlink, signal, or socket support. It captures stdout/stderr and exit status
+  for the interim browser smoke; it is not an interactive TTY/readline,
+  persistent filesystem, networking, WASIX, or WebC runtime.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.

@@ -384,10 +384,46 @@ fn browser_strict_profile_rejects_host_mounts() {
         Ok(_) => panic!("browser-strict should reject host mounts"),
         Err(error) => error,
     };
+    let run_error = error
+        .downcast_ref::<RunError>()
+        .expect("unsupported host mount should preserve RunError");
 
+    assert_eq!(run_error.kind(), RunErrorKind::UnsupportedCapability);
     assert!(
         error.to_string().contains("native-full profile"),
         "unexpected profile error: {error:#}"
+    );
+}
+
+#[test]
+fn browser_strict_mount_host_preserves_unsupported_capability_kind() {
+    if selected_profile() != HostProfile::BrowserStrict {
+        return;
+    }
+
+    let source = tempdir().expect("tempdir should be created");
+    let state = sandbox_with_profile(
+        HostProfile::BrowserStrict,
+        HashMap::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+    let error = match state.mount_host(HostMount {
+        source: source.path().to_string_lossy().to_string(),
+        target: "/mnt".to_string(),
+        read_only: true,
+    }) {
+        Ok(_) => panic!("browser-strict direct host mount should fail"),
+        Err(error) => error,
+    };
+    let run_error = error
+        .downcast_ref::<RunError>()
+        .expect("unsupported host mount should preserve RunError");
+
+    assert_eq!(run_error.kind(), RunErrorKind::UnsupportedCapability);
+    assert_eq!(
+        run_error.to_string(),
+        "host mounts require the native-full profile, current profile is browser-strict"
     );
 }
 

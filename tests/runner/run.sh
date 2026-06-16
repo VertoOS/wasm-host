@@ -58,6 +58,49 @@ PY
   --output "$TMP_ROOT/valid.webc" \
   --stdout "unused"
 
+unsupported_workspace="$TMP_ROOT/unsupported-workspace"
+mkdir -p "$unsupported_workspace"
+
+set +e
+"$ROOT/target/debug/wasm-host-runner" \
+  --event-format json \
+  --module-cache-dir "$TMP_ROOT/modules" \
+  --webc "$TMP_ROOT/valid.webc" \
+  --mount "$unsupported_workspace:/workspace:ro" \
+  -- fixture >"$TMP_ROOT/unsupported-stdout" 2>"$TMP_ROOT/unsupported-stderr"
+status="$?"
+set -e
+
+if [[ "$status" -ne 126 ]]; then
+  echo "expected unsupported capability exit 126, got $status" >&2
+  exit 1
+fi
+
+if [[ -s "$TMP_ROOT/unsupported-stdout" ]]; then
+  echo "expected no stdout for unsupported capability" >&2
+  exit 1
+fi
+
+python3 - "$TMP_ROOT/unsupported-stderr" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    events = [json.loads(line) for line in handle if line.strip()]
+
+assert [event["event"] for event in events] == [
+    "runner.started",
+    "package.validated",
+    "runner.failed",
+]
+started, validated, failed = events
+assert started["profile"] == "browser-strict"
+assert validated["event"] == "package.validated"
+assert failed["stage"] == "unsupported"
+assert failed["exit_code"] == 126
+assert "native-full profile" in failed["error"]
+PY
+
 workspace="$TMP_ROOT/workspace"
 mkdir -p "$workspace"
 printf 'stdin-data' > "$TMP_ROOT/stdin.txt"

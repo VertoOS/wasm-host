@@ -81,9 +81,10 @@ newline-delimited JSON frames.
 
 The runner validates the package before runtime setup. Missing or invalid WebC
 inputs fail with exit code `65`; command-line usage errors fail with exit code
-`2`; unresolved commands fail with exit code `127`; wall-time timeouts fail with
-exit code `124`; cancelled runs fail with exit code `130`; guest process exits
-preserve the guest return code.
+`2`; unresolved commands fail with exit code `127`; unsupported native-only
+capabilities in `browser-strict` fail with exit code `126`; wall-time timeouts
+fail with exit code `124`; cancelled runs fail with exit code `130`; guest
+process exits preserve the guest return code.
 
 Guest stdout and stderr are streamed to the terminal as the process writes them.
 The core API still captures both streams and returns them in `CompletedProcess`

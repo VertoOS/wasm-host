@@ -99,6 +99,8 @@ debugging.
 `browser-strict`
 : Native runner mode that only allows behavior the browser adapter can support.
 This should be the default profile for conformance and CLI e2e tests.
+Native-only capabilities requested in this profile must return a structured
+`UnsupportedCapability` host error instead of a generic host failure.
 
 `browser`
 : Real browser adapter. Uses browser storage, workers, fetch/gateway networking,

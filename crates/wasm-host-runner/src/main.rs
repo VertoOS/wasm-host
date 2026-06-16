@@ -25,6 +25,7 @@ const EXIT_USAGE: u8 = 2;
 const EXIT_PACKAGE: u8 = 65;
 const EXIT_TIMEOUT: u8 = 124;
 const EXIT_HOST: u8 = 125;
+const EXIT_UNSUPPORTED_CAPABILITY: u8 = 126;
 const EXIT_CANCELLED: u8 = 130;
 const EXIT_COMMAND_NOT_FOUND: u8 = 127;
 
@@ -116,17 +117,37 @@ fn run() -> Result<i32, RunnerError> {
     ) {
         Ok(state) => state,
         Err(error) => {
+            let failure = sandbox_failure_for_error(&error);
             reporter
-                .runner_failed("sandbox", EXIT_HOST, &error, started_at.elapsed())
+                .runner_failed(
+                    failure.stage,
+                    failure.exit_code,
+                    &error,
+                    started_at.elapsed(),
+                )
                 .map_err(RunnerError::host)?;
-            return Err(RunnerError::host_reported(error, options.event_format));
+            return Err(RunnerError::reported(
+                error,
+                failure.exit_code,
+                options.event_format,
+            ));
         }
     };
     if let Err(error) = register_native_host_commands(&state, &options.host_commands) {
+        let failure = sandbox_failure_for_error(&error);
         reporter
-            .runner_failed("sandbox", EXIT_HOST, &error, started_at.elapsed())
+            .runner_failed(
+                failure.stage,
+                failure.exit_code,
+                &error,
+                started_at.elapsed(),
+            )
             .map_err(RunnerError::host)?;
-        return Err(RunnerError::host_reported(error, options.event_format));
+        return Err(RunnerError::reported(
+            error,
+            failure.exit_code,
+            options.event_format,
+        ));
     }
     let _host_command_worker = NativeHostCommandWorker::spawn(
         options.host_commands.clone(),
@@ -219,10 +240,6 @@ impl RunnerError {
         }
     }
 
-    fn host_reported(error: anyhow::Error, event_format: EventFormat) -> Self {
-        Self::reported(error, EXIT_HOST, event_format)
-    }
-
     fn reported(error: anyhow::Error, exit_code: u8, event_format: EventFormat) -> Self {
         Self {
             exit_code,
@@ -264,10 +281,22 @@ struct RunFailure {
 }
 
 fn run_failure_for_error(error: &anyhow::Error) -> RunFailure {
+    failure_for_error(error, "run")
+}
+
+fn sandbox_failure_for_error(error: &anyhow::Error) -> RunFailure {
+    failure_for_error(error, "sandbox")
+}
+
+fn failure_for_error(error: &anyhow::Error, default_stage: &'static str) -> RunFailure {
     match error.downcast_ref::<RunError>().map(RunError::kind) {
         Some(RunErrorKind::CommandResolution) => RunFailure {
             stage: "command",
             exit_code: EXIT_COMMAND_NOT_FOUND,
+        },
+        Some(RunErrorKind::UnsupportedCapability) => RunFailure {
+            stage: "unsupported",
+            exit_code: EXIT_UNSUPPORTED_CAPABILITY,
         },
         Some(RunErrorKind::Timeout) => RunFailure {
             stage: "timeout",
@@ -278,7 +307,7 @@ fn run_failure_for_error(error: &anyhow::Error) -> RunFailure {
             exit_code: EXIT_CANCELLED,
         },
         None => RunFailure {
-            stage: "run",
+            stage: default_stage,
             exit_code: EXIT_HOST,
         },
     }
@@ -1168,6 +1197,36 @@ mod tests {
         let failure = run_failure_for_error(&error);
         assert_eq!(failure.stage, "timeout");
         assert_eq!(failure.exit_code, EXIT_TIMEOUT);
+    }
+
+    #[test]
+    fn unsupported_capability_errors_map_to_unsupported_exit() {
+        let source = temp_path("unsupported-mount-source");
+        fs::create_dir_all(&source).expect("mount source should exist");
+        let (events, _event_receiver) = EventBus::new(4);
+        let (virtual_executables, _virtual_process_receiver) = VirtualExecutableBridge::new(4);
+        let error = match SandboxState::new_with_profile(
+            HostProfile::BrowserStrict,
+            HashMap::new(),
+            vec![HostMount {
+                source: source.to_string_lossy().to_string(),
+                target: "/workspace".to_string(),
+                read_only: true,
+            }],
+            Vec::new(),
+            "/work".to_string(),
+            HashMap::new(),
+            events,
+            virtual_executables,
+        ) {
+            Ok(_) => panic!("browser-strict host mount should fail"),
+            Err(error) => error,
+        };
+
+        let failure = sandbox_failure_for_error(&error);
+        assert_eq!(failure.stage, "unsupported");
+        assert_eq!(failure.exit_code, EXIT_UNSUPPORTED_CAPABILITY);
+        fs::remove_dir_all(source).expect("mount source should remove");
     }
 
     #[test]

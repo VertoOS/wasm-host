@@ -28,6 +28,8 @@ The first conformance slice covers:
 - symlink creation and readlink behavior
 - filesystem event emission for create/modify/rename/delete
 - read-only and writable host mounts
+- typed unsupported-capability errors for native-only host mounts in
+  `browser-strict`
 - virtual executable dispatch through the host bridge
 - typed virtual process invocation/response helpers for host adapters
 - virtual process exit-code/stderr propagation

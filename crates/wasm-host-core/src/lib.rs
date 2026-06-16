@@ -319,6 +319,7 @@ impl fmt::Debug for OutputSink {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunErrorKind {
     CommandResolution,
+    UnsupportedCapability,
     Timeout,
     Cancelled,
 }
@@ -2343,10 +2344,7 @@ impl SandboxState {
         options: SandboxOptions,
     ) -> Result<Self> {
         if profile != HostProfile::NativeFull && !host_mounts.is_empty() {
-            return Err(anyhow!(
-                "host mounts require the native-full profile, current profile is {}",
-                profile.as_str()
-            ));
+            return Err(unsupported_capability_error("host mounts", profile));
         }
 
         let catalog = catalog_for(packages, &options)?;
@@ -2524,10 +2522,7 @@ impl SandboxState {
 
     pub fn mount_host(&self, mount: HostMount) -> Result<()> {
         if self.profile != HostProfile::NativeFull {
-            return Err(anyhow!(
-                "host mounts require the native-full profile, current profile is {}",
-                self.profile.as_str()
-            ));
+            return Err(unsupported_capability_error("host mounts", self.profile));
         }
 
         let target = normalize_path(&mount.target)?;
@@ -3072,6 +3067,17 @@ impl PackageCatalog {
 
         Ok(exit_code.raw())
     }
+}
+
+fn unsupported_capability_error(capability: &str, profile: HostProfile) -> anyhow::Error {
+    RunError::new(
+        RunErrorKind::UnsupportedCapability,
+        format!(
+            "{capability} require the native-full profile, current profile is {}",
+            profile.as_str()
+        ),
+    )
+    .into()
 }
 
 fn process_package_files(

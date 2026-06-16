@@ -26,6 +26,9 @@ import {
 } from "../src/artifact-manifest.js";
 
 const decoder = new TextDecoder();
+const MODEL_SECRET_REF_ENV = "CODEX_MODEL_BEARER_SECRET_REF";
+const MODEL_SECRET_REF = "worker-codex-model-bearer";
+const MODEL_SECRET_TOKEN = "worker-codex-model-token";
 
 test("command worker entry runs the browser smoke command across a worker boundary", async () => {
   const worker = createCommandWorker();
@@ -129,6 +132,41 @@ test("command worker entry runs a mocked Codex model request across a worker bou
     assert.equal(chunksText(run.stdout), "mock model response\n");
     assert.equal(chunksText(run.stderr), "");
     assert.equal(run.complete.result.exitCode, 0);
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
+test("command worker entry injects Codex model bearer secrets across a worker boundary", async () => {
+  const server = await startModelServer();
+  const fixture = await codexBrowserModelRequestFixture(server.url);
+  const worker = createCommandWorker({
+    codexBrowserSecrets: {
+      [MODEL_SECRET_REF]: MODEL_SECRET_TOKEN,
+    },
+  });
+  try {
+    const load = await dispatchAndCollect(worker, fixture.commandLoad);
+    const run = await dispatchAndCollect(worker, {
+      ...fixture.commandRun,
+      env: {
+        ...fixture.commandRun.env,
+        [MODEL_SECRET_REF_ENV]: MODEL_SECRET_REF,
+      },
+      id: "run-codex-browser-model-worker-auth",
+    });
+
+    assert.equal(load.loaded.packageId, "codex-browser");
+    assert.equal(load.loaded.artifactKind, "codex-browser");
+    assert.equal(server.seen.headers.authorization, `Bearer ${MODEL_SECRET_TOKEN}`);
+    assertCodexBrowserRequestPayload(
+      JSON.parse(server.seen.body),
+      fixture.expected,
+    );
+    assert.equal(chunksText(run.stdout), "mock model response\n");
+    assert.equal(run.complete.result.exitCode, 0);
+    assertNoEventLeak(run.events, [MODEL_SECRET_REF, MODEL_SECRET_TOKEN]);
   } finally {
     await worker.terminate();
     await server.close();
@@ -257,11 +295,13 @@ async function codexVersionSmokeFixture(manifest, bytes) {
 function dispatchAndCollect(worker, message) {
   const stdout = [];
   const stderr = [];
+  const events = [];
   return new Promise((resolve, reject) => {
     const onMessage = (event) => {
       if (event.id !== message.id) {
         return;
       }
+      events.push(event);
       if (event.type === "command.stdout") {
         stdout.push(event.chunk);
         return;
@@ -281,11 +321,11 @@ function dispatchAndCollect(worker, message) {
       }
       cleanup();
       if (event.type === "command.loaded") {
-        resolve({ loaded: event });
+        resolve({ events, loaded: event });
         return;
       }
       if (event.type === "command.complete") {
-        resolve({ complete: event, stderr, stdout });
+        resolve({ complete: event, events, stderr, stdout });
         return;
       }
       if (event.type === "command.error") {
@@ -306,6 +346,13 @@ function dispatchAndCollect(worker, message) {
     worker.on("error", onError);
     worker.postMessage(message);
   });
+}
+
+function assertNoEventLeak(events, values) {
+  const text = JSON.stringify(events);
+  for (const value of values) {
+    assert(!text.includes(value), "worker events leaked a sensitive value");
+  }
 }
 
 function chunksText(chunks) {

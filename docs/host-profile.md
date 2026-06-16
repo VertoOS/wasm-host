@@ -334,8 +334,12 @@ the Codex repo's `wasm32-unknown-unknown` browser artifact. This path validates
 the custom exports, calls `codex_build_request(prompt, model)`, and emits
 generated Responses API request JSON through command stdout. It can also run a
 mocked model turn by posting that generated JSON through the browser HTTP bridge
-and streaming local fixture response chunks to stdout. It is intentionally not
-modeled as raw WASI and does not imply real credentials, full Codex CLI, auth,
+and streaming local fixture response chunks to stdout. For authenticated model
+fixtures, the host can inject a bearer token through an opaque
+`CODEX_MODEL_BEARER_SECRET_REF` resolved by the browser secret provider at HTTP
+dispatch time; the raw token is not guest argv, ordinary env, terminal output,
+or package metadata. This is intentionally not modeled as raw WASI and does not
+imply full device-flow auth, real provider credentials, full Codex CLI,
 app-server, workspace, tool, or MCP support.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,

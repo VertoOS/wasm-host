@@ -13,8 +13,13 @@ import {
   DirectFetchHttpTransport,
   GatewayFetchHttpTransport,
 } from "../src/http.js";
+import { createMemorySecretProvider } from "../src/secrets.js";
 
 const EMPTY_WASM = base64ToBytes("AGFzbQEAAAA=");
+const MODEL_SECRET_REF_ENV = "CODEX_MODEL_BEARER_SECRET_REF";
+const MODEL_SECRET_REF = "codex-model-bearer";
+const MODEL_SECRET_TOKEN = "test-codex-model-token";
+const MODEL_SECRET_THROW_TOKEN = "provider-threw-token";
 const decoder = new TextDecoder();
 
 test("codex-browser executor builds Responses request JSON", async () => {
@@ -135,6 +140,11 @@ test("codex-browser model-request streams gateway responses to stdout", async ()
   );
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
+    codexBrowser: {
+      secretProvider: createMemorySecretProvider({
+        [MODEL_SECRET_REF]: MODEL_SECRET_TOKEN,
+      }),
+    },
     httpTransports: {
       gateway: new GatewayFetchHttpTransport({
         endpoint: "https://gateway.example.test/bridge",
@@ -170,6 +180,10 @@ test("codex-browser model-request streams gateway responses to stdout", async ()
   await runtime.handleMessage(fixture.commandLoad);
   await runtime.handleMessage({
     ...fixture.commandRun,
+    env: {
+      ...fixture.commandRun.env,
+      [MODEL_SECRET_REF_ENV]: MODEL_SECRET_REF,
+    },
     httpTransport: "gateway",
     id: "run-codex-browser-model-gateway",
   });
@@ -185,6 +199,7 @@ test("codex-browser model-request streams gateway responses to stdout", async ()
   assert.deepEqual(seen.body.headers, [
     { name: "content-type", value: "application/json" },
     { name: "accept", value: "text/event-stream, application/json" },
+    { name: "authorization", value: `Bearer ${MODEL_SECRET_TOKEN}` },
   ]);
   assertCodexBrowserRequestPayload(
     JSON.parse(decoder.decode(Buffer.from(seen.body.body_chunks_base64[0], "base64"))),
@@ -192,6 +207,186 @@ test("codex-browser model-request streams gateway responses to stdout", async ()
   );
   assert.equal(stdoutText(port.messages), "gateway model");
   assert.equal(port.messages.at(-1).type, "command.complete");
+  assertNoMessageLeak(port.messages, [MODEL_SECRET_TOKEN]);
+});
+
+test("codex-browser model-request injects host bearer secrets into direct Fetch", async () => {
+  const seen = {};
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    codexBrowser: {
+      secretProvider: createMemorySecretProvider({
+        [MODEL_SECRET_REF]: MODEL_SECRET_TOKEN,
+      }),
+    },
+    httpTransports: {
+      direct: new DirectFetchHttpTransport({
+        fetchImpl: async (url, init) => {
+          seen.url = url;
+          seen.headers = Array.from(init.headers.entries());
+          seen.body = JSON.parse(await readableBodyText(init.body));
+          return new Response(readableStream(["authorized model"]), {
+            status: 200,
+          });
+        },
+      }),
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    env: {
+      ...fixture.commandRun.env,
+      [MODEL_SECRET_REF_ENV]: MODEL_SECRET_REF,
+    },
+    id: "run-codex-browser-model-auth",
+  });
+
+  assert.equal(seen.url, "https://model.example.test/v1/responses");
+  assert.deepEqual(seen.headers, [
+    ["accept", "text/event-stream, application/json"],
+    ["authorization", `Bearer ${MODEL_SECRET_TOKEN}`],
+    ["content-type", "application/json"],
+  ]);
+  assertCodexBrowserRequestPayload(seen.body, fixture.expected);
+  assert.equal(stdoutText(port.messages), "authorized model");
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assertNoMessageLeak(port.messages, [MODEL_SECRET_TOKEN]);
+});
+
+test("codex-browser model-request rejects missing bearer secrets without leaking refs", async () => {
+  let called = false;
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    codexBrowser: {
+      secretProvider: createMemorySecretProvider(),
+    },
+    httpTransports: {
+      direct: new DirectFetchHttpTransport({
+        fetchImpl: async () => {
+          called = true;
+          return new Response("unexpected", { status: 200 });
+        },
+      }),
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    env: {
+      ...fixture.commandRun.env,
+      [MODEL_SECRET_REF_ENV]: MODEL_SECRET_REF,
+    },
+    id: "run-codex-browser-model-missing-auth",
+  });
+
+  const error = port.messages.at(-1);
+  assert.equal(called, false);
+  assert.equal(error.type, "command.error");
+  assert.equal(error.error.kind, "auth_failure");
+  assert.equal(error.error.stage, "startup");
+  assert.equal(error.result.exitCode, 2);
+  assert.equal(stdoutText(port.messages), "");
+  assertNoMessageLeak(port.messages, [MODEL_SECRET_REF, MODEL_SECRET_TOKEN]);
+});
+
+test("codex-browser model-request redacts provider failure details", async () => {
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    codexBrowser: {
+      secretProvider: {
+        async getBearerToken(_name, context) {
+          assert.equal(context.purpose, "codex-model-request");
+          assert(context.signal instanceof AbortSignal);
+          throw new Error(`provider failed with ${MODEL_SECRET_THROW_TOKEN}`);
+        },
+      },
+    },
+    httpTransports: {
+      direct: {
+        async dispatch() {
+          throw new Error("provider failure test should not dispatch");
+        },
+      },
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    env: {
+      ...fixture.commandRun.env,
+      [MODEL_SECRET_REF_ENV]: MODEL_SECRET_REF,
+    },
+    id: "run-codex-browser-model-provider-redaction",
+  });
+
+  const error = port.messages.at(-1);
+  assert.equal(error.type, "command.error");
+  assert.equal(error.error.kind, "auth_failure");
+  assert.equal(error.error.message, "browser secret provider failed");
+  assert.equal(error.result.exitCode, 2);
+  assertNoMessageLeak(port.messages, [
+    MODEL_SECRET_REF,
+    MODEL_SECRET_THROW_TOKEN,
+  ]);
+});
+
+test("codex-browser model-request redacts token-bearing transport errors", async () => {
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    codexBrowser: {
+      secretProvider: createMemorySecretProvider({
+        [MODEL_SECRET_REF]: MODEL_SECRET_TOKEN,
+      }),
+    },
+    httpTransports: {
+      direct: {
+        async dispatch() {
+          const error = new Error(`transport leaked ${MODEL_SECRET_TOKEN}`);
+          error.kind = "transport";
+          error.stage = "runtime";
+          error.exitCode = 1;
+          throw error;
+        },
+      },
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    env: {
+      ...fixture.commandRun.env,
+      [MODEL_SECRET_REF_ENV]: MODEL_SECRET_REF,
+    },
+    id: "run-codex-browser-model-transport-redaction",
+  });
+
+  const error = port.messages.at(-1);
+  assert.equal(error.type, "command.error");
+  assert.equal(error.error.kind, "transport");
+  assert.equal(error.error.message, "transport leaked [redacted]");
+  assert.equal(error.result.exitCode, 1);
+  assertNoMessageLeak(port.messages, [MODEL_SECRET_REF, MODEL_SECRET_TOKEN]);
 });
 
 test("codex-browser model-request rejects missing endpoints", async () => {
@@ -291,6 +486,13 @@ function stdoutText(messages) {
         .map((message) => message.chunk),
     ),
   );
+}
+
+function assertNoMessageLeak(messages, values) {
+  const text = JSON.stringify(messages);
+  for (const value of values) {
+    assert(!text.includes(value), "command messages leaked a sensitive value");
+  }
 }
 
 function concatChunks(chunks) {

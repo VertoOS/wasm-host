@@ -443,6 +443,8 @@ class WasiPreview1Runtime {
         this.writeSizes(this.env, environCountPtr, environBufSizePtr),
       fd_read: (fd, iovsPtr, iovsLen, nreadPtr) =>
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
+      fd_pread: (fd, iovsPtr, iovsLen, offset, nreadPtr) =>
+        this.fdPread(fd, iovsPtr, iovsLen, offset, nreadPtr),
       fd_allocate: (fd, offset, length) =>
         this.fdAllocate(fd, offset, length),
       fd_advise: (fd, offset, length, advice) =>
@@ -638,33 +640,64 @@ class WasiPreview1Runtime {
       return ERRNO_BADF;
     }
 
+    const input = file?.record.bytes ?? this.stdin;
+    const inputOffset = file?.offset ?? this.stdinOffset;
+    const total = this.readIntoIovs(input, inputOffset, iovsPtr, iovsLen);
+    if (file) {
+      file.offset += total;
+    } else {
+      this.stdinOffset += total;
+    }
+    this.writeU32(nreadPtr, total);
+    return ERRNO_SUCCESS;
+  }
+
+  fdPread(fd, iovsPtr, iovsLen, offset, nreadPtr) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    this.writeU32(nreadPtr, 0);
+    if (fd === WORKSPACE_FD || fd === TMP_FD || isOpenDirectory(file)) {
+      return ERRNO_ISDIR;
+    }
+    if (!file) {
+      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
+    }
+    if (!canReadFile(file)) {
+      return ERRNO_NOTCAPABLE;
+    }
+    const start = resolveFileSize(offset);
+    if (start.errno != null) {
+      return start.errno;
+    }
+    const total = this.readIntoIovs(
+      file.record.bytes,
+      start.size,
+      iovsPtr,
+      iovsLen,
+    );
+    this.writeU32(nreadPtr, total);
+    return ERRNO_SUCCESS;
+  }
+
+  readIntoIovs(input, inputOffset, iovsPtr, iovsLen) {
     let total = 0;
+    let offset = inputOffset;
     for (let index = 0; index < iovsLen; index += 1) {
-      const input = file?.record.bytes ?? this.stdin;
-      const inputOffset = file?.offset ?? this.stdinOffset;
-      if (inputOffset >= input.byteLength) {
+      if (offset >= input.byteLength) {
         break;
       }
       const iovPtr = iovsPtr + index * 8;
       const dataPtr = this.readU32(iovPtr);
       const dataLength = this.readU32(iovPtr + 4);
-      const available = input.byteLength - inputOffset;
+      const available = input.byteLength - offset;
       const readLength = Math.min(dataLength, available);
       if (readLength > 0) {
-        this.bytes().set(
-          input.subarray(inputOffset, inputOffset + readLength),
-          dataPtr,
-        );
-        if (file) {
-          file.offset += readLength;
-        } else {
-          this.stdinOffset += readLength;
-        }
+        this.bytes().set(input.subarray(offset, offset + readLength), dataPtr);
+        offset += readLength;
         total += readLength;
       }
     }
-    this.writeU32(nreadPtr, total);
-    return ERRNO_SUCCESS;
+    return total;
   }
 
   writeOpenFile(file, chunks) {
@@ -1644,6 +1677,10 @@ function allowsRights(requested, allowed) {
 
 function canWriteFile(file) {
   return file.writable && (file.rights & WASI_RIGHT_FD_WRITE) !== 0n;
+}
+
+function canReadFile(file) {
+  return (file.rights & WASI_RIGHT_FD_READ) !== 0n;
 }
 
 function canResizeFile(file) {

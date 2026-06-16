@@ -96,6 +96,10 @@ const FD_RENUMBER_WASM = base64ToBytes(
   "AGFzbQEAAAABPQlgCX9/f39/fn5/fwF/YAJ/fwF/YAR/f39/AX9gBH9+f38Bf2ABfwBgA39/fwBgBH9/f38AYAJ/fwBgAAAC0AEGFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQtmZF9yZW51bWJlcgABFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3JlYWQAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3NlZWsAAxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAAEAwYFBQYFBwgFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQACgrqAgUOACAAIAFHBEAgAhAFCwsgAEEAIAE2AgBBBCACNgIAIABBAEEBQQgQAkEAIAMQBgshAEEAQagCNgIAQQRBATYCACAAQQBBAUEIEAIgASACEAYLSgAgAEIAQQBBGBAEQQAgARAGQQBBIDYCAEEEQQQ2AgAgAEEAQQFBCBADQQAgARAGQQgoAgBBBCABEAZBICgCAEHhxI2LAiABEAYLygEBAn9BBEEAQYACQQxBAULGAEIAQQBBEBAAQQBBChAGQRAoAgAhACAAQQwQAUEAQQsQBiAAQQhBDBAIQQxBoAJBA0ENEAdBDEEMEAFBAEEOEAZBBEEAQZACQQtBAULAAEIAQQBBFBAAQQBBFBAGQRQoAgAhAUEMIAEQAUEAQRUQBkEMQQhBFhAIIAFBqAJBAUEXEAcgAUEYEAlB4wBBDBABQQhBHhAGIAFBARABQcwAQR8QBiABQagCQQFBIBAHQQFBsAJBD0EoEAcLC0kFAEGAAgsMcmVudW1iZXIudHh0AEGQAgsLcmVwbGFjZS50eHQAQaACCwNhYmMAQagCCwEhAEGwAgsPZmQtcmVudW1iZXItb2sK",
 );
 
+const FD_PREAD_WASM = base64ToBytes(
+  "AGFzbQEAAAABUAtgCX9/f39/fn5/fwF/YAV/f39+fwF/YAR/f39/AX9gAn9/AX9gBH9+f38Bf2ABfwBgA39/fwBgA35+fwBgBn9+f39/fwBgBH9/f38AYAAAAu4BBxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXBhdGhfb3BlbgAAFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfcHJlYWQAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3JlYWQAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3RlbGwAAxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3NlZWsABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQABQMGBQYHCAkKBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAsK/wMFDgAgACABRwRAIAIQBgsLDgAgACABUgRAIAIQBgsLNgBBAEHAADYCAEEEIAI2AgBBCEHjADYCACAAQQBBASABQQgQASADIAUQB0EIKAIAIAQgBRAHCyAAQQAgATYCAEEEIAI2AgAgAEEAQQFBCBAFQQAgAxAHC4YDAQN/QQNBAEGAAkEMQQBCpgFCAEEAQRAQAEEAQQoQB0EQKAIAIQAgAEIDQQBBGBAEQQBBCxAHIABCAkEDQQBBA0EMEAlBwAAoAgBB7Ni9A0ENEAcgAEEgEANBAEEOEAdBICkDAEIDQQ8QCCAAQgBBAEEAQQBBEBAJIABC5ABBBEEAQQBBERAJIABCf0EBQRxBAEESEAkgAEKAgICAgICAEEEBQT1BAEETEAlBBEIAQQFBH0EAQRQQCUEAQgBBAUHMAEEAQRUQCUHjAEIAQQFBCEEAQRYQCUEEQQBBkAJBC0EBQsYBQgBBAEEUEABBAEEeEAdBFCgCACEBIAFBoAJBBkEfEAogAUIGQQBBGBAEQQBBIBAHIAFCAkEDQQBBA0EhEAlBwAAoAgBB48iVA0EiEAcgAUEgEANBAEEjEAdBICkDAEIGQSQQCEEEQQBBsAJBDUEBQsAAQgBBAEEcEABBAEElEAdBHCgCACECIAJCAEEBQcwAQQBBJhAJQQFBwAJBDEEoEAoLC1UFAEGAAgsMcmVhZG9ubHkudHh0AEGQAgsLc2NyYXRjaC50eHQAQaACCwZhYmNkZWYAQbACCw13cml0ZW9ubHkudHh0AEHAAgsMZmQtcHJlYWQtb2sK",
+);
+
 const TMP_RENAME_WASM = base64ToBytes(
   "AGFzbQEAAAABYw1gCX9/f39/fn5/fwF/YAN/f38Bf2AGf39/f39/AX9gBH9/f38Bf2AEf35/fwF/YAF/AX9gAX8AYAN/f38AYAJ/fwBgBH9/fn8Bf2AHf39/f35/fwBgCH9/f39/f39/AGAAAAKhAggWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwYXRoX29wZW4AABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxFXBhdGhfY3JlYXRlX2RpcmVjdG9yeQABFndhc2lfc25hcHNob3RfcHJldmlldzELcGF0aF9yZW5hbWUAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9zZWVrAAQWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF9jbG9zZQAFFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAYDDAsHBwgIAwkKBwsIDAUDAQABBxMCBm1lbW9yeQIABl9zdGFydAASCq0JCw4AIAAgAUcEQCACEAcLCysAQQAgADYCAEEEIAE2AgBBAUEAQQFBCBADQQAgAhAIQQgoAgAgASACEAgLLABBAEGgAjYCAEEEQQM2AgAgAEEAQQFBCBADQQAgARAIQQgoAgBBAyABEAgLYwAgAEIAQQBBGBAFQQAgARAIQQBBgAE2AgBBBEEDNgIAIABBAEEBQQgQBEEAIAEQCEEIKAIAQQMgARAIQYABLQAAQeEAIAEQCEGBAS0AAEHiACABEAhBggEtAABB4wAgARAICyQAQQRBACAAIAEgAkLmgIABQgBBAEEQEABBACADEAhBECgCAAshAEEEQQAgACABQQIgAkIAQQBBEBAAQQAgAxAIQRAoAgALHAAgAEEAIAEgAiADIARCAEEAQRAQACAFIAYQCAsQAEEEIAAgARABQQAgAhAICxYAIAAgASACIAMgBCAFEAIgBiAHEAgLDAAgABAGQQAgARAIC8UGAQN/QYAIQQlBAUEKEAwhAiACQQsQCkEEQYAIQQlBBEGKCEEIQQBBDBAQIAJBDRALQQRBgAhBCUEAQq6AgAFBLEEOEA5BighBCEEAQQ8QDCEAIABBEBALQZMIQQxBAUEREAwhACAAQRIQEUEEQYoIQQhBBEGTCEEMQQBBExAQIAJBFBALQQRBighBCEEAQq6AgAFBLEEVEA5BkwhBDEEAQRYQDCEAIABBFxALQeAJQQpBGBAPQQRBkwhBDEEEQeAJQQpBH0EZEBBBoAhBA0EaEA9BqghBDUEBQRsQDCEAIABBHBAKIABBHRARQQRBoAhBA0EEQaQIQQVBAEEeEBBBuAhBD0EAQR8QDCEAIABBIBALQQRBqghBDUEAQq6AgAFBLEEhEA5BBEGkCEEFQQRBkwhBDEE2QSIQEEEEQaQIQQVBBEHWCUEJQRxBIxAQQYUKQQxBJBAPQQRBpAhBBUEEQYUKQQxBAEElEBBBvApBFkEAQSYQDCEAIABBJxALQfsJQQlBKBAPQZIKQQ9BKRAPQaIKQRlBAUEqEAwhACAAQSsQEUEEQfsJQQlBBEGSCkEPQTdBLBAQQcgIQQRBLRAPQc0IQQ1BAUEuEAwhACAAQS8QCiAAQTAQEUHICEEEQoCADEExEA0hASABQdsIQQggAUHkCEELQQBBMhAQQfAIQRBBAEEzEAwhACAAQTQQC0EEQcgIQQRBBEGBCUEGQQBBNRAQIAFB5AhBCyABQYgJQQlBAEE2EBBBkglBEEEAQTcQDCEAIABBOBALQQRB8AhBEEEAQq6AgAFBLEE5EA5BgQlBBkKAgAhBOhANIQEgAUGICUEJQQRBighBCEHMAEE7EBBBgQlBBkKAgARBPBANIQFBBEGSCUEQIAFBighBCEHMAEE9EBBBA0GTCEEMQQRBighBCEHMAEE+EBBBBEGTCEEMQQNBighBCEHMAEE/EBBBBEGjCUEEQQRBighBCEHMAEHAABAQQQRBkwhBDEEEQagJQRFBLEHBABAQQboJQQpBAUHCABAMIQAgAEHDABARQQRBkwhBDEEEQcUJQRBBNkHEABAQQeMAQZMIQQxBBEGKCEEIQQhBxQAQEEHTCkEOQcYAEAkLC+MDHABBoAILA2FiYwBBgAgLCWFscGhhLnR4dABBiggLCGJldGEudHh0AEGTCAsMZXhpc3RpbmcudHh0AEGgCAsDZGlyAEGkCAsFbW92ZWQAQaoICw1kaXIvY2hpbGQudHh0AEG4CAsPbW92ZWQvY2hpbGQudHh0AEHICAsEYmFzZQBBzQgLDWJhc2UvZmlsZS50eHQAQdsICwhmaWxlLnR4dABB5AgLC3JlbmFtZWQudHh0AEHwCAsQYmFzZS9yZW5hbWVkLnR4dABBgQkLBm9wZW5lZABBiAkLCWFnYWluLnR4dABBkgkLEG9wZW5lZC9hZ2Fpbi50eHQAQaMJCwQuLi94AEGoCQsRbWlzc2luZy9jaGlsZC50eHQAQboJCwpwYXJlbnQudHh0AEHFCQsQcGFyZW50LnR4dC9jaGlsZABB1gkLCW1vdmVkL3N1YgBB4AkLCnRhcmdldC1kaXIAQfsJCwllbXB0eS1zcmMAQYUKCwxlbXB0eS10YXJnZXQAQZIKCw9ub25lbXB0eS10YXJnZXQAQaIKCxlub25lbXB0eS10YXJnZXQvY2hpbGQudHh0AEG8CgsWZW1wdHktdGFyZ2V0L2NoaWxkLnR4dABB0woLDnRtcC1yZW5hbWUtb2sK",
 );
@@ -105,7 +109,7 @@ const MISSING_MEMORY_WASM = base64ToBytes(
 );
 
 const UNSUPPORTED_IMPORT_WASM = base64ToBytes(
-  "AGFzbQEAAAABDQJgBX9/f35/AX9gAAACIwEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF9wcmVhZAAAAwIBAQUDAQABBxMCBm1lbW9yeQIABl9zdGFydAABChEBDwBBAEEAQQBCAEEAEAAaCw==",
+  "AGFzbQEAAAABDQJgBX9/f35/AX9gAAACJAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlmZF9wd3JpdGUAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoRAQ8AQQFBAEEAQgBBABAAGgs=",
 );
 
 const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
@@ -741,6 +745,35 @@ test("raw WASI executor renumbers open file descriptors", async () => {
 
   assert.deepEqual(result, { exitCode: 0 });
   assert.equal(output.stdout, "fd-renumber-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor supports positional file reads", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: FD_PREAD_WASM,
+    command: "fd-pread",
+    files: {
+      "readonly.txt": "hello\n",
+    },
+    id: "fd-pread",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "fd-pread",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "fd-pread-ok\n");
   assert.equal(output.stderr, "");
 });
 
@@ -1622,6 +1655,59 @@ test("command worker runs raw WASI modules that renumber fds", async () => {
   });
 });
 
+test("command worker runs raw WASI modules that pread files", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-fd-pread",
+    package: {
+      artifactKind: "wasi-module",
+      command: "fd-pread",
+      id: "fd-pread",
+      wasiModule: {
+        bytes: FD_PREAD_WASM,
+        files: [
+          {
+            content: "hello\n",
+            path: "/workspace/readonly.txt",
+          },
+        ],
+      },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-fd-pread",
+    packageId: "fd-pread",
+    command: "fd-pread",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.type === "command.loaded",
+  );
+  assert.equal(loaded.artifactKind, "wasi-module");
+  assert.equal(loaded.packageType, "wasi-module");
+  assert.equal(stdoutText(port.messages), "fd-pread-ok\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-fd-pread",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 12,
+      timedOut: false,
+    },
+  });
+});
+
 test("command worker runs raw WASI modules with scratch renames", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
@@ -1849,7 +1935,7 @@ test("raw WASI executor reports invalid modules and unsupported imports", async 
     executor.run(baseRunRequest(unsupportedImport), recordingOutput()),
     (error) => {
       assert.equal(error.kind, "runtime");
-      assert.match(error.message, /fd_pread/);
+      assert.match(error.message, /fd_pwrite/);
       return true;
     },
   );

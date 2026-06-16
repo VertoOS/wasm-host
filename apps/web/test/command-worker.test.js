@@ -6,6 +6,7 @@ import {
   BrowserCommandWorkerRuntime,
   createBrowserCommandWorkerRuntime,
 } from "../src/command-worker.js";
+import { HttpBridgeError } from "../src/http.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -158,6 +159,213 @@ test("BrowserCommandWorkerRuntime streams stdin messages", async () => {
 
   assert.equal(stdin, "hello world");
   assert.equal(port.messages.at(-1).type, "command.complete");
+});
+
+test("BrowserCommandWorkerRuntime exposes an HTTP bridge client to executors", async () => {
+  const port = recordingPort();
+  const seen = {};
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: {
+      direct: recordingHttpTransport("direct", seen),
+      gateway: recordingHttpTransport("gateway", seen),
+    },
+    executors: {
+      http: {
+        async run(request, output) {
+          const response = await request.httpBridge.dispatch({
+            bodyChunksBase64: ["cmVx", "dWVzdA=="],
+            headers: [{ name: "X-Test", value: " yes " }],
+            method: "POST",
+            url: "https://example.test/bridge",
+          });
+          await output.writeStdout(
+            `${request.httpTransportName}:${response.status}:` +
+              `${response.headers[0].name}=${response.headers[0].value}:` +
+              `${response.bodyChunks.length}:` +
+              decoder.decode(response.body),
+          );
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await loadHttpPackage(runtime);
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "http-run",
+    packageId: "http-pkg",
+    command: "http",
+    httpTransport: "gateway",
+  });
+
+  assert.deepEqual(seen, {
+    body: "request",
+    headers: [{ name: "x-test", value: "yes" }],
+    method: "POST",
+    name: "gateway",
+    signalAborted: false,
+    url: "https://example.test/bridge",
+  });
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "http-run")),
+    "gateway:202:x-bridge=ok:2:hello world",
+  );
+  assert.equal(port.messages.at(-1).type, "command.complete");
+});
+
+test("BrowserCommandWorkerRuntime preserves HTTP bridge errors for executors", async () => {
+  const port = recordingPort();
+  let seenError = null;
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: {
+      direct: {
+        async dispatch() {
+          throw new HttpBridgeError("cors", "blocked by policy");
+        },
+      },
+    },
+    executors: {
+      http: {
+        async run(request, output) {
+          try {
+            await request.httpBridge.dispatch({
+              method: "GET",
+              url: "https://example.test/blocked",
+            });
+          } catch (error) {
+            seenError = error;
+            await output.writeStdout(`${error.kind}:${error.message}`);
+          }
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await loadHttpPackage(runtime);
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "http-error-run",
+    packageId: "http-pkg",
+    command: "http",
+  });
+
+  assert(seenError instanceof HttpBridgeError);
+  assert.equal(seenError.kind, "cors");
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "http-error-run")),
+    "cors:blocked by policy",
+  );
+  assert.equal(port.messages.at(-1).type, "command.complete");
+});
+
+test("BrowserCommandWorkerRuntime times out HTTP bridge dispatches", async () => {
+  const port = recordingPort();
+  let transportSignal = null;
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: {
+      direct: {
+        async dispatch(_request, _writer, signal) {
+          transportSignal = signal;
+          await rejectOnAbort(signal);
+        },
+      },
+    },
+    executors: {
+      http: {
+        async run(request, output) {
+          try {
+            await request.httpBridge.dispatch({
+              method: "GET",
+              timeoutMs: 5,
+              url: "https://example.test/slow",
+            });
+          } catch (error) {
+            await output.writeStdout(`${error.kind}:${error.message}`);
+          }
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await loadHttpPackage(runtime);
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "http-timeout-run",
+    packageId: "http-pkg",
+    command: "http",
+  });
+
+  assert.equal(transportSignal.aborted, true);
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "http-timeout-run")),
+    "timeout:HTTP request exceeded wall time limit",
+  );
+  assert.equal(port.messages.at(-1).type, "command.complete");
+});
+
+test("BrowserCommandWorkerRuntime cancels in-flight HTTP bridge dispatches", async () => {
+  const port = recordingPort();
+  const dispatchStarted = deferred();
+  let transportSignal = null;
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: {
+      direct: {
+        async dispatch(_request, _writer, signal) {
+          transportSignal = signal;
+          dispatchStarted.resolve();
+          await rejectOnAbort(signal);
+        },
+      },
+    },
+    executors: {
+      http: {
+        async run(request) {
+          await request.httpBridge.dispatch({
+            method: "GET",
+            url: "https://example.test/cancel",
+          });
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await loadHttpPackage(runtime);
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "http-cancel-run",
+    packageId: "http-pkg",
+    command: "http",
+  });
+  await dispatchStarted.promise;
+  await runtime.handleMessage({ type: "command.cancel", id: "http-cancel-run" });
+  await run;
+
+  assert.equal(transportSignal.aborted, true);
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "http-cancel-run",
+    error: {
+      kind: "cancelled",
+      message: "browser command cancelled",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: true,
+      exitCode: 130,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
 });
 
 test("BrowserCommandWorkerRuntime closes stdout and stderr before final status", async () => {
@@ -819,6 +1027,42 @@ function loadBlockingPackage(runtime) {
     type: "command.load",
     package: { id: "pkg", type: "blocking", commands: ["block"] },
   });
+}
+
+function loadHttpPackage(runtime) {
+  return runtime.handleMessage({
+    type: "command.load",
+    package: { id: "http-pkg", type: "http", commands: ["http"] },
+  });
+}
+
+function recordingHttpTransport(name, seen) {
+  return {
+    async dispatch(request, writer, signal) {
+      seen.body = chunksText(await requestBodyChunks(request.body));
+      seen.headers = request.headers;
+      seen.method = request.method;
+      seen.name = name;
+      seen.signalAborted = signal.aborted;
+      seen.url = request.url;
+      await writer.writeBodyChunk("hello ");
+      await writer.finish(202, [{ name: "X-Bridge", value: " ok " }], "world");
+    },
+  };
+}
+
+async function requestBodyChunks(body) {
+  if (body == null) {
+    return [];
+  }
+  if (typeof body[Symbol.asyncIterator] === "function") {
+    const chunks = [];
+    for await (const chunk of body) {
+      chunks.push(chunk);
+    }
+    return chunks;
+  }
+  return Array.isArray(body) ? body : [body];
 }
 
 function packageRecord(id) {

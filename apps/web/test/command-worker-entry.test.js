@@ -159,7 +159,51 @@ test("command worker entry injects Codex model bearer secrets across a worker bo
 
     assert.equal(load.loaded.packageId, "codex-browser");
     assert.equal(load.loaded.artifactKind, "codex-browser");
-    assert.equal(server.seen.headers.authorization, `Bearer ${MODEL_SECRET_TOKEN}`);
+    assert.equal(
+      server.seen.headers.authorization,
+      `Bearer ${MODEL_SECRET_TOKEN}`,
+    );
+    assertCodexBrowserRequestPayload(
+      JSON.parse(server.seen.body),
+      fixture.expected,
+    );
+    assert.equal(chunksText(run.stdout), "mock model response\n");
+    assert.equal(run.complete.result.exitCode, 0);
+    assertNoEventLeak(run.events, [MODEL_SECRET_REF, MODEL_SECRET_TOKEN]);
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
+test("command worker entry injects fake device auth secrets across a worker boundary", async () => {
+  const server = await startModelServer();
+  const fixture = await codexBrowserModelRequestFixture(server.url);
+  const worker = createCommandWorker({
+    codexBrowserDeviceAuth: {
+      account: { id: "acct_worker", refresh_token: MODEL_SECRET_TOKEN },
+      bearerToken: MODEL_SECRET_TOKEN,
+      scopes: ["model:responses"],
+      secretRef: MODEL_SECRET_REF,
+    },
+  });
+  try {
+    const load = await dispatchAndCollect(worker, fixture.commandLoad);
+    const run = await dispatchAndCollect(worker, {
+      ...fixture.commandRun,
+      env: {
+        ...fixture.commandRun.env,
+        [MODEL_SECRET_REF_ENV]: MODEL_SECRET_REF,
+      },
+      id: "run-codex-browser-model-worker-device-auth",
+    });
+
+    assert.equal(load.loaded.packageId, "codex-browser");
+    assert.equal(load.loaded.artifactKind, "codex-browser");
+    assert.equal(
+      server.seen.headers.authorization,
+      `Bearer ${MODEL_SECRET_TOKEN}`,
+    );
     assertCodexBrowserRequestPayload(
       JSON.parse(server.seen.body),
       fixture.expected,

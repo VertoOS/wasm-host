@@ -13,7 +13,10 @@ import {
   DirectFetchHttpTransport,
   GatewayFetchHttpTransport,
 } from "../src/http.js";
-import { createMemorySecretProvider } from "../src/secrets.js";
+import {
+  createFakeBrowserDeviceFlowAuthBroker,
+  createMemorySecretProvider,
+} from "../src/secrets.js";
 
 const EMPTY_WASM = base64ToBytes("AGFzbQEAAAA=");
 const MODEL_SECRET_REF_ENV = "CODEX_MODEL_BEARER_SECRET_REF";
@@ -257,6 +260,58 @@ test("codex-browser model-request injects host bearer secrets into direct Fetch"
   assert.equal(stdoutText(port.messages), "authorized model");
   assert.equal(port.messages.at(-1).type, "command.complete");
   assertNoMessageLeak(port.messages, [MODEL_SECRET_TOKEN]);
+});
+
+test("codex-browser model-request uses externally completed device auth secrets", async () => {
+  const seen = {};
+  const auth = createFakeBrowserDeviceFlowAuthBroker();
+  const login = await auth.startDeviceLogin({ secretRef: MODEL_SECRET_REF });
+  const completed = await auth.completeDeviceLogin(login.loginId, {
+    account: { id: "acct_device" },
+    bearerToken: MODEL_SECRET_TOKEN,
+  });
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    codexBrowser: { secretProvider: auth },
+    httpTransports: {
+      direct: new DirectFetchHttpTransport({
+        fetchImpl: async (url, init) => {
+          seen.url = url;
+          seen.headers = Array.from(init.headers.entries());
+          seen.body = JSON.parse(await readableBodyText(init.body));
+          return new Response(readableStream(["device auth model"]), {
+            status: 200,
+          });
+        },
+      }),
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    env: {
+      ...fixture.commandRun.env,
+      [MODEL_SECRET_REF_ENV]: completed.secretRef,
+    },
+    id: "run-codex-browser-model-device-auth",
+  });
+
+  assert.equal(seen.url, "https://model.example.test/v1/responses");
+  assert.deepEqual(seen.headers, [
+    ["accept", "text/event-stream, application/json"],
+    ["authorization", `Bearer ${MODEL_SECRET_TOKEN}`],
+    ["content-type", "application/json"],
+  ]);
+  assertCodexBrowserRequestPayload(seen.body, fixture.expected);
+  assert.equal(stdoutText(port.messages), "device auth model");
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assertNoMessageLeak(port.messages, [MODEL_SECRET_TOKEN]);
+  assertNoMessageLeak([completed], [MODEL_SECRET_TOKEN]);
 });
 
 test("codex-browser model-request rejects missing bearer secrets without leaking refs", async () => {

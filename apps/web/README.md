@@ -35,7 +35,10 @@ Current scope:
   CLI, device-flow auth, app-server, workspace, tool, or MCP execution.
 - `src/secrets.js` owns the current browser secret-provider seam: tests can
   supply host-owned bearer tokens by reference, while command messages and
-  terminal output continue to carry only opaque secret references.
+  terminal output continue to carry only opaque secret references. It also
+  includes a deterministic fake device-flow auth broker for start/status,
+  host-side completion, cancellation, and logout tests. It is not a real
+  provider login, refresh, persistence, or browser credential UI.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
   stdin by default, writes stdout/stderr to a sink, closes output streams
@@ -107,6 +110,9 @@ Current scope:
   request-builder executor, mocked model-request dispatch through direct Fetch
   and gateway transports, host-owned bearer secret injection/redaction, export
   validation, and command error shaping.
+- `test/secrets.test.js` covers the in-memory browser secret provider and fake
+  device-flow broker, including external completion, classified denied/expired/
+  cancelled errors, logout, and token redaction.
 - `test/command-worker.test.js` and `test/command-worker-entry.test.js` cover
   command lifecycle success, startup failure, stdin, cancellation, timeout,
   duplicate-run rejection, terminal resize, explicit stream close, HTTP

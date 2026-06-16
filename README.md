@@ -62,6 +62,10 @@ until the boundaries are stable enough to split.
   streaming local fixture response chunks to command stdout. It can inject a
   host-owned bearer secret from an opaque `CODEX_MODEL_BEARER_SECRET_REF`
   without putting the token in command args, ordinary env values, or stdout.
+- The browser secret seam includes a deterministic fake device-flow auth broker
+  for start/status/external-complete/cancel/logout tests. Completion stores the
+  bearer token under a host-owned secret ref; public auth status does not expose
+  raw token values.
 - The browser adapter package can execute the interim raw WASI preview1
   `codex --version` smoke path with args/env, clocks, random bytes, preloaded
   stdin, cooperative yield, read-only package file reads and positioned reads,

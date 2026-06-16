@@ -242,6 +242,35 @@ test("BrowserCommandWorkerRuntime forwards terminal resize to the active run", a
   assert.deepEqual(terminal, { columns: 120, rows: 40 });
 });
 
+test("BrowserCommandWorkerRuntime seeds terminal dimensions from command run", async () => {
+  const port = recordingPort();
+  let terminal = null;
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: { direct: {} },
+    executors: {
+      test: async (request) => {
+        terminal = { ...request.terminal };
+        return { exitCode: 0 };
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { id: "pkg", type: "test", commands: ["resize"] },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "initial-size-run",
+    packageId: "pkg",
+    command: "resize",
+    terminal: { columns: 100, rows: 32 },
+  });
+
+  assert.deepEqual(terminal, { columns: 100, rows: 32 });
+});
+
 test("BrowserCommandWorkerRuntime reports startup failures", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({

@@ -5,6 +5,8 @@ still changing.
 
 Current scope:
 
+- `index.html`, `src/app.js`, and `src/app.css` provide the first browser app
+  shell: an interactive terminal surface for local browser runtime development.
 - `src/http.js` implements direct Fetch and gateway-backed HTTP transport
   surfaces for browser workers.
 - `src/http-worker.js` implements a small worker-side message runtime that
@@ -27,6 +29,14 @@ Current scope:
   stdin by default, writes stdout/stderr to a sink, closes output streams
   explicitly, sends stdin chunks/end/errors, propagates terminal resize and
   cancellation messages, and resolves/rejects with the final status.
+- `src/terminal-ui.js` implements the dependency-free terminal shell controller
+  and DOM renderer. It renders stdout/stderr as text, accepts keyboard input and
+  paste for stdin, exposes run/cancel/EOF/clear/resize controls, starts commands
+  with the current terminal dimensions, and keeps the surface replaceable by a
+  future xterm.js-backed renderer without changing the worker/session contract.
+- `src/codex-terminal-shell.js` wires that shell to the deterministic interim
+  Codex `codex --version` raw WASI fixture for the default browser app and
+  browser e2e coverage.
 - `src/command-worker-entry.js` is the browser worker entrypoint for starting
   the command lifecycle runtime. The worker-boundary tests run the normalized
   Codex version-smoke fixture through this entrypoint, and the browser e2e
@@ -60,15 +70,20 @@ Current scope:
 - `test/terminal.test.js` covers the terminal/stdio adapter's message ordering,
   stdout/stderr transcript capture, stdin forwarding, terminal resize,
   cancellation, stream close, and exit/error reporting.
+- `test/terminal-ui.test.js` covers the terminal shell controller's output
+  rendering, keyboard stdin, paste stdin, EOF, resize, cancellation, and
+  pre-run terminal size handling with a fake DOM and fake worker.
 - `fixtures/codex-version-smoke-core.js` owns the browser-safe deterministic
   inline Codex version-smoke manifest and raw WASI fixture. The Node-only
   `fixtures/codex-version-smoke-fixture.js` wrapper adds optional local artifact
   path lookup for `codex-wasix/dist` outputs.
-- `e2e/codex-version-smoke.html`, `e2e/codex-version-smoke.js`, and
-  `e2e/codex-version-smoke-runner.js` serve `apps/web`, launch a real
-  Chromium/Chrome page through the DevTools protocol, start
-  `src/command-worker-entry.js` as a module worker, and assert the Codex
-  `codex --version` stdout/stderr/exit contract.
+- `e2e/codex-version-smoke.html`, `e2e/codex-version-smoke.js`,
+  `e2e/terminal-shell.html`, `e2e/terminal-shell.js`, and
+  `e2e/codex-version-smoke-runner.js` serve `apps/web`, launch real
+  Chromium/Chrome pages through the DevTools protocol, start
+  `src/command-worker-entry.js` as a module worker, assert the Codex
+  `codex --version` stdout/stderr/exit contract, and drive the terminal UI shell
+  through DOM controls.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.
@@ -92,15 +107,15 @@ npm --prefix apps/web run test:e2e
 `google-chrome-stable`, `microsoft-edge`, or an explicit `WASM_HOST_BROWSER`
 path. It skips when no browser is available unless
 `WASM_HOST_BROWSER_E2E_REQUIRED=1` is set, which is how CI keeps the browser
-smoke required. This e2e smoke only covers the successful page-to-worker
-version run; the full interactive terminal UI is tracked separately from the
-dependency-free terminal/stdio adapter, and hard termination of non-cooperative
-Wasm remains #50.
+smoke required. This e2e smoke covers the successful page-to-worker version run
+and the first interactive terminal UI shell path. Bash/readline TTY behavior is
+still tracked by #6, and hard termination of non-cooperative Wasm remains #50.
 
 This package should eventually own:
 
 - full WebC worker startup and package loading
-- interactive terminal UI integration
+- package selection/upload controls for the terminal shell (#57)
+- xterm.js/readline-grade terminal rendering and TTY compatibility
 - OPFS/IndexedDB workspace persistence
 - wiring the command and HTTP worker runtimes into actual WebC execution
 - full interactive browser app e2e wiring

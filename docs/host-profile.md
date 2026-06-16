@@ -243,11 +243,18 @@ browser adapter layers.
 The first browser terminal/stdio adapter lives in `apps/web/src/terminal.js`.
 It is dependency-free and intentionally shaped for a later xterm.js surface: a
 session attaches to a worker-style command port, starts `command.run` with stdin
-open by default, forwards stdin chunks/end/errors, sends terminal resize and
-cancellation messages, writes stdout/stderr chunks to a sink in order, closes
-both output streams explicitly, and resolves or rejects with the final command
-status. This is the message and stream adapter, not the full interactive
-terminal UI.
+open by default, can include initial terminal dimensions, forwards stdin
+chunks/end/errors, sends terminal resize and cancellation messages, writes
+stdout/stderr chunks to a sink in order, closes both output streams explicitly,
+and resolves or rejects with the final command status.
+
+The first browser terminal UI shell lives in `apps/web/src/terminal-ui.js` and
+is mounted by `apps/web/index.html`. It is a small dependency-free DOM surface
+over that adapter: output is rendered as text, typed and pasted input is sent to
+stdin, EOF and cancellation are explicit controls, and resize controls update
+the command session dimensions. This shell proves the page-to-worker terminal
+path for the interim Codex version smoke; readline-grade TTY behavior and a
+future xterm.js renderer remain part of the Bash/terminal compatibility work.
 
 The initial browser package loading surface lives in
 `apps/web/src/package-loader.js`. It accepts explicit package bytes or a

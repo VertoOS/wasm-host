@@ -188,7 +188,7 @@ export class BrowserCommandWorkerRuntime {
       return;
     }
 
-    const activeRun = createActiveRun(run.id);
+    const activeRun = createActiveRun(run.id, run.terminal);
     this.activeRun = activeRun;
     enqueueInitialStdin(activeRun.stdin, run);
     if (!run.stdinOpen) {
@@ -562,7 +562,7 @@ class CommandInputStream {
   }
 }
 
-function createActiveRun(id) {
+function createActiveRun(id, terminal = {}) {
   return {
     id,
     abortError: null,
@@ -570,7 +570,10 @@ function createActiveRun(id) {
     stderrBytes: 0,
     stderrClosed: false,
     stdin: new CommandInputStream(),
-    terminal: { columns: null, rows: null },
+    terminal: {
+      columns: terminal.columns ?? null,
+      rows: terminal.rows ?? null,
+    },
     stdoutBytes: 0,
     stdoutClosed: false,
     timeout: null,
@@ -632,8 +635,30 @@ function normalizeRunMessage(message) {
     initialStdin: initialStdinChunks(run),
     packageId: nonEmptyString(run.packageId ?? DEFAULT_PACKAGE_ID),
     stdinOpen: run.stdinOpen === true,
+    terminal: normalizeInitialTerminal(run.terminal ?? message.terminal),
     timeoutMs: normalizeTimeout(run.timeoutMs ?? message.timeoutMs),
   };
+}
+
+function normalizeInitialTerminal(value) {
+  if (value == null) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new BrowserCommandWorkerError(
+      "invalid_request",
+      "browser command terminal must be an object",
+      "startup",
+    );
+  }
+  const terminal = {};
+  if (value.columns != null || value.cols != null) {
+    terminal.columns = terminalSizeValue(value.columns ?? value.cols, "columns");
+  }
+  if (value.rows != null) {
+    terminal.rows = terminalSizeValue(value.rows, "rows");
+  }
+  return terminal;
 }
 
 function normalizeStringList(value, stage = "startup") {

@@ -284,9 +284,10 @@ keeps host-visible paths canonical under `/workspace`, supports in-memory
 file/directory operations, exports and imports deterministic snapshots, and
 persists one whole-workspace snapshot per workspace id in IndexedDB when
 available. Memory storage is the fallback. This is the first workspace state
-boundary only: OPFS-backed large-file storage, user-granted directories, WASI
-filesystem mounting, and Codex file-edit turn wiring remain later browser
-runtime layers.
+boundary only: raw WASI fixture runs can mount an injected store by snapshotting
+before `_start` and flushing mutations after exit, while OPFS-backed large-file
+storage, user-granted directories, app-server integration, and Codex file-edit
+turn wiring remain later browser runtime layers.
 
 The interim Codex browser smoke manifest consumer lives in
 `apps/web/src/artifact-manifest.js`. It validates
@@ -317,14 +318,18 @@ package-file fixtures:
 `sock_recv`, `sock_send`, and `sock_shutdown`.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
-preopen, and provides a volatile in-memory `/tmp` scratch preopen for narrow
-directory create/list/rename/remove and file
+preopen, can optionally back `/workspace` with an injected browser workspace
+store for fixture read/write/create/remove/rename operations, and provides a
+volatile in-memory `/tmp` scratch preopen for narrow directory
+create/list/rename/remove and file
 advise/allocate/create/write/positioned-write/readback/positioned-read/stat,
 rights-reduction/renumber/rename, fd/path set-times/truncate/sync/unlink
 fixtures. Link/symlink/readlink, `poll_oneoff`, `proc_raise`, and socket
 imports are present only as deterministic browser-safe unsupported/no-op
-handlers. It is not a general WASIX runtime and does not itself provide
-persistent filesystems, sockets, threads, or WebC metadata execution.
+handlers. Live workspace stores stay on the main-thread executor path; worker
+runs can carry cloneable workspace snapshots but not IndexedDB-backed store
+instances. It is not a general WASIX runtime and does not itself provide
+sockets, threads, or WebC metadata execution.
 
 The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex

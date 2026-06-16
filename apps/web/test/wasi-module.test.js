@@ -16,6 +16,10 @@ import {
   createRawWasiModuleWorkerExecutor,
   loadRawWasiModulePackage,
 } from "../src/wasi-module.js";
+import {
+  BrowserWorkspaceError,
+  createMemoryBrowserWorkspaceStore,
+} from "../src/workspace.js";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -122,6 +126,10 @@ const REMAINING_PREVIEW1_IMPORTS_WASM = base64ToBytes(
 
 const TMP_RENAME_WASM = base64ToBytes(
   "AGFzbQEAAAABYw1gCX9/f39/fn5/fwF/YAN/f38Bf2AGf39/f39/AX9gBH9/f38Bf2AEf35/fwF/YAF/AX9gAX8AYAN/f38AYAJ/fwBgBH9/fn8Bf2AHf39/f35/fwBgCH9/f39/f39/AGAAAAKhAggWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwYXRoX29wZW4AABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxFXBhdGhfY3JlYXRlX2RpcmVjdG9yeQABFndhc2lfc25hcHNob3RfcHJldmlldzELcGF0aF9yZW5hbWUAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9zZWVrAAQWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF9jbG9zZQAFFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAYDDAsHBwgIAwkKBwsIDAUDAQABBxMCBm1lbW9yeQIABl9zdGFydAASCq0JCw4AIAAgAUcEQCACEAcLCysAQQAgADYCAEEEIAE2AgBBAUEAQQFBCBADQQAgAhAIQQgoAgAgASACEAgLLABBAEGgAjYCAEEEQQM2AgAgAEEAQQFBCBADQQAgARAIQQgoAgBBAyABEAgLYwAgAEIAQQBBGBAFQQAgARAIQQBBgAE2AgBBBEEDNgIAIABBAEEBQQgQBEEAIAEQCEEIKAIAQQMgARAIQYABLQAAQeEAIAEQCEGBAS0AAEHiACABEAhBggEtAABB4wAgARAICyQAQQRBACAAIAEgAkLmgIABQgBBAEEQEABBACADEAhBECgCAAshAEEEQQAgACABQQIgAkIAQQBBEBAAQQAgAxAIQRAoAgALHAAgAEEAIAEgAiADIARCAEEAQRAQACAFIAYQCAsQAEEEIAAgARABQQAgAhAICxYAIAAgASACIAMgBCAFEAIgBiAHEAgLDAAgABAGQQAgARAIC8UGAQN/QYAIQQlBAUEKEAwhAiACQQsQCkEEQYAIQQlBBEGKCEEIQQBBDBAQIAJBDRALQQRBgAhBCUEAQq6AgAFBLEEOEA5BighBCEEAQQ8QDCEAIABBEBALQZMIQQxBAUEREAwhACAAQRIQEUEEQYoIQQhBBEGTCEEMQQBBExAQIAJBFBALQQRBighBCEEAQq6AgAFBLEEVEA5BkwhBDEEAQRYQDCEAIABBFxALQeAJQQpBGBAPQQRBkwhBDEEEQeAJQQpBH0EZEBBBoAhBA0EaEA9BqghBDUEBQRsQDCEAIABBHBAKIABBHRARQQRBoAhBA0EEQaQIQQVBAEEeEBBBuAhBD0EAQR8QDCEAIABBIBALQQRBqghBDUEAQq6AgAFBLEEhEA5BBEGkCEEFQQRBkwhBDEE2QSIQEEEEQaQIQQVBBEHWCUEJQRxBIxAQQYUKQQxBJBAPQQRBpAhBBUEEQYUKQQxBAEElEBBBvApBFkEAQSYQDCEAIABBJxALQfsJQQlBKBAPQZIKQQ9BKRAPQaIKQRlBAUEqEAwhACAAQSsQEUEEQfsJQQlBBEGSCkEPQTdBLBAQQcgIQQRBLRAPQc0IQQ1BAUEuEAwhACAAQS8QCiAAQTAQEUHICEEEQoCADEExEA0hASABQdsIQQggAUHkCEELQQBBMhAQQfAIQRBBAEEzEAwhACAAQTQQC0EEQcgIQQRBBEGBCUEGQQBBNRAQIAFB5AhBCyABQYgJQQlBAEE2EBBBkglBEEEAQTcQDCEAIABBOBALQQRB8AhBEEEAQq6AgAFBLEE5EA5BgQlBBkKAgAhBOhANIQEgAUGICUEJQQRBighBCEHMAEE7EBBBgQlBBkKAgARBPBANIQFBBEGSCUEQIAFBighBCEHMAEE9EBBBA0GTCEEMQQRBighBCEHMAEE+EBBBBEGTCEEMQQNBighBCEHMAEE/EBBBBEGjCUEEQQRBighBCEHMAEHAABAQQQRBkwhBDEEEQagJQRFBLEHBABAQQboJQQpBAUHCABAMIQAgAEHDABARQQRBkwhBDEEEQcUJQRBBNkHEABAQQeMAQZMIQQxBBEGKCEEIQQhBxQAQEEHTCkEOQcYAEAkLC+MDHABBoAILA2FiYwBBgAgLCWFscGhhLnR4dABBiggLCGJldGEudHh0AEGTCAsMZXhpc3RpbmcudHh0AEGgCAsDZGlyAEGkCAsFbW92ZWQAQaoICw1kaXIvY2hpbGQudHh0AEG4CAsPbW92ZWQvY2hpbGQudHh0AEHICAsEYmFzZQBBzQgLDWJhc2UvZmlsZS50eHQAQdsICwhmaWxlLnR4dABB5AgLC3JlbmFtZWQudHh0AEHwCAsQYmFzZS9yZW5hbWVkLnR4dABBgQkLBm9wZW5lZABBiAkLCWFnYWluLnR4dABBkgkLEG9wZW5lZC9hZ2Fpbi50eHQAQaMJCwQuLi94AEGoCQsRbWlzc2luZy9jaGlsZC50eHQAQboJCwpwYXJlbnQudHh0AEHFCQsQcGFyZW50LnR4dC9jaGlsZABB1gkLCW1vdmVkL3N1YgBB4AkLCnRhcmdldC1kaXIAQfsJCwllbXB0eS1zcmMAQYUKCwxlbXB0eS10YXJnZXQAQZIKCw9ub25lbXB0eS10YXJnZXQAQaIKCxlub25lbXB0eS10YXJnZXQvY2hpbGQudHh0AEG8CgsWZW1wdHktdGFyZ2V0L2NoaWxkLnR4dABB0woLDnRtcC1yZW5hbWUtb2sK",
+);
+
+const WORKSPACE_MUTATION_WASM = base64ToBytes(
+  "AGFzbQEAAAABRwpgA39/fwF/YAl/f39/f35+f38Bf2AEf39/fwF/YAF/AX9gBn9/f39/fwF/YAN/f38Bf2ADf39/AX9gAX8AYAN/f38AYAAAArgCCBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxFXBhdGhfY3JlYXRlX2RpcmVjdG9yeQAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQACFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfY2xvc2UAAxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxC3BhdGhfcmVuYW1lAAQWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRBwYXRoX3VubGlua19maWxlAAUWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRVwYXRoX3JlbW92ZV9kaXJlY3RvcnkABhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAAHAwQDBwgJBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAoKzwEDCwAgAARAIAAQBwsLHABBACABNgIAQQQgAjYCACAAQQBBAUEUEAIQCAujAQBBA0HkAEEFEAAQCEEDQQBB7gBBD0EJQsAAQgBBAEEQEAEQCEEQKAIAQbQBQRIQCUEQKAIAEAMQCEEDQe4AQQ9BA0GCAUEPEAQQCEEDQQBBlgFBCkEJQsAAQgBBAEEQEAEQCEEQKAIAQdIBQQEQCUEQKAIAEAMQCEEDQZYBQQoQBRAIQQNBqgFBBRAAEAhBA0GqAUEFEAYQCEEBQdwBQRMQCQsLiQEIAEHkAAsFbm90ZXMAQe4ACw9ub3Rlcy9kcmFmdC50eHQAQYIBCw9ub3Rlcy9maW5hbC50eHQAQZYBCwpkZWxldGUudHh0AEGqAQsFZW1wdHkAQbQBCxJ3b3Jrc3BhY2Ugc2F5cyBoaQoAQdIBCwF4AEHcAQsTd29ya3NwYWNlLXN0b3JlLW9rCg==",
 );
 
 const MISSING_MEMORY_WASM = base64ToBytes(
@@ -462,6 +470,82 @@ test("raw WASI executor reads packaged files through a workspace preopen", async
   assert.equal(output.stderr, "");
 });
 
+test("raw WASI executor reads injected workspace store files before package files", async () => {
+  const output = recordingOutput();
+  const workspace = createMemoryBrowserWorkspaceStore();
+  await workspace.writeFile("/workspace/hello.txt", "from storage\n");
+  const executor = createRawWasiModuleExecutor({
+    worker: false,
+    workspaceStore: workspace,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: READ_FILE_WASM,
+    command: "read-file",
+    files: {
+      "hello.txt": "from package\n",
+    },
+    id: "read-file",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "read-file",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(output.stdout, "from storage\n");
+  assert.equal(output.stderr, "");
+  assert.deepEqual(
+    result.workspaceSnapshot.files.map((entry) => entry.path),
+    ["/workspace/hello.txt"],
+  );
+});
+
+test("raw WASI executor falls back to package files outside the workspace store", async () => {
+  const output = recordingOutput();
+  const workspace = createMemoryBrowserWorkspaceStore();
+  await workspace.writeFile("/workspace/stored.txt", "stored\n");
+  const executor = createRawWasiModuleExecutor({
+    worker: false,
+    workspaceStore: workspace,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: READ_FILE_WASM,
+    command: "read-file",
+    files: {
+      "hello.txt": "from package\n",
+    },
+    id: "read-file",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "read-file",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(output.stdout, "from package\n");
+  assert.equal(output.stderr, "");
+  assert.deepEqual(
+    result.workspaceSnapshot.files.map((entry) => entry.path),
+    ["/workspace/stored.txt"],
+  );
+});
+
 test("raw WASI executor stats packaged files by path", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleExecutor({ worker: false });
@@ -546,6 +630,85 @@ test("raw WASI executor reports an empty workspace through fd_readdir", async ()
   assert.deepEqual(result, { exitCode: 0 });
   assert.equal(output.stdout, "empty-readdir-ok\n");
   assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor keeps workspace writes disabled without a store", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WORKSPACE_MUTATION_WASM,
+    command: "workspace-mutation",
+    id: "workspace-mutation",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "workspace-mutation",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 76 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor persists workspace store mutations", async () => {
+  const output = recordingOutput();
+  const workspace = createMemoryBrowserWorkspaceStore();
+  const executor = createRawWasiModuleExecutor({
+    worker: false,
+    workspaceStore: workspace,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WORKSPACE_MUTATION_WASM,
+    command: "workspace-mutation",
+    id: "workspace-mutation",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "workspace-mutation",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(output.stdout, "workspace-store-ok\n");
+  assert.equal(output.stderr, "");
+  assert.equal(
+    text(await workspace.readFile("/workspace/notes/final.txt")),
+    "workspace says hi\n",
+  );
+  await assertWorkspaceRejectsKind(
+    () => workspace.readFile("/workspace/notes/draft.txt"),
+    "not_found",
+  );
+  await assertWorkspaceRejectsKind(
+    () => workspace.readFile("/workspace/delete.txt"),
+    "not_found",
+  );
+  assert.deepEqual(
+    (await workspace.readDirectory("/workspace")).map((entry) => [
+      entry.kind,
+      entry.path,
+    ]),
+    [["directory", "/workspace/notes"]],
+  );
+  assert.deepEqual(
+    result.workspaceSnapshot.files.map((entry) => [entry.path, entry.size]),
+    [["/workspace/notes/final.txt", 18]],
+  );
 });
 
 test("raw WASI executor seeks and tells packaged files", async () => {
@@ -1072,6 +1235,39 @@ test("raw WASI worker request carries only preloaded stdin bytes", async () => {
     [worker.messages[0].request.stdinBytes.buffer],
   ]);
   assert.equal(packageRecord.bytes.byteLength, STDIN_ECHO_WASM.byteLength);
+});
+
+test("raw WASI worker executor rejects live workspace stores", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleWorkerExecutor({
+    createWorker: () => recordingWasiWorker(),
+    workspaceStore: createMemoryBrowserWorkspaceStore(),
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: ARGV_ECHO_WASM,
+    command: "codex",
+    id: "codex",
+  });
+
+  await assert.rejects(
+    () =>
+      executor.run(
+        {
+          args: ["--version"],
+          command: "codex",
+          env: {},
+          package: packageRecord,
+          signal: new AbortController().signal,
+        },
+        output,
+      ),
+    (error) => {
+      assert.equal(error.kind, "unsupported");
+      assert.match(error.message, /workspaceStore cannot be sent to a worker/);
+      return true;
+    },
+  );
 });
 
 test("command worker passes initial stdin to raw WASI modules", async () => {
@@ -2618,6 +2814,18 @@ function recordingOutput() {
       this.stdout += decoder.decode(chunk);
     },
   };
+}
+
+async function assertWorkspaceRejectsKind(action, kind) {
+  await assert.rejects(action, (error) => {
+    assert(error instanceof BrowserWorkspaceError);
+    assert.equal(error.kind, kind);
+    return true;
+  });
+}
+
+function text(bytes) {
+  return decoder.decode(bytes);
 }
 
 function stdoutText(messages) {

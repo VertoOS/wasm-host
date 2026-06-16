@@ -47,8 +47,10 @@ Current scope:
   workspace id in IndexedDB when available. Memory storage remains the fallback
   and test-injectable store. Whole-snapshot IndexedDB writes are intentionally
   last-write-wins across store instances; OPFS, large-file storage, user
-  directory grants, WASI filesystem wiring, and Codex file-edit turns remain
-  later runtime layers.
+  directory grants, app-server wiring, and Codex file-edit turns remain later
+  runtime layers. The raw WASI fixture executor can consume an injected store
+  as a writable `/workspace` mount by snapshotting before `_start` and flushing
+  the mutated snapshot after exit.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
   stdin by default, writes stdout/stderr to a sink, closes output streams
@@ -83,7 +85,7 @@ Current scope:
   the raw WASI module executor; WebC sources keep their selected executor type.
   Memory cache remains the fallback and test-injectable cache. It does not parse
   full WebC metadata, execute WebC/WASIX packages, manage cache eviction, or
-  wire workspace persistence into package execution yet.
+  wire workspace persistence into full package execution yet.
 - `src/artifact-manifest.js` consumes the interim Codex artifact manifest
   shapes. It validates the raw `wasi-module` `codex --version` contract and
   the `codex-browser` request-builder contract, normalizes them into command
@@ -99,6 +101,9 @@ Current scope:
   `path_filestat_set_times`, `fd_readdir`, `fd_filestat_get`, `fd_close`,
   `fd_renumber`, and file-backed `fd_read`, `fd_pread`, `fd_pwrite`,
   `fd_seek`, `fd_tell`, and `fd_advise`,
+  an optional injected browser workspace-store-backed `/workspace` mount for
+  fixture reads, writes, create/remove, rename, directory listing, truncate,
+  allocation, and snapshot flush after module exit,
   plus a volatile in-memory `/tmp` scratch preopen for create,
   `path_create_directory`, write, positioned write, readback, positioned read,
   stat, `fd_allocate`, `fd_advise`, `fd_filestat_set_times`,
@@ -175,7 +180,8 @@ Current scope:
   directory listing and cookies, file
   seek/tell/advice/pread/pwrite behavior, descriptor renumbering, volatile
   scratch-file allocation/truncate/sync and directory create/remove operations,
-  scratch path rename behavior,
+  scratch path rename behavior, injected workspace-store reads and persisted
+  workspace mutations,
   stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle
   integration, and the local Codex version-smoke artifact when it is present.
 

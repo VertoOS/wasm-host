@@ -53,6 +53,8 @@ until the boundaries are stable enough to split.
 - The browser adapter package has a first browser workspace store with
   canonical `/workspace` paths, in-memory operations, snapshot import/export,
   and IndexedDB-backed snapshot persistence when browser storage is available.
+  The raw WASI executor can mount an injected store for writable `/workspace`
+  fixture runs and flush mutations back as snapshots after the module exits.
 - The browser adapter package can consume the interim Codex artifact manifest
   for the raw WASI `codex --version` smoke, normalize it into command load/run
   fixture messages, and verify fetched artifact bytes by size and sha256.
@@ -73,9 +75,10 @@ until the boundaries are stable enough to split.
 - The browser adapter package can execute the interim raw WASI preview1
   `codex --version` smoke path with args/env, clocks, random bytes, preloaded
   stdin, cooperative yield, read-only package file reads and positioned reads,
-  metadata, and
-  directory listing, volatile `/tmp` scratch directory create/rename/remove and
-  file advise/allocate/write/positioned-write/renumber/rename/fd-and-path
+  metadata, directory listing, optional injected workspace-store-backed
+  `/workspace` reads and writes for fixture runs, volatile `/tmp` scratch
+  directory create/rename/remove and file
+  advise/allocate/write/positioned-write/renumber/rename/fd-and-path
   set-times/truncate/sync,
   deterministic unsupported results for link/symlink/readlink, poll, signal,
   and socket imports,

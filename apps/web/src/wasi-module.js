@@ -45,6 +45,7 @@ const WASI_RIGHT_FD_FDSTAT_SET_FLAGS = 1n << 3n;
 const WASI_RIGHT_FD_SYNC = 1n << 4n;
 const WASI_RIGHT_FD_TELL = 1n << 5n;
 const WASI_RIGHT_FD_WRITE = 1n << 6n;
+const WASI_RIGHT_FD_ADVISE = 1n << 7n;
 const WASI_RIGHT_FD_ALLOCATE = 1n << 8n;
 const WASI_RIGHT_PATH_CREATE_DIRECTORY = 1n << 9n;
 const WASI_RIGHT_PATH_CREATE_FILE = 1n << 10n;
@@ -85,6 +86,7 @@ const WASI_REGULAR_FILE_RIGHTS =
   WASI_RIGHT_FD_SEEK |
   WASI_RIGHT_FD_FDSTAT_SET_FLAGS |
   WASI_RIGHT_FD_TELL |
+  WASI_RIGHT_FD_ADVISE |
   WASI_RIGHT_FD_FILESTAT_GET;
 const WASI_SCRATCH_FILE_RIGHTS =
   WASI_REGULAR_FILE_RIGHTS |
@@ -112,6 +114,7 @@ const WORKSPACE_PREOPEN_PATH = "/workspace";
 const TMP_PREOPEN_PATH = "/tmp";
 const NANOS_PER_MILLI = 1_000_000n;
 const CLOCK_RESOLUTION_NANOS = NANOS_PER_MILLI;
+const WASI_ADVICE_NOREUSE = 5;
 const RANDOM_GET_CHUNK_SIZE = 65_536;
 let workerRunCounter = 0;
 
@@ -442,6 +445,8 @@ class WasiPreview1Runtime {
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
       fd_allocate: (fd, offset, length) =>
         this.fdAllocate(fd, offset, length),
+      fd_advise: (fd, offset, length, advice) =>
+        this.fdAdvise(fd, offset, length, advice),
       fd_datasync: (fd) => this.fdSync(fd, WASI_RIGHT_FD_DATASYNC),
       fd_readdir: (fd, bufferPtr, bufferLength, cookie, bufferUsedPtr) =>
         this.fdReaddir(fd, bufferPtr, bufferLength, cookie, bufferUsedPtr),
@@ -832,6 +837,34 @@ class WasiPreview1Runtime {
       allocation.size > file.record.bytes.byteLength
     ) {
       resizeOpenFile(file, allocation.size);
+    }
+    return ERRNO_SUCCESS;
+  }
+
+  fdAdvise(fd, offset, length, advice) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    if (!file) {
+      const stat = this.fdStat(fd);
+      if (!stat) {
+        return ERRNO_BADF;
+      }
+      return stat.filetype === WASI_FILETYPE_DIRECTORY
+        ? ERRNO_ISDIR
+        : ERRNO_NOTCAPABLE;
+    }
+    if (isOpenDirectory(file)) {
+      return ERRNO_ISDIR;
+    }
+    if ((file.rights & WASI_RIGHT_FD_ADVISE) === 0n) {
+      return ERRNO_NOTCAPABLE;
+    }
+    if (!isSupportedAdvice(advice)) {
+      return ERRNO_INVAL;
+    }
+    const range = resolveFileRange(offset, length);
+    if (range.errno != null) {
+      return range.errno;
     }
     return ERRNO_SUCCESS;
   }
@@ -1530,6 +1563,12 @@ function isSupportedClock(clockId) {
   return clockId === WASI_CLOCK_REALTIME || clockId === WASI_CLOCK_MONOTONIC;
 }
 
+function isSupportedAdvice(advice) {
+  return (
+    Number.isInteger(advice) && advice >= 0 && advice <= WASI_ADVICE_NOREUSE
+  );
+}
+
 function clockTimeNanos(clockId) {
   switch (clockId) {
     case WASI_CLOCK_REALTIME:
@@ -1620,6 +1659,14 @@ function resolveFileSize(size) {
 }
 
 function resolveFileAllocation(offset, length) {
+  const range = resolveFileRange(offset, length);
+  if (range.errno != null) {
+    return range;
+  }
+  return { size: range.length === 0 ? null : Number(range.end) };
+}
+
+function resolveFileRange(offset, length) {
   const start = BigInt(offset);
   const size = BigInt(length);
   if (start < 0n || size < 0n) {
@@ -1636,7 +1683,7 @@ function resolveFileAllocation(offset, length) {
   if (end > maxSize) {
     return { errno: ERRNO_OVERFLOW };
   }
-  return { size: Number(end) };
+  return { length: Number(size), end };
 }
 
 function resolveFileSeekOffset(file, offset, whence) {

@@ -59,9 +59,10 @@ until the boundaries are stable enough to split.
   through the command worker stdout path.
 - The same `codex-browser` executor can run a mocked model turn by POSTing the
   generated request JSON through the selected browser HTTP transport and
-  streaming local fixture response chunks to command stdout. It can inject a
-  host-owned bearer secret from an opaque `CODEX_MODEL_BEARER_SECRET_REF`
-  without putting the token in command args, ordinary env values, or stdout.
+  streaming local fixture response chunks to command stdout, including mocked
+  Responses SSE `response.output_text.delta` events. It can inject a host-owned
+  bearer secret from an opaque `CODEX_MODEL_BEARER_SECRET_REF` without putting
+  the token in command args, ordinary env values, or stdout.
 - The browser secret seam includes a deterministic fake device-flow auth broker
   for start/status/external-complete/cancel/logout tests. Completion stores the
   bearer token under a host-owned secret ref; public auth status does not expose

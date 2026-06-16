@@ -29,10 +29,12 @@ Current scope:
   artifact. It validates the expected exports, calls `codex_version` and
   `codex_build_request`, writes generated Responses API request JSON to the
   command stdout stream, and can run a mocked `model-request` by POSTing that
-  JSON through the selected HTTP bridge transport and streaming response chunks
-  to stdout. A host-owned secret provider can inject a bearer token from the
-  opaque `CODEX_MODEL_BEARER_SECRET_REF` at HTTP dispatch time. This is not full
-  CLI, device-flow auth, app-server, workspace, tool, or MCP execution.
+  JSON through the selected HTTP bridge transport. Plain text responses pass
+  through to stdout, while mocked Responses SSE `response.output_text.delta`
+  events stream assistant text only. A host-owned secret provider can inject a
+  bearer token from the opaque `CODEX_MODEL_BEARER_SECRET_REF` at HTTP dispatch
+  time. This is not full CLI, device-flow auth, app-server, workspace, tool, or
+  MCP execution.
 - `src/secrets.js` owns the current browser secret-provider seam: tests can
   supply host-owned bearer tokens by reference, while command messages and
   terminal output continue to carry only opaque secret references. It also
@@ -108,8 +110,9 @@ Current scope:
   scenarios across a real worker message boundary using local HTTP fixtures.
 - `test/codex-browser.test.js` covers the custom-export Codex browser
   request-builder executor, mocked model-request dispatch through direct Fetch
-  and gateway transports, host-owned bearer secret injection/redaction, export
-  validation, and command error shaping.
+  and gateway transports, mocked Responses SSE text-delta decoding, host-owned
+  bearer secret injection/redaction, export validation, and command error
+  shaping.
 - `test/secrets.test.js` covers the in-memory browser secret provider and fake
   device-flow broker, including external completion, classified denied/expired/
   cancelled errors, logout, and token redaction.
@@ -145,10 +148,10 @@ Current scope:
   `src/command-worker-entry.js` as a module worker, assert the Codex
   `codex --version` stdout/stderr/exit contract, assert the Codex browser
   request-builder JSON contract, assert a mocked model-turn HTTP bridge
-  contract, and drive the terminal UI shell through DOM controls. The terminal
-  shell e2e also applies a package URL source backed by a local data URL,
-  verifies sanitized package metadata, and runs the selected package through the
-  worker smoke executor.
+  contract with local Responses SSE deltas, and drive the terminal UI shell
+  through DOM controls. The terminal shell e2e also applies a package URL source
+  backed by a local data URL, verifies sanitized package metadata, and runs the
+  selected package through the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.

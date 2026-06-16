@@ -334,8 +334,9 @@ the Codex repo's `wasm32-unknown-unknown` browser artifact. This path validates
 the custom exports, calls `codex_build_request(prompt, model)`, and emits
 generated Responses API request JSON through command stdout. It can also run a
 mocked model turn by posting that generated JSON through the browser HTTP bridge
-and streaming local fixture response chunks to stdout. For authenticated model
-fixtures, the host can inject a bearer token through an opaque
+and streaming local fixture response chunks to stdout, including mocked
+Responses SSE text deltas. For authenticated model fixtures, the host can
+inject a bearer token through an opaque
 `CODEX_MODEL_BEARER_SECRET_REF` resolved by the browser secret provider at HTTP
 dispatch time; the raw token is not guest argv, ordinary env, terminal output,
 or package metadata. The browser profile also has a deterministic fake

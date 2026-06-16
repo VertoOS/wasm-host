@@ -13,6 +13,7 @@ const ERRNO_INVAL = 28;
 const ERRNO_ISDIR = 31;
 const ERRNO_NOENT = 44;
 const ERRNO_NOTDIR = 54;
+const ERRNO_NOTEMPTY = 55;
 const ERRNO_OVERFLOW = 61;
 const ERRNO_NOTCAPABLE = 76;
 const STDIN_FD = 0;
@@ -55,6 +56,7 @@ const WASI_RIGHT_PATH_FILESTAT_SET_TIMES = 1n << 20n;
 const WASI_RIGHT_FD_FILESTAT_GET = 1n << 21n;
 const WASI_RIGHT_FD_FILESTAT_SET_SIZE = 1n << 22n;
 const WASI_RIGHT_FD_FILESTAT_SET_TIMES = 1n << 23n;
+const WASI_RIGHT_PATH_REMOVE_DIRECTORY = 1n << 25n;
 const WASI_RIGHT_PATH_UNLINK_FILE = 1n << 26n;
 const WASI_STDIN_RIGHTS =
   WASI_RIGHT_FD_READ | WASI_RIGHT_FD_FDSTAT_SET_FLAGS;
@@ -72,6 +74,7 @@ const WASI_TMP_RIGHTS =
   WASI_RIGHT_PATH_CREATE_FILE |
   WASI_RIGHT_PATH_CREATE_DIRECTORY |
   WASI_RIGHT_PATH_UNLINK_FILE |
+  WASI_RIGHT_PATH_REMOVE_DIRECTORY |
   WASI_RIGHT_FD_FILESTAT_GET;
 const WASI_REGULAR_FILE_RIGHTS =
   WASI_RIGHT_FD_READ |
@@ -97,6 +100,7 @@ const WASI_WRITE_RIGHTS =
   WASI_RIGHT_PATH_FILESTAT_SET_TIMES |
   WASI_RIGHT_FD_FILESTAT_SET_SIZE |
   WASI_RIGHT_FD_FILESTAT_SET_TIMES |
+  WASI_RIGHT_PATH_REMOVE_DIRECTORY |
   WASI_RIGHT_PATH_UNLINK_FILE;
 const WORKSPACE_PREOPEN_PATH = "/workspace";
 const TMP_PREOPEN_PATH = "/tmp";
@@ -471,6 +475,8 @@ class WasiPreview1Runtime {
         this.pathFilestatGet(fd, flags, pathPtr, pathLen, filestatPtr),
       path_create_directory: (fd, pathPtr, pathLen) =>
         this.pathCreateDirectory(fd, pathPtr, pathLen),
+      path_remove_directory: (fd, pathPtr, pathLen) =>
+        this.pathRemoveDirectory(fd, pathPtr, pathLen),
       path_unlink_file: (fd, pathPtr, pathLen) =>
         this.pathUnlinkFile(fd, pathPtr, pathLen),
       random_get: (bufferPtr, bufferLength) =>
@@ -1049,6 +1055,45 @@ class WasiPreview1Runtime {
       return ERRNO_NOENT;
     }
     this.scratchFiles.delete(path.value);
+    return ERRNO_SUCCESS;
+  }
+
+  pathRemoveDirectory(fd, pathPtr, pathLen) {
+    this.throwIfAborted();
+    const base = this.scratchBasePath(fd);
+    if (base == null) {
+      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
+    }
+    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    if (path.errno != null) {
+      return path.errno;
+    }
+    if (path.value === base) {
+      return ERRNO_NOTCAPABLE;
+    }
+    if (this.scratchFiles.has(path.value)) {
+      return ERRNO_NOTDIR;
+    }
+    const parent = scratchParentStatus(
+      this.scratchFiles,
+      this.scratchDirs,
+      path.value,
+    );
+    if (parent.errno != null) {
+      return parent.errno;
+    }
+    const hasChildren = pathHasChildren(
+      this.scratchFiles,
+      this.scratchDirs,
+      path.value,
+    );
+    if (!this.scratchDirs.has(path.value)) {
+      return hasChildren ? ERRNO_NOTEMPTY : ERRNO_NOENT;
+    }
+    if (hasChildren) {
+      return ERRNO_NOTEMPTY;
+    }
+    this.scratchDirs.delete(path.value);
     return ERRNO_SUCCESS;
   }
 

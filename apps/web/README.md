@@ -71,10 +71,10 @@ Current scope:
   `fd_fdstat_set_flags`, a read-only `/workspace` package-file preopen through
   `fd_prestat_get`, `fd_prestat_dir_name`, `path_open`, `path_filestat_get`,
   `fd_readdir`, `fd_filestat_get`, `fd_close`, `fd_renumber`, and file-backed
-  `fd_read`, `fd_pread`, `fd_seek`, `fd_tell`, and `fd_advise`, plus a
-  volatile in-memory `/tmp` scratch preopen for create,
-  `path_create_directory`, write, readback, positioned read, stat,
-  `fd_allocate`, `fd_advise`,
+  `fd_read`, `fd_pread`, `fd_pwrite`, `fd_seek`, `fd_tell`, and `fd_advise`,
+  plus a volatile in-memory `/tmp` scratch preopen for create,
+  `path_create_directory`, write, positioned write, readback, positioned read,
+  stat, `fd_allocate`, `fd_advise`,
   truncate/sync, directory listing, `path_rename`, and `path_remove_directory` /
   `path_unlink_file`. It captures stdout/stderr and exit status for the interim
   browser smoke; it is not an interactive TTY/readline, persistent filesystem,
@@ -124,7 +124,7 @@ Current scope:
 - `test/wasi-module.test.js` covers raw WASI module byte loading, argv/env
   plumbing, clocks, cooperative yield, random bytes, stdin, read-only package
   files, stdio fd stat, path/file metadata, directory listing and cookies, file
-  seek/tell/advice/pread behavior, descriptor renumbering, volatile
+  seek/tell/advice/pread/pwrite behavior, descriptor renumbering, volatile
   scratch-file allocation/truncate/sync and directory create/remove operations,
   scratch path rename behavior,
   stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle

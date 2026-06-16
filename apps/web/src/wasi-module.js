@@ -70,6 +70,7 @@ const WASI_TMP_RIGHTS =
   WASI_RIGHT_PATH_OPEN |
   WASI_RIGHT_PATH_FILESTAT_GET |
   WASI_RIGHT_PATH_CREATE_FILE |
+  WASI_RIGHT_PATH_CREATE_DIRECTORY |
   WASI_RIGHT_PATH_UNLINK_FILE |
   WASI_RIGHT_FD_FILESTAT_GET;
 const WASI_REGULAR_FILE_RIGHTS =
@@ -401,6 +402,7 @@ class WasiPreview1Runtime {
       ]),
     );
     this.openFiles = new Map();
+    this.scratchDirs = new Set([""]);
     this.scratchFiles = new Map();
     this.nextFileFd = FIRST_FILE_FD;
     this.signal = options.signal;
@@ -467,6 +469,8 @@ class WasiPreview1Runtime {
         ),
       path_filestat_get: (fd, flags, pathPtr, pathLen, filestatPtr) =>
         this.pathFilestatGet(fd, flags, pathPtr, pathLen, filestatPtr),
+      path_create_directory: (fd, pathPtr, pathLen) =>
+        this.pathCreateDirectory(fd, pathPtr, pathLen),
       path_unlink_file: (fd, pathPtr, pathLen) =>
         this.pathUnlinkFile(fd, pathPtr, pathLen),
       random_get: (bufferPtr, bufferLength) =>
@@ -578,11 +582,11 @@ class WasiPreview1Runtime {
 
   fdRead(fd, iovsPtr, iovsLen, nreadPtr) {
     this.throwIfAborted();
-    if (fd === WORKSPACE_FD) {
+    const file = this.openFiles.get(fd);
+    if (fd === WORKSPACE_FD || fd === TMP_FD || isOpenDirectory(file)) {
       this.writeU32(nreadPtr, 0);
       return ERRNO_ISDIR;
     }
-    const file = this.openFiles.get(fd);
     if (fd !== STDIN_FD && !file) {
       this.writeU32(nreadPtr, 0);
       return ERRNO_BADF;
@@ -637,7 +641,8 @@ class WasiPreview1Runtime {
 
   fdReaddir(fd, bufferPtr, bufferLength, cookie, bufferUsedPtr) {
     this.throwIfAborted();
-    if (fd !== WORKSPACE_FD && fd !== TMP_FD) {
+    const directory = this.directoryForFd(fd);
+    if (!directory) {
       return this.fdStat(fd) ? ERRNO_NOTDIR : ERRNO_BADF;
     }
     const startIndex = readdirStartIndex(cookie);
@@ -645,10 +650,7 @@ class WasiPreview1Runtime {
       return ERRNO_INVAL;
     }
 
-    const entries =
-      fd === WORKSPACE_FD
-        ? this.workspaceDirectoryEntries()
-        : this.scratchDirectoryEntries();
+    const entries = directory.entries();
     const bytes = this.bytes();
     const output = bytes.subarray(bufferPtr, bufferPtr + (bufferLength >>> 0));
     let used = 0;
@@ -737,21 +739,53 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
+  directoryForFd(fd) {
+    if (fd === WORKSPACE_FD) {
+      return { entries: () => this.workspaceDirectoryEntries() };
+    }
+    if (fd === TMP_FD) {
+      return { entries: () => this.scratchDirectoryEntries("") };
+    }
+    const file = this.openFiles.get(fd);
+    if (isOpenDirectory(file)) {
+      return { entries: () => this.scratchDirectoryEntries(file.path) };
+    }
+    return null;
+  }
+
   pathFilestatGet(fd, flags, pathPtr, pathLen, filestatPtr) {
     this.throwIfAborted();
-    if (fd !== WORKSPACE_FD && fd !== TMP_FD) {
-      return this.fdStat(fd) ? ERRNO_ACCESS : ERRNO_BADF;
-    }
     if ((flags & ~WASI_LOOKUP_SYMLINK_FOLLOW) !== 0) {
       return ERRNO_INVAL;
     }
 
-    const stat = this.pathStat(fd, this.readString(pathPtr, pathLen));
+    const path = this.readString(pathPtr, pathLen);
+    const stat =
+      fd === WORKSPACE_FD
+        ? this.pathStat(fd, path)
+        : this.scratchPathStat(fd, path);
+    if (stat == null) {
+      return this.fdStat(fd) ? ERRNO_ACCESS : ERRNO_BADF;
+    }
     if (stat.errno != null) {
       return stat.errno;
     }
     this.writeFilestat(filestatPtr, stat.filetype, stat.size ?? 0);
     return ERRNO_SUCCESS;
+  }
+
+  scratchPathStat(fd, pathValue) {
+    const base = this.scratchBasePath(fd);
+    if (base == null) {
+      return null;
+    }
+    const path = resolveScratchPath(base, pathValue, {
+      lookup: true,
+    });
+    if (path.errno != null) {
+      return path;
+    }
+    return statPath(this.scratchFiles, this.scratchDirs, path.value);
   }
 
   fdPrestatGet(fd, prestatPtr) {
@@ -791,14 +825,13 @@ class WasiPreview1Runtime {
     openedFdPtr,
   ) {
     this.throwIfAborted();
-    if (fd !== WORKSPACE_FD && fd !== TMP_FD) {
-      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
-    }
     if ((dirflags & ~WASI_LOOKUP_SYMLINK_FOLLOW) !== 0) {
       return ERRNO_INVAL;
     }
-    if (fd === TMP_FD) {
+    const scratchBase = this.scratchBasePath(fd);
+    if (scratchBase != null) {
       return this.openScratchFile(
+        scratchBase,
         pathPtr,
         pathLen,
         oflags,
@@ -807,6 +840,9 @@ class WasiPreview1Runtime {
         fdflags,
         openedFdPtr,
       );
+    }
+    if (fd !== WORKSPACE_FD) {
+      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
     }
     if (
       (oflags &
@@ -843,6 +879,7 @@ class WasiPreview1Runtime {
   }
 
   openScratchFile(
+    basePath,
     pathPtr,
     pathLen,
     oflags,
@@ -854,10 +891,23 @@ class WasiPreview1Runtime {
     if ((fdflags & ~WASI_FDFLAGS_APPEND) !== 0) {
       return ERRNO_INVAL;
     }
-    if ((oflags & WASI_OFLAGS_DIRECTORY) !== 0) {
-      return ERRNO_NOTDIR;
-    }
     const requestedRights = BigInt(rightsBase);
+    const path = resolveScratchPath(
+      basePath,
+      this.readString(pathPtr, pathLen),
+    );
+    if (path.errno != null) {
+      return path.errno;
+    }
+    if ((oflags & WASI_OFLAGS_DIRECTORY) !== 0) {
+      return this.openScratchDirectory(
+        path.value,
+        requestedRights,
+        rightsInheriting,
+        fdflags,
+        openedFdPtr,
+      );
+    }
     if (
       !allowsRights(requestedRights, WASI_SCRATCH_FILE_RIGHTS) ||
       !allowsRights(BigInt(rightsInheriting), WASI_SCRATCH_FILE_RIGHTS)
@@ -872,20 +922,27 @@ class WasiPreview1Runtime {
       return ERRNO_NOTCAPABLE;
     }
 
-    const path = normalizeWasiPath(this.readString(pathPtr, pathLen));
-    if (!path) {
-      return ERRNO_NOTCAPABLE;
-    }
-    if (pathHasChildren(this.scratchFiles, path)) {
+    if (
+      this.scratchDirs.has(path.value) ||
+      pathHasChildren(this.scratchFiles, this.scratchDirs, path.value)
+    ) {
       return ERRNO_ISDIR;
     }
-    let file = this.scratchFiles.get(path);
+    const parent = scratchParentStatus(
+      this.scratchFiles,
+      this.scratchDirs,
+      path.value,
+    );
+    if (parent.errno != null) {
+      return parent.errno;
+    }
+    let file = this.scratchFiles.get(path.value);
     if (!file) {
       if (!wantsCreate) {
         return ERRNO_NOENT;
       }
-      file = { bytes: new Uint8Array(), path };
-      this.scratchFiles.set(path, file);
+      file = { bytes: new Uint8Array(), path: path.value };
+      this.scratchFiles.set(path.value, file);
     } else if (wantsCreate && (oflags & WASI_OFLAGS_EXCL) !== 0) {
       return ERRNO_EXIST;
     }
@@ -899,7 +956,7 @@ class WasiPreview1Runtime {
       fdflags,
       offset:
         (fdflags & WASI_FDFLAGS_APPEND) !== 0 ? file.bytes.byteLength : 0,
-      path,
+      path: path.value,
       record: file,
       rights: requestedRights,
       writable: true,
@@ -908,23 +965,99 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
-  pathUnlinkFile(fd, pathPtr, pathLen) {
-    this.throwIfAborted();
-    if (fd !== TMP_FD) {
-      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
+  openScratchDirectory(
+    path,
+    requestedRights,
+    rightsInheriting,
+    fdflags,
+    openedFdPtr,
+  ) {
+    if (fdflags !== 0) {
+      return ERRNO_INVAL;
     }
-    const path = normalizeWasiPath(this.readString(pathPtr, pathLen));
-    if (!path) {
+    if (
+      !allowsRights(requestedRights, WASI_TMP_RIGHTS) ||
+      !allowsRights(BigInt(rightsInheriting), WASI_SCRATCH_FILE_RIGHTS)
+    ) {
       return ERRNO_NOTCAPABLE;
     }
-    if (pathHasChildren(this.scratchFiles, path)) {
-      return ERRNO_ISDIR;
+    if (this.scratchFiles.has(path)) {
+      return ERRNO_NOTDIR;
     }
-    if (!this.scratchFiles.has(path)) {
+    if (
+      !this.scratchDirs.has(path) &&
+      !pathHasChildren(this.scratchFiles, this.scratchDirs, path)
+    ) {
       return ERRNO_NOENT;
     }
-    this.scratchFiles.delete(path);
+
+    const openedFd = this.nextFileFd;
+    this.nextFileFd += 1;
+    this.openFiles.set(openedFd, {
+      fdflags,
+      kind: "directory",
+      offset: 0,
+      path,
+      rights: requestedRights,
+    });
+    this.writeU32(openedFdPtr, openedFd);
     return ERRNO_SUCCESS;
+  }
+
+  pathCreateDirectory(fd, pathPtr, pathLen) {
+    this.throwIfAborted();
+    const base = this.scratchBasePath(fd);
+    if (base == null) {
+      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
+    }
+    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    if (path.errno != null) {
+      return path.errno;
+    }
+    if (this.scratchDirs.has(path.value) || this.scratchFiles.has(path.value)) {
+      return ERRNO_EXIST;
+    }
+    const parent = scratchParentStatus(
+      this.scratchFiles,
+      this.scratchDirs,
+      path.value,
+    );
+    if (parent.errno != null) {
+      return parent.errno;
+    }
+    this.scratchDirs.add(path.value);
+    return ERRNO_SUCCESS;
+  }
+
+  pathUnlinkFile(fd, pathPtr, pathLen) {
+    this.throwIfAborted();
+    const base = this.scratchBasePath(fd);
+    if (base == null) {
+      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
+    }
+    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    if (path.errno != null) {
+      return path.errno;
+    }
+    if (
+      this.scratchDirs.has(path.value) ||
+      pathHasChildren(this.scratchFiles, this.scratchDirs, path.value)
+    ) {
+      return ERRNO_ISDIR;
+    }
+    if (!this.scratchFiles.has(path.value)) {
+      return ERRNO_NOENT;
+    }
+    this.scratchFiles.delete(path.value);
+    return ERRNO_SUCCESS;
+  }
+
+  scratchBasePath(fd) {
+    if (fd === TMP_FD) {
+      return "";
+    }
+    const file = this.openFiles.get(fd);
+    return isOpenDirectory(file) ? file.path : null;
   }
 
   pathStat(fd, pathValue) {
@@ -943,28 +1076,16 @@ class WasiPreview1Runtime {
       };
     }
     const files = fd === WORKSPACE_FD ? this.files : this.scratchFiles;
-    if (pathHasChildren(files, path)) {
-      return {
-        filetype: WASI_FILETYPE_DIRECTORY,
-        size: 0,
-      };
-    }
-    const file = files.get(path);
-    if (!file) {
-      return { errno: ERRNO_NOENT };
-    }
-    return {
-      filetype: WASI_FILETYPE_REGULAR_FILE,
-      size: file.bytes.byteLength,
-    };
+    const dirs = fd === WORKSPACE_FD ? null : this.scratchDirs;
+    return statPath(files, dirs, path);
   }
 
   workspaceDirectoryEntries() {
     return directoryEntries(this.files);
   }
 
-  scratchDirectoryEntries() {
-    return directoryEntries(this.scratchFiles);
+  scratchDirectoryEntries(path) {
+    return directoryEntries(this.scratchFiles, this.scratchDirs, path);
   }
 
   fdStat(fd) {
@@ -995,6 +1116,14 @@ class WasiPreview1Runtime {
     }
     const file = this.openFiles.get(fd);
     if (file) {
+      if (isOpenDirectory(file)) {
+        return {
+          filetype: WASI_FILETYPE_DIRECTORY,
+          inheriting: WASI_SCRATCH_FILE_RIGHTS,
+          rights: file.rights,
+          size: 0,
+        };
+      }
       return {
         filetype: WASI_FILETYPE_REGULAR_FILE,
         inheriting: 0n,
@@ -1125,6 +1254,10 @@ function canWriteFile(file) {
   return file.writable && (file.rights & WASI_RIGHT_FD_WRITE) !== 0n;
 }
 
+function isOpenDirectory(file) {
+  return file?.kind === "directory";
+}
+
 function resolveFileSeekOffset(file, offset, whence) {
   let base;
   switch (whence) {
@@ -1188,10 +1321,29 @@ function compareStrings(left, right) {
   return 0;
 }
 
-function directoryEntries(files) {
+function directoryEntries(files, dirs = null, path = "") {
   const entries = new Map();
+  const prefix = path ? `${path}/` : "";
+  for (const dir of dirs ?? []) {
+    if (!dir || !dir.startsWith(prefix)) {
+      continue;
+    }
+    const rest = dir.slice(prefix.length);
+    if (!rest) {
+      continue;
+    }
+    const [name] = rest.split("/");
+    entries.set(name, {
+      filetype: WASI_FILETYPE_DIRECTORY,
+      name,
+    });
+  }
   for (const path of files.keys()) {
-    const [name, ...rest] = path.split("/");
+    if (!path.startsWith(prefix)) {
+      continue;
+    }
+    const relativePath = path.slice(prefix.length);
+    const [name, ...rest] = relativePath.split("/");
     if (!name) {
       continue;
     }
@@ -1212,14 +1364,69 @@ function directoryEntries(files) {
   );
 }
 
-function pathHasChildren(files, path) {
+function pathHasChildren(files, dirs, path) {
   const prefix = `${path}/`;
+  for (const dir of dirs ?? []) {
+    if (dir.startsWith(prefix)) {
+      return true;
+    }
+  }
   for (const filePath of files.keys()) {
     if (filePath.startsWith(prefix)) {
       return true;
     }
   }
   return false;
+}
+
+function resolveScratchPath(basePath, pathValue, options = {}) {
+  const normalized = (options.lookup ? normalizeWasiLookupPath : normalizeWasiPath)(
+    pathValue,
+  );
+  if (normalized == null) {
+    return { errno: ERRNO_NOTCAPABLE };
+  }
+  if (normalized === "") {
+    return { value: basePath };
+  }
+  return {
+    value: basePath ? `${basePath}/${normalized}` : normalized,
+  };
+}
+
+function statPath(files, dirs, path) {
+  if (
+    (dirs?.has(path) ?? false) ||
+    pathHasChildren(files, dirs, path)
+  ) {
+    return {
+      filetype: WASI_FILETYPE_DIRECTORY,
+      size: 0,
+    };
+  }
+  const file = files.get(path);
+  if (!file) {
+    return { errno: ERRNO_NOENT };
+  }
+  return {
+    filetype: WASI_FILETYPE_REGULAR_FILE,
+    size: file.bytes.byteLength,
+  };
+}
+
+function scratchParentStatus(files, dirs, path) {
+  const separator = path.lastIndexOf("/");
+  if (separator < 0) {
+    return {};
+  }
+  const parent = path.slice(0, separator);
+  if (files.has(parent)) {
+    return { errno: ERRNO_NOTDIR };
+  }
+  if (!dirs.has(parent)) {
+    return { errno: ERRNO_NOENT };
+  }
+  return {};
 }
 
 function preopenPath(fd) {

@@ -39,10 +39,13 @@ until the boundaries are stable enough to split.
 - The browser adapter package can consume the interim Codex artifact manifest
   for the raw WASI `codex --version` smoke, normalize it into command load/run
   fixture messages, and verify fetched artifact bytes by size and sha256.
+- The browser adapter package can execute the interim raw WASI preview1
+  `codex --version` smoke path with args/env, stdout/stderr, and exit status
+  capture for the narrow fixture import set.
 - C ABI and initial Python/Go binding smoke tests are implemented, including
   generated WebC success-path fixtures.
-- Browser worker/runtime wiring, packaged runtime artifacts, and full language
-  WebC e2e coverage are not implemented yet.
+- Full browser WebC/WASIX runtime wiring, packaged runtime artifacts, and full
+  language WebC e2e coverage are not implemented yet.
 
 ## Run A WebC Package
 
@@ -174,8 +177,9 @@ with `WASM_HOST_GO_COMMAND` and `WASM_HOST_GO_ARGS`.
 
 The browser adapter package currently owns direct Fetch and gateway-backed
 transport code, initial HTTP and command worker message runtimes, a package
-loader/cache boundary, the interim Codex artifact manifest consumer, and
-deterministic browser-networking/lifecycle/loading tests. Run them with:
+loader/cache boundary, the interim Codex artifact manifest consumer, the narrow
+raw WASI preview1 smoke executor, and deterministic
+browser-networking/lifecycle/loading tests. Run them with:
 
 ```sh
 npm --prefix apps/web run check

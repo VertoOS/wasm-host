@@ -18,8 +18,9 @@ Current scope:
   runtime. It handles `command.load`, `command.run`, `command.cancel`, stdin
   messages, stdout/stderr events, timeout/cancellation result shaping, and
   pluggable HTTP bridge transport selection. Its built-in `smoke` executor is a
-  lifecycle fixture only; real WebC package execution still depends on package
-  loading and runtime wiring.
+  lifecycle fixture only; the `wasi-module` executor supports the interim raw
+  WASI preview1 `codex --version` smoke, while real WebC package execution
+  still depends on package loading and runtime wiring.
 - `src/command-worker-entry.js` is the browser worker entrypoint for starting
   the command lifecycle runtime.
 - `src/package-loader.js` implements the first browser package loading surface
@@ -31,8 +32,11 @@ Current scope:
   `codex-wasix/dist/artifact-manifest.json` shape. It validates the raw
   `wasi-module` `codex --version` contract, normalizes it into command
   load/run fixture messages, and can fetch artifact bytes through an injectable
-  transport while verifying size and sha256. It does not instantiate or execute
-  the Wasm module yet.
+  transport while verifying size and sha256.
+- `src/wasi-module.js` implements the narrow raw WASI preview1 fixture runner
+  for modules that import only args/env, `fd_write`, and `proc_exit`. It
+  captures stdout/stderr and exit status for the interim browser smoke; it is
+  not a general filesystem, networking, WASIX, or WebC runtime.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.
@@ -50,6 +54,10 @@ Current scope:
 - `test/artifact-manifest.test.js` covers valid Codex manifest normalization,
   unsupported capability/artifact cases, fake artifact fetches, size checks,
   streaming overflow, and sha256 mismatch handling.
+- `test/wasi-module.test.js` covers raw WASI module byte loading, argv/env
+  plumbing, stdout/stderr capture, `proc_exit` status mapping, command worker
+  lifecycle integration, and the local Codex version-smoke artifact when it is
+  present.
 
 Run the web adapter checks:
 
@@ -60,7 +68,7 @@ npm --prefix apps/web test
 
 This package should eventually own:
 
-- WebC worker startup and package loading
+- full WebC worker startup and package loading
 - terminal UI integration
 - OPFS/IndexedDB workspace persistence
 - wiring the command and HTTP worker runtimes into actual WebC execution

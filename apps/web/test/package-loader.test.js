@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  CODEX_VERSION_SMOKE_STDOUT,
+  CODEX_VERSION_SMOKE_WASM,
+} from "../fixtures/codex-version-smoke-core.js";
 import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import {
   IndexedDbPackageCache,
@@ -149,6 +153,47 @@ test("command lifecycle worker loads package bytes through BrowserPackageLoader"
   assert.equal(chunksText(stdoutChunks(port.messages)), "BROWSER_SMOKE_OK\n");
 });
 
+test("command lifecycle worker loads raw WASI bytes through BrowserPackageLoader", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-raw-wasi-bytes",
+    package: {
+      bytes: CODEX_VERSION_SMOKE_WASM,
+      command: "codex",
+      executorType: "smoke",
+      id: "raw-wasi-pkg",
+      source: { kind: "bytes", label: "uploaded.wasm" },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-raw-wasi-bytes",
+    packageId: "raw-wasi-pkg",
+    command: "codex",
+  });
+
+  assert.equal(port.messages[0].type, "command.loaded");
+  assert.equal(port.messages[0].artifactKind, "wasi-module");
+  assert.equal(port.messages[0].entrypoint, "_start");
+  assert.equal(port.messages[0].packageId, "raw-wasi-pkg");
+  assert.equal(port.messages[0].packageType, "wasi-module");
+  assert.deepEqual(port.messages[0].commands, ["codex"]);
+  assert.match(port.messages[0].contentSha256, /^[a-f0-9]{64}$/);
+  assert.equal(port.messages[0].cache.backend, "indexeddb");
+  assert.equal(
+    chunksText(stdoutChunks(port.messages)),
+    CODEX_VERSION_SMOKE_STDOUT,
+  );
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assert.equal(port.messages.at(-1).result.exitCode, 0);
+});
+
 test("BrowserPackageLoader loads URL-backed Wasm bytes without external network", async () => {
   const seen = {};
   const loader = createBrowserPackageLoader({
@@ -164,13 +209,16 @@ test("BrowserPackageLoader loads URL-backed Wasm bytes without external network"
 
   const record = await loader.loadUrl({
     commands: ["main"],
+    executorType: "smoke",
     id: "wasm-pkg",
     url: "https://user:secret@example.test/pkg.wasm?token=hidden#frag",
   });
 
   assert.equal(seen.init.credentials, "same-origin");
   assert.equal(record.format, "wasm");
-  assert.equal(record.artifactKind, "wasm-module");
+  assert.equal(record.artifactKind, "wasi-module");
+  assert.equal(record.executorType, "wasi-module");
+  assert.equal(record.entrypoint, "_start");
   assert.equal(
     seen.url,
     "https://user:secret@example.test/pkg.wasm?token=hidden#frag",
@@ -255,19 +303,31 @@ test("BrowserPackageLoader rejects invalid packages and command metadata", async
   );
 });
 
-test("BrowserPackageLoader rejects raw WASI module artifact kind for this slice", async () => {
+test("BrowserPackageLoader accepts raw WASI module artifact kind for Wasm bytes", async () => {
   const loader = createBrowserPackageLoader();
+  const record = await loader.loadBytes({
+    artifactKind: "wasi-module",
+    bytes: wasmBytes("wasi"),
+    command: "main",
+    executorType: "smoke",
+  });
+
+  assert.equal(record.artifactKind, "wasi-module");
+  assert.equal(record.executorType, "wasi-module");
+  assert.equal(record.entrypoint, "_start");
+  assert.equal(commandPackageFromRecord(record).type, "wasi-module");
+
   await assert.rejects(
     loader.loadBytes({
-      artifactKind: "wasi-module",
-      bytes: wasmBytes("wasi"),
+      artifactKind: "wasm-module",
+      bytes: wasmBytes("generic"),
       command: "main",
     }),
     (error) => {
-      assert.equal(error.kind, "unsupported");
+      assert.equal(error.kind, "invalid_package");
       assert.equal(
         error.message,
-        "raw WASI module packages are not supported by the browser package loader yet",
+        "browser package artifactKind wasm-module does not match wasm bytes",
       );
       return true;
     },

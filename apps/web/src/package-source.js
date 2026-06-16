@@ -228,6 +228,7 @@ function shellOptionsFromPackageRecord(record, input) {
     args,
     env: {},
     cwd: DEFAULT_CWD,
+    ...(record.artifactKind === "wasi-module" ? { stdinOpen: false } : {}),
   };
   return {
     commandLabel: commandLabel(command, args),

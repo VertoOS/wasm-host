@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CODEX_VERSION_SMOKE_STDOUT,
   CODEX_VERSION_SMOKE_WASM,
   codexVersionSmokeManifest,
 } from "../fixtures/codex-version-smoke-core.js";
+import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import {
   parsePackageArgs,
   resolveBrowserPackageSource,
 } from "../src/package-source.js";
+
+const decoder = new TextDecoder();
 
 test("resolveBrowserPackageSource returns the built-in Codex smoke package", async () => {
   const source = await resolveBrowserPackageSource();
@@ -49,6 +53,69 @@ test("resolveBrowserPackageSource normalizes uploaded package bytes for worker l
     cwd: "/workspace",
   });
   assert.equal(source.metadata.sourceLabel, "test package.webc");
+});
+
+test("resolveBrowserPackageSource runs uploaded raw WASI modules", async () => {
+  const source = await resolveBrowserPackageSource({
+    argsText: "--version",
+    command: "codex",
+    executorType: "smoke",
+    file: file("codex-version-smoke.wasm", CODEX_VERSION_SMOKE_WASM),
+    kind: "package-file",
+    packageId: "codex",
+  });
+
+  assert.equal(source.commandLabel, "codex --version");
+  assert.equal(source.loadMessage.package.artifactKind, "wasi-module");
+  assert.equal(source.loadMessage.package.type, "wasi-module");
+  assert.equal(source.loadMessage.package.executorType, "wasi-module");
+  assert.equal(source.loadMessage.package.entrypoint, "_start");
+  assert.equal(source.loadMessage.package.bytes.byteLength, 146);
+  assert.equal(source.metadata.executorType, "wasi-module");
+  assert.equal(source.metadata.sourceLabel, "codex-version-smoke.wasm");
+  assert.equal(source.runMessage.stdinOpen, false);
+
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+  await runtime.handleMessage(source.loadMessage);
+  await runtime.handleMessage(source.runMessage);
+
+  assert.equal(stdoutText(port.messages), CODEX_VERSION_SMOKE_STDOUT);
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assert.equal(port.messages.at(-1).result.exitCode, 0);
+});
+
+test("resolveBrowserPackageSource normalizes URL raw WASI modules", async () => {
+  const source = await resolveBrowserPackageSource(
+    {
+      argsText: "--version",
+      command: "codex",
+      executorType: "smoke",
+      kind: "package-url",
+      packageId: "codex-url",
+      url: "https://user:secret@example.test/codex.wasm?token=hidden#frag",
+    },
+    {
+      fetchImpl: async () =>
+        new Response(CODEX_VERSION_SMOKE_WASM, {
+          headers: {
+            "Content-Length": String(CODEX_VERSION_SMOKE_WASM.byteLength),
+          },
+          status: 200,
+        }),
+    },
+  );
+
+  assert.equal(source.loadMessage.package.artifactKind, "wasi-module");
+  assert.equal(source.loadMessage.package.type, "wasi-module");
+  assert.equal(source.loadMessage.package.executorType, "wasi-module");
+  assert.equal(source.metadata.sourceLabel, "https://example.test/codex.wasm");
+  assert(!JSON.stringify(source.metadata).includes("secret"));
+  assert(!JSON.stringify(source.metadata).includes("token=hidden"));
+  assert.equal(source.runMessage.stdinOpen, false);
 });
 
 test("resolveBrowserPackageSource normalizes URL packages without exposing secrets", async () => {
@@ -169,4 +236,35 @@ function webcBytes(label) {
     0x63,
     ...new TextEncoder().encode(label),
   ]);
+}
+
+function recordingPort() {
+  const messages = [];
+  return {
+    messages,
+    postMessage(message) {
+      messages.push(message);
+    },
+  };
+}
+
+function stdoutText(messages) {
+  return decoder.decode(
+    concatChunks(
+      messages
+        .filter((message) => message.type === "command.stdout")
+        .map((message) => message.chunk),
+    ),
+  );
+}
+
+function concatChunks(chunks) {
+  const size = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }

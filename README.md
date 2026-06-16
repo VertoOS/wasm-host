@@ -43,7 +43,9 @@ until the boundaries are stable enough to split.
 - The browser terminal shell has package source controls for the built-in Codex
   smoke, uploaded package bytes, package URLs, manifest JSON, and manifest URLs;
   selected sources are normalized through the package loader or artifact
-  manifest boundaries before the worker runs them.
+  manifest boundaries before the worker runs them. Uploaded and URL-backed Wasm
+  bytes are routed through the raw WASI module executor for the current
+  preview1 import surface.
 - The browser adapter package has an initial package loader for explicit bytes
   and Fetch-backed WebC/Wasm artifacts, including magic-byte validation,
   optional sha256 pinning, command metadata normalization, and browser-safe

@@ -250,6 +250,16 @@ only the package input/cache boundary: full WebC metadata parsing, compiled
 module cache persistence, filesystem mounts, and actual WebC/Wasm execution are
 later browser runtime layers.
 
+The interim Codex browser smoke manifest consumer lives in
+`apps/web/src/artifact-manifest.js`. It validates
+`codex-wasix/dist/artifact-manifest.json` for the raw `wasi-module`
+`codex --version` fixture, rejects manifests that require network, workspace,
+host-command, terminal, non-preview1 WASI, or non-WASI artifact support, and
+normalizes accepted manifests into command lifecycle load/run fixture messages.
+It can fetch artifact bytes through an injectable transport and verify the
+declared size and SHA-256. It still does not instantiate or execute the Wasm
+module; raw WASI execution remains a later browser runtime layer.
+
 The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json

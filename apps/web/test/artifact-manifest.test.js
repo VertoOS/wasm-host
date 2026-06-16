@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+  CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+  CODEX_BROWSER_REQUEST_BUILDER_RUNTIME,
+  CODEX_BROWSER_REQUEST_BUILDER_WASM,
+  assertCodexBrowserRequestPayload,
+} from "../fixtures/codex-browser-request-builder-core.js";
 import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import {
   fetchCodexArtifactBytes,
@@ -11,6 +18,7 @@ import {
 } from "../src/artifact-manifest.js";
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 test("parseArtifactManifestJson parses valid JSON and reports malformed input", () => {
   assert.deepEqual(parseArtifactManifestJson('{"schemaVersion":1}'), {
@@ -123,6 +131,93 @@ test("normalized Codex fixture can load into the command lifecycle worker", asyn
   ]);
 });
 
+test("normalizeCodexBrowserRunFixture validates and shapes the Codex browser request-builder manifest", async () => {
+  const fixture = normalizeCodexBrowserRunFixture(
+    await validCodexBrowserManifest(CODEX_BROWSER_REQUEST_BUILDER_WASM, {
+      artifactSha256: "B".repeat(64),
+    }),
+  );
+
+  assert.equal(fixture.type, "codex-browser-request-builder-fixture");
+  assert.equal(fixture.id, "codex-browser-request-builder");
+  assert.deepEqual(fixture.artifact, {
+    kind: "codex-browser",
+    path: "codex-browser/dist/codex_browser.wasm",
+    sha256: "b".repeat(64),
+    sizeBytes: CODEX_BROWSER_REQUEST_BUILDER_WASM.byteLength,
+  });
+  assert.deepEqual(fixture.commandLoad.package, {
+    artifactKind: "codex-browser",
+    commands: ["build-request"],
+    defaultCommand: "build-request",
+    entrypoint: "codex_build_request",
+    executorType: "codex-browser",
+    id: "codex-browser",
+    metadata: {
+      artifactKind: "codex-browser",
+      artifactPath: "codex-browser/dist/codex_browser.wasm",
+      artifactSha256: "b".repeat(64),
+      artifactSizeBytes: CODEX_BROWSER_REQUEST_BUILDER_WASM.byteLength,
+      command: "build-request",
+      entrypoint: "codex_build_request",
+      expectedExitCode: 0,
+      packageName: "codex-browser",
+      runtime: "wasm32-unknown-unknown",
+      schemaVersion: 1,
+    },
+    type: "codex-browser",
+  });
+  assert.deepEqual(fixture.commandRun, {
+    type: "command.run",
+    id: "run-codex-browser-request-builder",
+    packageId: "codex-browser",
+    command: "build-request",
+    args: [
+      CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+      CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+    ],
+    env: {},
+    cwd: "/workspace",
+    stdinOpen: false,
+  });
+  assert.deepEqual(fixture.expected, {
+    exitCode: 0,
+    model: CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+    prompt: CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+    runtime: CODEX_BROWSER_REQUEST_BUILDER_RUNTIME,
+  });
+});
+
+test("fetched Codex browser manifest runs through the command lifecycle worker", async () => {
+  const manifest = await validCodexBrowserManifest(
+    CODEX_BROWSER_REQUEST_BUILDER_WASM,
+  );
+  const { fixture } = await fetchCodexArtifactBytes(manifest, {
+    fetchImpl: async () =>
+      new Response(CODEX_BROWSER_REQUEST_BUILDER_WASM, {
+        headers: {
+          "Content-Length": String(CODEX_BROWSER_REQUEST_BUILDER_WASM.byteLength),
+        },
+        status: 200,
+      }),
+  });
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage(fixture.commandRun);
+
+  assert.equal(port.messages[0].artifactKind, "codex-browser");
+  assert.equal(port.messages[0].packageType, "codex-browser");
+  assertCodexBrowserRequestPayload(
+    JSON.parse(stdoutText(port.messages)),
+    fixture.expected,
+  );
+});
+
 test("validateCodexArtifactManifest rejects missing and invalid fields", () => {
   assert.throws(
     () => validateCodexArtifactManifest(null),
@@ -182,6 +277,31 @@ test("normalizeCodexBrowserRunFixture returns structured unsupported errors", ()
   for (const [field, value, reason] of cases) {
     assert.throws(
       () => normalizeCodexBrowserRunFixture(validManifest({ [field]: value })),
+      (error) => {
+        assert.equal(error.kind, "unsupported", field);
+        assert.equal(error.details.reason, reason, field);
+        return true;
+      },
+    );
+  }
+});
+
+test("normalizeCodexBrowserRunFixture rejects unsupported Codex browser request-builder manifests", () => {
+  const cases = [
+    ["packageName", "codex", "package_name"],
+    ["command", "codex", "command"],
+    ["entrypoint", "_start", "entrypoint"],
+    ["runtime", "wasi-preview1", "runtime"],
+    ["args", ["write tests"], "args"],
+    ["expectedExitCode", 1, "expected_exit_code"],
+  ];
+
+  for (const [field, value, reason] of cases) {
+    assert.throws(
+      () =>
+        normalizeCodexBrowserRunFixture(
+          validCodexBrowserManifestSync({ [field]: value }),
+        ),
       (error) => {
         assert.equal(error.kind, "unsupported", field);
         assert.equal(error.details.reason, reason, field);
@@ -343,6 +463,38 @@ function validManifest(overrides = {}) {
   };
 }
 
+async function validCodexBrowserManifest(bytes, overrides = {}) {
+  return validCodexBrowserManifestSync({
+    artifactSha256: await sha256Hex(bytes),
+    artifactSizeBytes: bytes.byteLength,
+    ...overrides,
+  });
+}
+
+function validCodexBrowserManifestSync(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    packageName: "codex-browser",
+    artifactKind: "codex-browser",
+    artifactPath: "codex-browser/dist/codex_browser.wasm",
+    artifactSizeBytes: CODEX_BROWSER_REQUEST_BUILDER_WASM.byteLength,
+    artifactSha256: "e6c3a93230408b5df50b6b4f7b9871fc431feb4eaffa2a75aeacc9db042f8231",
+    command: "build-request",
+    entrypoint: "codex_build_request",
+    args: [
+      CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+      CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+    ],
+    expectedExitCode: 0,
+    runtime: CODEX_BROWSER_REQUEST_BUILDER_RUNTIME,
+    requiresNetwork: false,
+    requiresWorkspace: false,
+    requiresHostCommand: false,
+    requiresTerminal: false,
+    ...overrides,
+  };
+}
+
 function recordingPort() {
   const messages = [];
   return {
@@ -351,6 +503,27 @@ function recordingPort() {
       messages.push(message);
     },
   };
+}
+
+function stdoutText(messages) {
+  return decoder.decode(
+    concatChunks(
+      messages
+        .filter((message) => message.type === "command.stdout")
+        .map((message) => message.chunk),
+    ),
+  );
+}
+
+function concatChunks(chunks) {
+  const size = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }
 
 function streamFromChunks(chunks) {

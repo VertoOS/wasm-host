@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+  CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+  CODEX_BROWSER_REQUEST_BUILDER_RUNTIME,
+  CODEX_BROWSER_REQUEST_BUILDER_WASM,
+  assertCodexBrowserRequestPayload,
+} from "../fixtures/codex-browser-request-builder-core.js";
+import {
   CODEX_VERSION_SMOKE_STDOUT,
   CODEX_VERSION_SMOKE_WASM,
   codexVersionSmokeManifest,
@@ -88,6 +95,46 @@ test("resolveBrowserPackageSource runs uploaded raw WASI modules", async () => {
   assert.equal(port.messages.at(-1).result.exitCode, 0);
 });
 
+test("resolveBrowserPackageSource runs uploaded codex-browser modules", async () => {
+  const source = await resolveBrowserPackageSource({
+    argsText: JSON.stringify([
+      CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+      CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+    ]),
+    command: "build-request",
+    executorType: "codex-browser",
+    file: file("codex_browser.wasm", CODEX_BROWSER_REQUEST_BUILDER_WASM),
+    kind: "package-file",
+    packageId: "codex-browser",
+  });
+
+  assert.equal(source.commandLabel, "build-request Explain wasm-host gpt-5.1");
+  assert.equal(source.loadMessage.package.artifactKind, "codex-browser");
+  assert.equal(source.loadMessage.package.type, "codex-browser");
+  assert.equal(source.loadMessage.package.executorType, "codex-browser");
+  assert.equal(source.loadMessage.package.entrypoint, "codex_build_request");
+  assert.equal(source.metadata.executorType, "codex-browser");
+  assert.equal(source.metadata.sourceLabel, "codex_browser.wasm");
+
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+  await runtime.handleMessage(source.loadMessage);
+  await runtime.handleMessage(source.runMessage);
+
+  assertCodexBrowserRequestPayload(
+    JSON.parse(stdoutText(port.messages)),
+    {
+      model: CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+      prompt: CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+      runtime: CODEX_BROWSER_REQUEST_BUILDER_RUNTIME,
+    },
+  );
+  assert.equal(port.messages.at(-1).type, "command.complete");
+});
+
 test("resolveBrowserPackageSource normalizes URL raw WASI modules", async () => {
   const source = await resolveBrowserPackageSource(
     {
@@ -169,6 +216,42 @@ test("resolveBrowserPackageSource accepts manifest JSON with local artifact byte
   assert.equal(source.metadata.sourceLabel, "codex-version-smoke.wasm");
 });
 
+test("resolveBrowserPackageSource accepts codex-browser manifest JSON with local artifact bytes", async () => {
+  const manifest = await codexBrowserManifest(CODEX_BROWSER_REQUEST_BUILDER_WASM);
+  const source = await resolveBrowserPackageSource({
+    file: file("codex_browser.wasm", CODEX_BROWSER_REQUEST_BUILDER_WASM),
+    kind: "manifest-json",
+    manifestText: JSON.stringify(manifest),
+  });
+
+  assert.equal(source.commandLabel, "build-request Explain wasm-host gpt-5.1");
+  assert.equal(source.loadMessage.package.id, "codex-browser");
+  assert.equal(source.loadMessage.package.artifactKind, "codex-browser");
+  assert.equal(
+    source.loadMessage.package.codexBrowser.byteLength,
+    CODEX_BROWSER_REQUEST_BUILDER_WASM.byteLength,
+  );
+  assert.deepEqual(source.runMessage.args, [
+    CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+    CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+  ]);
+  assert.equal(source.metadata.sourceKind, "manifest-json");
+  assert.equal(source.metadata.sourceLabel, "codex_browser.wasm");
+
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+  await runtime.handleMessage(source.loadMessage);
+  await runtime.handleMessage(source.runMessage);
+
+  assertCodexBrowserRequestPayload(
+    JSON.parse(stdoutText(port.messages)),
+    source.expected,
+  );
+});
+
 test("resolveBrowserPackageSource resolves manifest URLs relative to their artifact", async () => {
   const manifest = await codexVersionSmokeManifest(CODEX_VERSION_SMOKE_WASM, {
     artifactPath: "codex-version-smoke.wasm",
@@ -236,6 +319,36 @@ function webcBytes(label) {
     0x63,
     ...new TextEncoder().encode(label),
   ]);
+}
+
+async function codexBrowserManifest(bytes) {
+  return {
+    schemaVersion: 1,
+    packageName: "codex-browser",
+    artifactKind: "codex-browser",
+    artifactPath: "codex-browser/dist/codex_browser.wasm",
+    artifactSizeBytes: bytes.byteLength,
+    artifactSha256: await sha256Hex(bytes),
+    command: "build-request",
+    entrypoint: "codex_build_request",
+    args: [
+      CODEX_BROWSER_REQUEST_BUILDER_PROMPT,
+      CODEX_BROWSER_REQUEST_BUILDER_MODEL,
+    ],
+    expectedExitCode: 0,
+    runtime: CODEX_BROWSER_REQUEST_BUILDER_RUNTIME,
+    requiresNetwork: false,
+    requiresWorkspace: false,
+    requiresHostCommand: false,
+    requiresTerminal: false,
+  };
+}
+
+async function sha256Hex(bytes) {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 function recordingPort() {

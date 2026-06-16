@@ -1,5 +1,4 @@
 import {
-  CODEX_VERSION_SMOKE_STDOUT_PREFIX,
   CODEX_VERSION_SMOKE_WASM,
   codexVersionSmokeManifest,
 } from "../fixtures/codex-version-smoke-core.js";
@@ -254,11 +253,7 @@ function shellOptionsFromFixture(fixture, source) {
   const args = fixture.commandRun.args ?? [];
   return {
     commandLabel: commandLabel(command, args),
-    expected: {
-      exitCode: fixture.expected.exitCode,
-      stderr: fixture.expected.stderr,
-      stdoutPrefix: CODEX_VERSION_SMOKE_STDOUT_PREFIX,
-    },
+    expected: { ...fixture.expected },
     loadMessage: fixture.commandLoad,
     metadata: {
       args,

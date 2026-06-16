@@ -3,6 +3,14 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 
 import {
+  assertCodexBrowserRequestPayload,
+  codexBrowserRequestBuilderFixture,
+} from "../fixtures/codex-browser-request-builder-core.js";
+import {
+  hasLocalCodexBrowserWasm,
+  readLocalCodexBrowserWasm,
+} from "../fixtures/codex-browser-request-builder-fixture.js";
+import {
   CODEX_VERSION_SMOKE_STDOUT,
   CODEX_VERSION_SMOKE_STDOUT_PREFIX,
   CODEX_VERSION_SMOKE_WASM,
@@ -79,6 +87,27 @@ test("command worker entry runs the Codex version smoke fixture across a worker 
   }
 });
 
+test("command worker entry runs the Codex browser request builder across a worker boundary", async () => {
+  const fixture = await codexBrowserRequestBuilderFixture();
+  const worker = createCommandWorker();
+  try {
+    const load = await dispatchAndCollect(worker, fixture.commandLoad);
+    const run = await dispatchAndCollect(worker, fixture.commandRun);
+
+    assert.equal(load.loaded.packageId, "codex-browser");
+    assert.equal(load.loaded.artifactKind, "codex-browser");
+    assert.equal(load.loaded.packageType, "codex-browser");
+    assertCodexBrowserRequestPayload(
+      JSON.parse(chunksText(run.stdout)),
+      fixture.expected,
+    );
+    assert.equal(chunksText(run.stderr), "");
+    assert.equal(run.complete.result.exitCode, 0);
+  } finally {
+    await worker.terminate();
+  }
+});
+
 test(
   "command worker entry runs the local Codex version-smoke artifact when available",
   {
@@ -102,6 +131,39 @@ test(
       assert.equal(run.complete.result.exitCode, fixture.expected.exitCode);
       assert.match(chunksText(run.stdout), /^codex-cli /);
       assert.equal(chunksText(run.stderr), fixture.expected.stderr);
+    } finally {
+      await worker.terminate();
+    }
+  },
+);
+
+test(
+  "command worker entry runs the local Codex browser artifact when available",
+  {
+    skip: !hasLocalCodexBrowserWasm()
+      ? "local Codex browser artifact is not available"
+      : false,
+  },
+  async () => {
+    const fixture = await codexBrowserRequestBuilderFixture(
+      await readLocalCodexBrowserWasm(),
+      {
+        model: "gpt-5-codex",
+        prompt: "write tests",
+      },
+    );
+    const worker = createCommandWorker();
+    try {
+      const load = await dispatchAndCollect(worker, fixture.commandLoad);
+      const run = await dispatchAndCollect(worker, fixture.commandRun);
+
+      assert.equal(load.loaded.packageId, "codex-browser");
+      assert.equal(load.loaded.artifactKind, "codex-browser");
+      assertCodexBrowserRequestPayload(
+        JSON.parse(chunksText(run.stdout)),
+        fixture.expected,
+      );
+      assert.equal(run.complete.result.exitCode, 0);
     } finally {
       await worker.terminate();
     }

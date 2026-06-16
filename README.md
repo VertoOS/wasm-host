@@ -53,6 +53,10 @@ until the boundaries are stable enough to split.
 - The browser adapter package can consume the interim Codex artifact manifest
   for the raw WASI `codex --version` smoke, normalize it into command load/run
   fixture messages, and verify fetched artifact bytes by size and sha256.
+- The browser adapter package can load a `codex-browser`
+  `wasm32-unknown-unknown` custom-export request-builder artifact, call its
+  `codex_build_request` ABI, and emit deterministic Responses API request JSON
+  through the command worker stdout path.
 - The browser adapter package can execute the interim raw WASI preview1
   `codex --version` smoke path with args/env, clocks, random bytes, preloaded
   stdin, cooperative yield, read-only package file reads and positioned reads,
@@ -208,7 +212,8 @@ The browser adapter package currently owns direct Fetch and gateway-backed
 transport code, initial HTTP and command worker message runtimes, a package
 loader/cache boundary, the interim Codex artifact manifest consumer, the narrow
 raw WASI preview1 smoke executor, command-worker-boundary Codex version smoke,
-real-browser Codex version smoke, a terminal/stdio adapter, an interactive
+command-worker-boundary Codex browser request-builder smoke, real-browser Codex
+version and request-builder smoke, a terminal/stdio adapter, an interactive
 terminal UI shell, package source controls, and deterministic
 browser-networking/lifecycle/loading tests. Run them with:
 

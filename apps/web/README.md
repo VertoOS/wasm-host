@@ -24,6 +24,12 @@ Current scope:
   `wasi-module` executor supports the interim raw WASI preview1
   `codex --version` smoke, while real WebC package execution still depends on
   package loading and runtime wiring.
+- `src/codex-browser.js` implements the narrow custom-export executor for the
+  Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
+  artifact. It validates the expected exports, calls `codex_version` and
+  `codex_build_request`, and writes generated Responses API request JSON to the
+  command stdout stream. This is not full CLI, auth, app-server, workspace,
+  tool, or MCP execution.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
   stdin by default, writes stdout/stderr to a sink, closes output streams
@@ -59,9 +65,9 @@ Current scope:
   Memory cache remains the fallback and test-injectable cache. It does not parse
   full WebC metadata, execute WebC/WASIX packages, manage cache eviction, or
   provide workspace persistence yet.
-- `src/artifact-manifest.js` consumes the interim Codex
-  `codex-wasix/dist/artifact-manifest.json` shape. It validates the raw
-  `wasi-module` `codex --version` contract, normalizes it into command
+- `src/artifact-manifest.js` consumes the interim Codex artifact manifest
+  shapes. It validates the raw `wasi-module` `codex --version` contract and
+  the `codex-browser` request-builder contract, normalizes them into command
   load/run fixture messages, and can fetch artifact bytes through an injectable
   transport while verifying size and sha256.
 - `src/wasi-module.js` implements the narrow raw WASI preview1 fixture runner
@@ -91,11 +97,14 @@ Current scope:
   gateway streaming upload/response, timeout, response-limit,
   unavailable-gateway, invalid-gateway-response, stream-error, and cancellation
   scenarios across a real worker message boundary using local HTTP fixtures.
+- `test/codex-browser.test.js` covers the custom-export Codex browser
+  request-builder executor, export validation, and command error shaping.
 - `test/command-worker.test.js` and `test/command-worker-entry.test.js` cover
   command lifecycle success, startup failure, stdin, cancellation, timeout,
   duplicate-run rejection, terminal resize, explicit stream close, HTTP
-  transport selection, the smoke command, and the Codex `codex --version`
-  contract across a real worker message boundary.
+  transport selection, the smoke command, the Codex `codex --version` contract,
+  and the Codex browser request-builder contract across a real worker message
+  boundary.
 - `test/terminal.test.js` covers the terminal/stdio adapter's message ordering,
   stdout/stderr transcript capture, stdin forwarding, terminal resize,
   cancellation, stream close, and exit/error reporting.
@@ -111,15 +120,20 @@ Current scope:
   inline Codex version-smoke manifest and raw WASI fixture. The Node-only
   `fixtures/codex-version-smoke-fixture.js` wrapper adds optional local artifact
   path lookup for `codex-wasix/dist` outputs.
+- `fixtures/codex-browser-request-builder-core.js` owns a deterministic
+  custom-export Codex browser request-builder Wasm fixture. The Node-only
+  `fixtures/codex-browser-request-builder-fixture.js` wrapper adds optional
+  local artifact lookup for a built `codex_browser.wasm`.
 - `e2e/codex-version-smoke.html`, `e2e/codex-version-smoke.js`,
   `e2e/terminal-shell.html`, `e2e/terminal-shell.js`, and
   `e2e/codex-version-smoke-runner.js` serve `apps/web`, launch real
   Chromium/Chrome pages through the DevTools protocol, start
   `src/command-worker-entry.js` as a module worker, assert the Codex
-  `codex --version` stdout/stderr/exit contract, and drive the terminal UI shell
-  through DOM controls. The terminal shell e2e also applies a package URL source
-  backed by a local data URL, verifies sanitized package metadata, and runs the
-  selected package through the worker smoke executor.
+  `codex --version` stdout/stderr/exit contract, assert the Codex browser
+  request-builder JSON contract, and drive the terminal UI shell through DOM
+  controls. The terminal shell e2e also applies a package URL source backed by a
+  local data URL, verifies sanitized package metadata, and runs the selected
+  package through the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.

@@ -329,10 +329,17 @@ with the same browser contract; local runs also exercise
 `codex-wasix/dist/codex-version-smoke.wasm` when that Codex artifact is
 available.
 
-This smoke intentionally does not provide interactive terminal UI behavior, hard
-termination of non-cooperative Wasm, or final WebC/WASIX package execution.
-Those remain separate browser adapter layers so the successful version path can
-stay small and deterministic.
+The browser adapter also has a separate `codex-browser` request-builder path for
+the Codex repo's `wasm32-unknown-unknown` browser artifact. This path validates
+the custom exports, calls `codex_build_request(prompt, model)`, and emits
+generated Responses API request JSON through command stdout. It is intentionally
+not modeled as raw WASI and does not imply full Codex CLI, auth, app-server,
+workspace, tool, or MCP support.
+
+These smoke paths intentionally do not provide interactive terminal UI behavior,
+hard termination of non-cooperative Wasm, or final WebC/WASIX package
+execution. Those remain separate browser adapter layers so the successful
+version and request-builder paths can stay small and deterministic.
 
 The Codex-specific runtime contract is tracked in
 [`codex-browser-runtime-contract.md`](codex-browser-runtime-contract.md). That

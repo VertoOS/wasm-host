@@ -270,6 +270,15 @@ interim browser smoke path. It is not a general WASIX runtime and does not
 provide filesystem, stdin, clocks, random, sockets, threads, or WebC metadata
 execution.
 
+The automated Codex browser smoke path runs this contract across
+`apps/web/src/command-worker-entry.js`: tests build a normalized Codex
+`command.load` / `command.run` fixture from a manifest, attach verified raw
+WASI bytes, send both messages across a real worker boundary, and assert exit
+`0`, stdout prefix `codex-cli `, and empty stderr. CI uses a deterministic
+inline version-smoke module with the same browser contract; local runs also
+exercise `codex-wasix/dist/codex-version-smoke.wasm` when that Codex artifact is
+available.
+
 The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json

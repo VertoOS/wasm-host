@@ -22,7 +22,8 @@ Current scope:
   WASI preview1 `codex --version` smoke, while real WebC package execution
   still depends on package loading and runtime wiring.
 - `src/command-worker-entry.js` is the browser worker entrypoint for starting
-  the command lifecycle runtime.
+  the command lifecycle runtime. The worker-boundary tests run the normalized
+  Codex version-smoke fixture through this entrypoint.
 - `src/package-loader.js` implements the first browser package loading surface
   for explicit bytes and Fetch-backed artifacts. It validates WebC/Wasm magic
   bytes, verifies optional sha256 pins, normalizes command metadata for
@@ -46,8 +47,11 @@ Current scope:
   scenarios across a real worker message boundary using local HTTP fixtures.
 - `test/command-worker.test.js` and `test/command-worker-entry.test.js` cover
   command lifecycle success, startup failure, stdin, cancellation, timeout,
-  duplicate-run rejection, HTTP transport selection, and the smoke command
-  across a real worker message boundary.
+  duplicate-run rejection, HTTP transport selection, the smoke command, and the
+  Codex `codex --version` contract across a real worker message boundary.
+- `fixtures/codex-version-smoke-fixture.js` owns the deterministic inline Codex
+  version-smoke manifest and raw WASI fixture used by worker-boundary tests, and
+  the optional local artifact path lookup for `codex-wasix/dist` outputs.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.

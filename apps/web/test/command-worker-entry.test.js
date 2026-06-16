@@ -2,6 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 
+import {
+  CODEX_VERSION_SMOKE_STDOUT,
+  CODEX_VERSION_SMOKE_STDOUT_PREFIX,
+  CODEX_VERSION_SMOKE_WASM,
+  codexVersionSmokeManifest,
+  hasLocalCodexVersionSmokeArtifact,
+  readLocalCodexVersionSmokeArtifact,
+} from "../fixtures/codex-version-smoke-fixture.js";
+import {
+  fetchCodexArtifactBytes,
+  parseArtifactManifestJson,
+} from "../src/artifact-manifest.js";
+
 const decoder = new TextDecoder();
 
 test("command worker entry runs the browser smoke command across a worker boundary", async () => {
@@ -37,6 +50,64 @@ test("command worker entry runs the browser smoke command across a worker bounda
   }
 });
 
+test("command worker entry runs the Codex version smoke fixture across a worker boundary", async () => {
+  const fixture = await codexVersionSmokeFixture(
+    await codexVersionSmokeManifest(),
+    CODEX_VERSION_SMOKE_WASM,
+  );
+  const worker = createCommandWorker();
+  try {
+    const load = await dispatchAndCollect(worker, fixture.commandLoad);
+    const run = await dispatchAndCollect(worker, fixture.commandRun);
+
+    assert.equal(load.loaded.packageId, "codex");
+    assert.equal(load.loaded.artifactKind, "wasi-module");
+    assert.equal(load.loaded.packageType, "wasi-module");
+    assert.match(load.loaded.contentSha256, /^[a-f0-9]{64}$/);
+    assert.equal(chunksText(run.stdout), CODEX_VERSION_SMOKE_STDOUT);
+    assert.equal(chunksText(run.stderr), "");
+    assert.deepEqual(run.complete.result, {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: CODEX_VERSION_SMOKE_STDOUT.length,
+      timedOut: false,
+    });
+  } finally {
+    await worker.terminate();
+  }
+});
+
+test(
+  "command worker entry runs the local Codex version-smoke artifact when available",
+  {
+    skip: !hasLocalCodexVersionSmokeArtifact()
+      ? "local Codex WASI artifact is not available"
+      : false,
+  },
+  async () => {
+    const { bytes, manifestText } = await readLocalCodexVersionSmokeArtifact();
+    const fixture = await codexVersionSmokeFixture(
+      parseArtifactManifestJson(manifestText),
+      bytes,
+    );
+    const worker = createCommandWorker();
+    try {
+      const load = await dispatchAndCollect(worker, fixture.commandLoad);
+      const run = await dispatchAndCollect(worker, fixture.commandRun);
+
+      assert.equal(load.loaded.packageId, "codex");
+      assert.equal(load.loaded.artifactKind, "wasi-module");
+      assert.equal(run.complete.result.exitCode, fixture.expected.exitCode);
+      assert.match(chunksText(run.stdout), /^codex-cli /);
+      assert.equal(chunksText(run.stderr), fixture.expected.stderr);
+    } finally {
+      await worker.terminate();
+    }
+  },
+);
+
 function createCommandWorker(workerData = {}) {
   return new Worker(
     new URL("../fixtures/command-worker-entry-fixture.js", import.meta.url),
@@ -45,6 +116,18 @@ function createCommandWorker(workerData = {}) {
       workerData,
     },
   );
+}
+
+async function codexVersionSmokeFixture(manifest, bytes) {
+  const { fixture } = await fetchCodexArtifactBytes(manifest, {
+    fetchImpl: async () =>
+      new Response(bytes, {
+        headers: { "Content-Length": String(bytes.byteLength) },
+        status: 200,
+      }),
+  });
+  assert.equal(fixture.expected.stdoutPrefix, CODEX_VERSION_SMOKE_STDOUT_PREFIX);
+  return fixture;
 }
 
 function dispatchAndCollect(worker, message) {

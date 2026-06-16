@@ -75,7 +75,7 @@ Current scope:
   `fd_read`, `fd_pread`, `fd_pwrite`, `fd_seek`, `fd_tell`, and `fd_advise`,
   plus a volatile in-memory `/tmp` scratch preopen for create,
   `path_create_directory`, write, positioned write, readback, positioned read,
-  stat, `fd_allocate`, `fd_advise`,
+  stat, `fd_allocate`, `fd_advise`, `fd_filestat_set_times`,
   truncate/sync, directory listing, `path_rename`, and `path_remove_directory` /
   `path_unlink_file`. It captures stdout/stderr and exit status for the interim
   browser smoke; it is not an interactive TTY/readline, persistent filesystem,

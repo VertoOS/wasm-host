@@ -38,6 +38,15 @@ const WASI_FDFLAGS_APPEND = 1 << 0;
 const WASI_WHENCE_SET = 0;
 const WASI_WHENCE_CUR = 1;
 const WASI_WHENCE_END = 2;
+const WASI_FSTFLAGS_ATIM = 1 << 0;
+const WASI_FSTFLAGS_ATIM_NOW = 1 << 1;
+const WASI_FSTFLAGS_MTIM = 1 << 2;
+const WASI_FSTFLAGS_MTIM_NOW = 1 << 3;
+const WASI_FSTFLAGS_MASK =
+  WASI_FSTFLAGS_ATIM |
+  WASI_FSTFLAGS_ATIM_NOW |
+  WASI_FSTFLAGS_MTIM |
+  WASI_FSTFLAGS_MTIM_NOW;
 const WASI_RIGHT_FD_DATASYNC = 1n << 0n;
 const WASI_RIGHT_FD_READ = 1n << 1n;
 const WASI_RIGHT_FD_SEEK = 1n << 2n;
@@ -94,7 +103,8 @@ const WASI_SCRATCH_FILE_RIGHTS =
   WASI_RIGHT_FD_DATASYNC |
   WASI_RIGHT_FD_SYNC |
   WASI_RIGHT_FD_ALLOCATE |
-  WASI_RIGHT_FD_FILESTAT_SET_SIZE;
+  WASI_RIGHT_FD_FILESTAT_SET_SIZE |
+  WASI_RIGHT_FD_FILESTAT_SET_TIMES;
 const WASI_WRITE_RIGHTS =
   WASI_RIGHT_FD_DATASYNC |
   WASI_RIGHT_FD_SYNC |
@@ -468,6 +478,8 @@ class WasiPreview1Runtime {
         this.fdFilestatGet(fd, filestatPtr),
       fd_filestat_set_size: (fd, size) =>
         this.fdFilestatSetSize(fd, size),
+      fd_filestat_set_times: (fd, atim, mtim, fstFlags) =>
+        this.fdFilestatSetTimes(fd, atim, mtim, fstFlags),
       fd_prestat_dir_name: (fd, pathPtr, pathLen) =>
         this.fdPrestatDirName(fd, pathPtr, pathLen),
       fd_prestat_get: (fd, prestatPtr) => this.fdPrestatGet(fd, prestatPtr),
@@ -930,6 +942,28 @@ class WasiPreview1Runtime {
     }
     resizeOpenFile(file, nextSize.size);
     return ERRNO_SUCCESS;
+  }
+
+  fdFilestatSetTimes(fd, _atim, _mtim, fstFlags) {
+    this.throwIfAborted();
+    if (!isSupportedFilestatSetTimesFlags(fstFlags)) {
+      return ERRNO_INVAL;
+    }
+
+    const file = this.openFiles.get(fd);
+    if (!file) {
+      const stat = this.fdStat(fd);
+      if (!stat) {
+        return ERRNO_BADF;
+      }
+      return stat.filetype === WASI_FILETYPE_DIRECTORY
+        ? ERRNO_ISDIR
+        : ERRNO_NOTCAPABLE;
+    }
+    if (isOpenDirectory(file)) {
+      return ERRNO_ISDIR;
+    }
+    return canSetFileTimes(file) ? ERRNO_SUCCESS : ERRNO_NOTCAPABLE;
   }
 
   fdAllocate(fd, offset, length) {
@@ -1692,6 +1726,22 @@ function isSupportedAdvice(advice) {
   );
 }
 
+function isSupportedFilestatSetTimesFlags(flags) {
+  if (!Number.isInteger(flags) || (flags & ~WASI_FSTFLAGS_MASK) !== 0) {
+    return false;
+  }
+  if (
+    (flags & WASI_FSTFLAGS_ATIM) !== 0 &&
+    (flags & WASI_FSTFLAGS_ATIM_NOW) !== 0
+  ) {
+    return false;
+  }
+  return !(
+    (flags & WASI_FSTFLAGS_MTIM) !== 0 &&
+    (flags & WASI_FSTFLAGS_MTIM_NOW) !== 0
+  );
+}
+
 function clockTimeNanos(clockId) {
   switch (clockId) {
     case WASI_CLOCK_REALTIME:
@@ -1754,6 +1804,12 @@ function canReadFile(file) {
 function canResizeFile(file) {
   return (
     file.writable && (file.rights & WASI_RIGHT_FD_FILESTAT_SET_SIZE) !== 0n
+  );
+}
+
+function canSetFileTimes(file) {
+  return (
+    file.writable && (file.rights & WASI_RIGHT_FD_FILESTAT_SET_TIMES) !== 0n
   );
 }
 

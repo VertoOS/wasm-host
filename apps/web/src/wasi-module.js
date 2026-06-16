@@ -6,9 +6,13 @@ const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
 
 const ERRNO_SUCCESS = 0;
 const ERRNO_BADF = 8;
+const ERRNO_FAULT = 21;
+const ERRNO_INVAL = 28;
 const STDIN_FD = 0;
 const STDOUT_FD = 1;
 const STDERR_FD = 2;
+const WASI_CLOCK_REALTIME = 0;
+const WASI_CLOCK_MONOTONIC = 1;
 const WASI_FILETYPE_CHARACTER_DEVICE = 2;
 const WASI_RIGHT_FD_READ = 1n << 1n;
 const WASI_RIGHT_FD_FDSTAT_SET_FLAGS = 1n << 3n;
@@ -17,6 +21,9 @@ const WASI_STDIN_RIGHTS =
   WASI_RIGHT_FD_READ | WASI_RIGHT_FD_FDSTAT_SET_FLAGS;
 const WASI_STDOUT_RIGHTS =
   WASI_RIGHT_FD_WRITE | WASI_RIGHT_FD_FDSTAT_SET_FLAGS;
+const NANOS_PER_MILLI = 1_000_000n;
+const CLOCK_RESOLUTION_NANOS = NANOS_PER_MILLI;
+const RANDOM_GET_CHUNK_SIZE = 65_536;
 let workerRunCounter = 0;
 
 export class BrowserWasiModuleError extends Error {
@@ -320,6 +327,10 @@ class WasiPreview1Runtime {
         this.writeStringPointers(this.args, argvPtr, argvBufPtr),
       args_sizes_get: (argcPtr, argvBufSizePtr) =>
         this.writeSizes(this.args, argcPtr, argvBufSizePtr),
+      clock_res_get: (clockId, resolutionPtr) =>
+        this.clockResGet(clockId, resolutionPtr),
+      clock_time_get: (clockId, precision, timePtr) =>
+        this.clockTimeGet(clockId, precision, timePtr),
       environ_get: (environPtr, environBufPtr) =>
         this.writeStringPointers(this.env, environPtr, environBufPtr),
       environ_sizes_get: (environCountPtr, environBufSizePtr) =>
@@ -330,6 +341,8 @@ class WasiPreview1Runtime {
       fd_fdstat_set_flags: (fd, flags) => this.fdFdstatSetFlags(fd, flags),
       fd_write: (fd, iovsPtr, iovsLen, nwrittenPtr) =>
         this.fdWrite(fd, iovsPtr, iovsLen, nwrittenPtr),
+      random_get: (bufferPtr, bufferLength) =>
+        this.randomGet(bufferPtr, bufferLength),
       proc_exit: (exitCode) => {
         throw new WasiProcExit(exitCode);
       },
@@ -351,6 +364,47 @@ class WasiPreview1Runtime {
       this.writeU32(pointersPtr + index * 4, offset);
       this.bytes().set(encoded, offset);
       offset += encoded.byteLength;
+    }
+    return ERRNO_SUCCESS;
+  }
+
+  clockResGet(clockId, resolutionPtr) {
+    this.throwIfAborted();
+    if (!isSupportedClock(clockId)) {
+      return ERRNO_INVAL;
+    }
+    this.writeU64(resolutionPtr, CLOCK_RESOLUTION_NANOS);
+    return ERRNO_SUCCESS;
+  }
+
+  clockTimeGet(clockId, _precision, timePtr) {
+    this.throwIfAborted();
+    const time = clockTimeNanos(clockId);
+    if (time == null) {
+      return ERRNO_INVAL;
+    }
+    this.writeU64(timePtr, time);
+    return ERRNO_SUCCESS;
+  }
+
+  randomGet(bufferPtr, bufferLength) {
+    this.throwIfAborted();
+    const random = cryptoRandom();
+    const bytes = this.bytes();
+    const start = bufferPtr >>> 0;
+    const length = bufferLength >>> 0;
+    const end = checkedMemoryRange(start, length, bytes.byteLength);
+    if (end == null) {
+      return ERRNO_FAULT;
+    }
+    let offset = 0;
+    while (offset < length) {
+      this.throwIfAborted();
+      const chunkLength = Math.min(RANDOM_GET_CHUNK_SIZE, length - offset);
+      random.getRandomValues(
+        bytes.subarray(start + offset, start + offset + chunkLength),
+      );
+      offset += chunkLength;
     }
     return ERRNO_SUCCESS;
   }
@@ -475,6 +529,53 @@ class WasiPreview1Runtime {
   throwIfAborted() {
     throwIfAborted(this.signal);
   }
+}
+
+function isSupportedClock(clockId) {
+  return clockId === WASI_CLOCK_REALTIME || clockId === WASI_CLOCK_MONOTONIC;
+}
+
+function clockTimeNanos(clockId) {
+  switch (clockId) {
+    case WASI_CLOCK_REALTIME:
+      return BigInt(Date.now()) * NANOS_PER_MILLI;
+    case WASI_CLOCK_MONOTONIC:
+      return monotonicClockNanos();
+    default:
+      return null;
+  }
+}
+
+function monotonicClockNanos() {
+  const performance = globalThis.performance;
+  if (performance && typeof performance.now === "function") {
+    const nanos = BigInt(Math.floor(performance.now() * 1_000_000));
+    return nanos > 0n ? nanos : 1n;
+  }
+  return BigInt(Date.now()) * NANOS_PER_MILLI;
+}
+
+function cryptoRandom() {
+  const crypto = globalThis.crypto;
+  if (!crypto || typeof crypto.getRandomValues !== "function") {
+    throw new BrowserWasiModuleError(
+      "unsupported",
+      "Web Crypto random values are unavailable for raw WASI modules",
+      "runtime",
+    );
+  }
+  return crypto;
+}
+
+function checkedMemoryRange(start, length, memoryLength) {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length)) {
+    return null;
+  }
+  const end = start + length;
+  if (start < 0 || length < 0 || end > memoryLength) {
+    return null;
+  }
+  return end;
 }
 
 function stdioRights(fd) {

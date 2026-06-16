@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Codex Version Smoke</title>
+  </head>
+  <body data-status="pending">
+    <script>
+      window.__wasmHostCodexVersionSmokeStatus = { status: "pending" };
+    </script>
+    <script type="module">
+      import { runCodexVersionSmoke } from "./codex-version-smoke.js";
+
+      runCodexVersionSmoke()
+        .then((result) => {
+          window.__wasmHostCodexVersionSmokeStatus = {
+            result,
+            status: "passed",
+          };
+          document.body.dataset.status = "passed";
+        })
+        .catch((error) => {
+          window.__wasmHostCodexVersionSmokeStatus = {
+            error: {
+              message: error?.message ?? String(error),
+              name: error?.name ?? "Error",
+              stack: error?.stack ?? null,
+            },
+            status: "failed",
+          };
+          document.body.dataset.status = "failed";
+        });
+    </script>
+  </body>
+</html>

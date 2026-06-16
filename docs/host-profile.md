@@ -274,10 +274,18 @@ The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex
 `command.load` / `command.run` fixture from a manifest, attach verified raw
 WASI bytes, send both messages across a real worker boundary, and assert exit
-`0`, stdout prefix `codex-cli `, and empty stderr. CI uses a deterministic
-inline version-smoke module with the same browser contract; local runs also
-exercise `codex-wasix/dist/codex-version-smoke.wasm` when that Codex artifact is
+`0`, stdout prefix `codex-cli `, and empty stderr. The e2e harness also serves
+`apps/web` to a real Chromium/Chrome page, starts the command entrypoint as a
+module worker from that page, and asserts the same version contract through the
+browser runtime boundary. CI uses a deterministic inline version-smoke module
+with the same browser contract; local runs also exercise
+`codex-wasix/dist/codex-version-smoke.wasm` when that Codex artifact is
 available.
+
+This smoke intentionally does not provide terminal UI behavior, stdin UX,
+hard termination of non-cooperative Wasm, or final WebC/WASIX package execution.
+Those remain separate browser adapter layers so the successful version path can
+stay small and deterministic.
 
 The terminal gateway uses JSON over `POST` for buffered requests:
 

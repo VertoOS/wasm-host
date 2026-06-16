@@ -6,6 +6,7 @@ const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
 
 const ERRNO_SUCCESS = 0;
 const ERRNO_BADF = 8;
+let workerRunCounter = 0;
 
 export class BrowserWasiModuleError extends Error {
   constructor(kind, message, stage = "runtime", options = {}) {
@@ -67,9 +68,25 @@ export function packageNeedsRawWasiModuleLoader(value) {
 }
 
 export function createRawWasiModuleExecutor(options = {}) {
+  const createWorker =
+    options.createWorker ?? defaultRawWasiModuleWorkerFactory();
+  if (options.worker !== false && typeof createWorker === "function") {
+    return createRawWasiModuleWorkerExecutor({
+      ...options,
+      createWorker,
+    });
+  }
   return {
     async run(request, output) {
       return runRawWasiModule(request, output, options);
+    },
+  };
+}
+
+export function createRawWasiModuleWorkerExecutor(options = {}) {
+  return {
+    async run(request, output) {
+      return runRawWasiModuleInWorker(request, output, options);
     },
   };
 }
@@ -135,6 +152,133 @@ export async function runRawWasiModule(request, output, options = {}) {
       error?.message ?? "raw WASI module execution failed",
       "runtime",
     );
+  }
+}
+
+export async function runRawWasiModuleInWorker(request, output, options = {}) {
+  let worker;
+  try {
+    worker = options.createWorker?.();
+  } catch (error) {
+    throw new BrowserWasiModuleError(
+      "unsupported",
+      error?.message ?? "raw WASI execution worker could not start",
+      "runtime",
+    );
+  }
+  validateExecutionWorker(worker);
+  const id = options.id ?? `raw-wasi-run-${nextWorkerRunId()}`;
+  const runMessage = {
+    type: "wasi.run",
+    id,
+    request: workerRunRequest(request),
+  };
+
+  let settled = false;
+  let outputChain = Promise.resolve();
+  const enqueueOutput = (write) => {
+    outputChain = outputChain.then(write);
+    outputChain.catch(() => {});
+  };
+
+  return new Promise((resolve, reject) => {
+    const finish = (complete) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      outputChain.then(complete, reject);
+    };
+    const rejectWith = (error) => finish(() => reject(error));
+    const resolveWith = (result) => finish(() => resolve(result));
+    const onMessage = (event) => {
+      const message = event?.data ?? event;
+      if (!message || message.id !== id) {
+        return;
+      }
+      switch (message.type) {
+        case "wasi.stdout":
+          enqueueOutput(() => output.writeStdout(message.chunk));
+          break;
+        case "wasi.stderr":
+          enqueueOutput(() => output.writeStderr(message.chunk));
+          break;
+        case "wasi.complete":
+          resolveWith(message.result);
+          break;
+        case "wasi.error":
+          rejectWith(workerErrorFromPayload(message.error));
+          break;
+      }
+    };
+    const onError = (event) => {
+      rejectWith(
+        new BrowserWasiModuleError(
+          "runtime",
+          event?.message ?? "raw WASI execution worker failed",
+          "runtime",
+        ),
+      );
+    };
+    const onAbort = () => {
+      terminateExecutionWorker(worker);
+      rejectWith(request.signal.reason ?? abortError());
+    };
+    const cleanup = () => {
+      removeWorkerListener(worker, "message", onMessage);
+      removeWorkerListener(worker, "error", onError);
+      removeWorkerListener(worker, "messageerror", onError);
+      request.signal?.removeEventListener?.("abort", onAbort);
+      terminateExecutionWorker(worker);
+    };
+
+    addWorkerListener(worker, "message", onMessage);
+    addWorkerListener(worker, "error", onError);
+    addWorkerListener(worker, "messageerror", onError);
+    if (request.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    request.signal?.addEventListener?.("abort", onAbort, { once: true });
+    try {
+      worker.postMessage(runMessage);
+    } catch (error) {
+      rejectWith(error);
+    }
+  });
+}
+
+export async function handleRawWasiModuleWorkerMessage(message) {
+  if (!message || message.type !== "wasi.run") {
+    return;
+  }
+  const { id, request } = message;
+  const output = {
+    writeStderr(chunk) {
+      postMessageToWorkerHost({
+        type: "wasi.stderr",
+        id,
+        chunk: toUint8Array(chunk),
+      });
+    },
+    writeStdout(chunk) {
+      postMessageToWorkerHost({
+        type: "wasi.stdout",
+        id,
+        chunk: toUint8Array(chunk),
+      });
+    },
+  };
+  try {
+    const result = await runRawWasiModule(request, output, { worker: false });
+    postMessageToWorkerHost({ type: "wasi.complete", id, result });
+  } catch (error) {
+    postMessageToWorkerHost({
+      type: "wasi.error",
+      id,
+      error: workerErrorPayload(error),
+    });
   }
 }
 
@@ -358,6 +502,97 @@ function normalizeEnv(value) {
     );
   }
   return Object.entries(value).map(([key, envValue]) => `${key}=${envValue}`);
+}
+
+function defaultRawWasiModuleWorkerFactory() {
+  if (typeof Worker !== "function") {
+    return null;
+  }
+  return () =>
+    new Worker(new URL("./wasi-module-worker-entry.js", import.meta.url), {
+      name: "wasm-host-raw-wasi",
+      type: "module",
+    });
+}
+
+function nextWorkerRunId() {
+  workerRunCounter += 1;
+  return workerRunCounter;
+}
+
+function validateExecutionWorker(worker) {
+  if (
+    !worker ||
+    typeof worker.postMessage !== "function" ||
+    typeof worker.addEventListener !== "function"
+  ) {
+    throw new BrowserWasiModuleError(
+      "unsupported",
+      "raw WASI execution worker is unavailable",
+      "runtime",
+    );
+  }
+}
+
+function workerRunRequest(request) {
+  return {
+    args: normalizeStringList(request.args ?? []),
+    command: nonEmptyString(request.command),
+    cwd: String(request.cwd ?? "/workspace"),
+    env: { ...(request.env ?? {}) },
+    package: request.package,
+    terminal: { ...(request.terminal ?? {}) },
+  };
+}
+
+function addWorkerListener(worker, type, listener) {
+  worker.addEventListener?.(type, listener);
+}
+
+function removeWorkerListener(worker, type, listener) {
+  worker.removeEventListener?.(type, listener);
+}
+
+function terminateExecutionWorker(worker) {
+  try {
+    void worker.terminate?.();
+  } catch {
+    // Termination is best effort; the run is already settled.
+  }
+}
+
+function workerErrorPayload(error) {
+  if (error instanceof BrowserWasiModuleError || typeof error?.kind === "string") {
+    return {
+      exitCode: error.exitCode ?? null,
+      kind: error.kind,
+      message: error.message ?? "raw WASI module execution failed",
+      stage: error.stage ?? "runtime",
+    };
+  }
+  return {
+    exitCode: null,
+    kind: "runtime",
+    message: error?.message ?? "raw WASI module execution failed",
+    stage: "runtime",
+  };
+}
+
+function workerErrorFromPayload(error = {}) {
+  return new BrowserWasiModuleError(
+    error.kind ?? "runtime",
+    error.message ?? "raw WASI module execution failed",
+    error.stage ?? "runtime",
+    { exitCode: error.exitCode },
+  );
+}
+
+function abortError() {
+  return new DOMException("The operation was aborted", "AbortError");
+}
+
+function postMessageToWorkerHost(message) {
+  globalThis.postMessage(message);
 }
 
 function stringListBufferSize(values) {

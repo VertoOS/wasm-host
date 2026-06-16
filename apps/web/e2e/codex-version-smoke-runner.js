@@ -72,6 +72,11 @@ async function runCodexVersionSmokePage(page) {
   assert.equal(status.result.stderr, "");
   assert.match(status.result.stdout, /^codex-cli /);
   assert.equal(status.result.artifactKind, "wasi-module");
+  assert.deepEqual(status.result.hardTimeout, {
+    errorKind: "timeout",
+    exitCode: 124,
+    timedOut: true,
+  });
   assert.equal(status.result.workerEntrypoint, "/src/command-worker-entry.js");
   return `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`;
 }

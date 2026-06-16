@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Worker as NodeWorker } from "node:worker_threads";
 
 import {
   hasLocalCodexVersionSmokeArtifact,
@@ -12,6 +13,7 @@ import {
 import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import {
   createRawWasiModuleExecutor,
+  createRawWasiModuleWorkerExecutor,
   loadRawWasiModulePackage,
 } from "../src/wasi-module.js";
 
@@ -31,6 +33,10 @@ const MISSING_MEMORY_WASM = base64ToBytes(
 
 const UNSUPPORTED_IMPORT_WASM = base64ToBytes(
   "AGFzbQEAAAABDAJgBH9/f38Bf2AAAAIiARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3JlYWQAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoEAQIACw==",
+);
+
+const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
+  "AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAAKCQEHAANADAALCw==",
 );
 
 test("loadRawWasiModulePackage validates explicit raw WASI module bytes", async () => {
@@ -158,6 +164,49 @@ test("raw WASI executor captures stderr and proc_exit status", async () => {
   assert.equal(output.stderr, "bad\n");
 });
 
+test("raw WASI worker executor forwards output and exit status", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleWorkerExecutor({
+    createWorker: createNodeWasiWorker,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: ARGV_ECHO_WASM,
+    command: "codex",
+    id: "codex",
+  });
+
+  const result = await executor.run(
+    {
+      args: ["--version"],
+      command: "codex",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "--version");
+  assert.equal(output.stderr, "");
+  assert.equal(packageRecord.bytes.byteLength, ARGV_ECHO_WASM.byteLength);
+
+  const secondOutput = recordingOutput();
+  const secondResult = await executor.run(
+    {
+      args: ["again-run"],
+      command: "codex",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    secondOutput,
+  );
+  assert.deepEqual(secondResult, { exitCode: 0 });
+  assert.equal(secondOutput.stdout, "again-run");
+});
+
 test("raw WASI executor reports command resolution failures", async () => {
   const executor = createRawWasiModuleExecutor();
   const packageRecord = await loadRawWasiModulePackage({
@@ -222,6 +271,84 @@ test("raw WASI executor reports invalid modules and unsupported imports", async 
   );
 });
 
+test("command worker times out non-cooperative raw WASI modules", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    wasiModule: { createWorker: createNodeWasiWorker },
+  });
+
+  await loadLoopPackage(runtime);
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "timeout-loop",
+    packageId: "loop",
+    command: "loop",
+    timeoutMs: 50,
+  });
+  await withTimeout(run, 1000, "raw WASI timeout run did not finish");
+
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "timeout-loop",
+    error: {
+      kind: "timeout",
+      message: "browser command exceeded wall time limit",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 124,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: true,
+    },
+  });
+});
+
+test("command worker cancels non-cooperative raw WASI modules", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    wasiModule: { createWorker: createNodeWasiWorker },
+  });
+
+  await loadLoopPackage(runtime);
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "cancel-loop",
+    packageId: "loop",
+    command: "loop",
+  });
+  await waitForMessage(
+    port.messages,
+    (message) => message.type === "command.started" && message.id === "cancel-loop",
+  );
+  await runtime.handleMessage({ type: "command.cancel", id: "cancel-loop" });
+  await withTimeout(run, 1000, "raw WASI cancel run did not finish");
+
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "cancel-loop",
+    error: {
+      kind: "cancelled",
+      message: "browser command cancelled",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: true,
+      exitCode: 130,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
 test(
   "local Codex version-smoke artifact runs through the browser WASI executor",
   {
@@ -269,6 +396,21 @@ function recordingPort() {
   };
 }
 
+function loadLoopPackage(runtime) {
+  return runtime.handleMessage({
+    type: "command.load",
+    id: "load-loop",
+    package: {
+      artifactKind: "wasi-module",
+      command: "loop",
+      id: "loop",
+      wasiModule: {
+        bytes: NON_COOPERATIVE_LOOP_WASM,
+      },
+    },
+  });
+}
+
 function baseRunRequest(packageRecord) {
   return {
     args: [],
@@ -277,6 +419,65 @@ function baseRunRequest(packageRecord) {
     package: packageRecord,
     signal: new AbortController().signal,
   };
+}
+
+function createNodeWasiWorker() {
+  const worker = new NodeWorker(
+    new URL("../fixtures/wasi-module-node-worker-entry.js", import.meta.url),
+  );
+  const listeners = new Map();
+  return {
+    postMessage(message) {
+      worker.postMessage(message);
+    },
+    terminate() {
+      return worker.terminate();
+    },
+    addEventListener(type, listener) {
+      const eventName = workerEventName(type);
+      const wrapped =
+        type === "message" ? (data) => listener({ data }) : (error) => listener(error);
+      listeners.set(listener, { eventName, wrapped });
+      worker.on(eventName, wrapped);
+    },
+    removeEventListener(_type, listener) {
+      const record = listeners.get(listener);
+      if (!record) {
+        return;
+      }
+      listeners.delete(listener);
+      worker.off(record.eventName, record.wrapped);
+    },
+  };
+}
+
+function workerEventName(type) {
+  return type === "message" ? "message" : type;
+}
+
+async function waitForMessage(messages, predicate) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const message = messages.find(predicate);
+    if (message) {
+      return message;
+    }
+    await delay(5);
+  }
+  throw new Error(`timed out waiting for message: ${JSON.stringify(messages)}`);
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeout = null;
+  return Promise.race([
+    promise,
+    new Promise((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timeout));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function recordingOutput() {

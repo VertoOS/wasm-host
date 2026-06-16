@@ -10,6 +10,9 @@ import {
 } from "../src/terminal.js";
 
 const decoder = new TextDecoder();
+const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
+  "AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAAKCQEHAANADAALCw==",
+);
 
 export async function runCodexVersionSmoke() {
   const manifest = await codexVersionSmokeManifest();
@@ -56,11 +59,13 @@ export async function runCodexVersionSmoke() {
       "Codex version smoke stdout should report the codex-cli version",
     );
     assert(stderr === fixture.expected.stderr, "Codex stderr should be empty");
+    const hardTimeout = await runNonCooperativeTimeout(worker);
 
     return {
       artifactKind: load.loaded.artifactKind,
       artifactUrl,
       exitCode: result.exitCode,
+      hardTimeout,
       stderr,
       stdout,
       stdoutBytes: result.stdoutBytes,
@@ -74,7 +79,47 @@ export async function runCodexVersionSmoke() {
   }
 }
 
-function dispatchAndCollect(worker, message) {
+async function runNonCooperativeTimeout(worker) {
+  const load = await dispatchAndCollect(worker, {
+    type: "command.load",
+    id: "load-loop",
+    package: {
+      artifactKind: "wasi-module",
+      command: "loop",
+      id: "loop",
+      wasiModule: {
+        bytes: NON_COOPERATIVE_LOOP_WASM,
+      },
+    },
+  });
+  assert(load.loaded.packageId === "loop", "loop package should load");
+  const run = await dispatchAndCollect(
+    worker,
+    {
+      type: "command.run",
+      id: "run-loop-timeout",
+      packageId: "loop",
+      command: "loop",
+      timeoutMs: 50,
+    },
+    { resolveError: true },
+  );
+  assert(
+    run.error?.error?.kind === "timeout",
+    "non-cooperative raw WASI module should time out",
+  );
+  assert(
+    run.error?.result?.exitCode === 124,
+    "non-cooperative timeout should use exit code 124",
+  );
+  return {
+    errorKind: run.error.error.kind,
+    exitCode: run.error.result.exitCode,
+    timedOut: run.error.result.timedOut,
+  };
+}
+
+function dispatchAndCollect(worker, message, options = {}) {
   const stdout = [];
   const stderr = [];
   return new Promise((resolve, reject) => {
@@ -110,6 +155,10 @@ function dispatchAndCollect(worker, message) {
         return;
       }
       if (data.type === "command.error") {
+        if (options.resolveError) {
+          resolve({ error: data, stderr, stdout });
+          return;
+        }
         reject(Object.assign(new Error(data.error.message), data.error));
         return;
       }
@@ -148,4 +197,13 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }

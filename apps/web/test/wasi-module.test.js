@@ -44,6 +44,10 @@ const CLOCK_RANDOM_WASM = base64ToBytes(
   "AGFzbQEAAAABHQVgA39+fwF/YAJ/fwF/YAR/f39/AX9gAX8AYAAAArkBBRZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDmNsb2NrX3RpbWVfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQ1jbG9ja19yZXNfZ2V0AAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQpyYW5kb21fZ2V0AAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQACFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAMDAwIDBAUDAQACBhsFfwBBAAt/AEEQC38AQSALfwBBMAt/AEGACAsHEwIGbWVtb3J5AgAGX3N0YXJ0AAYKlQMCBgAgABAEC4sDAQJ/QQAjARABIQAgAARAQQoQBQsjASkDAFAEQEELEAULQQBCACMAEAAhACAABEBBDBAFCyMAKQMAUARAQQ0QBQtBASMBEAEhACAABEBBFBAFCyMBKQMAUARAQRUQBQtBAUIAIwAQACEAIAAEQEEWEAULIwApAwBQBEBBFxAFCyMAQojvmavF6IyRETcDAEEJQgAjABAAIQAgAEEcRwRAQR4QBQsjACkDAEKI75mrxeiMkRFSBEBBHxAFCyMBQpHEzKHUytm7iH83AwBBCSMBEAEhACAAQRxHBEBBIBAFCyMBKQMAQpHEzKHUytm7iH9SBEBBIRAFCyMEQfCiBBACIQAgAARAQSgQBQsjBCgCACMEQQRqKAIAciMEQQhqKAIAIwRBDGooAgByciEBIAFFBEBBKRAFCyMEQdCDBGooAgAjBEHUgwRqKAIAciMEQdiDBGooAgAjBEHcgwRqKAIAcnIhASABRQRAQSoQBQsjAkHAADYCACMCQQRqQRA2AgBBASMCQQEjAxADGgsLFwEAQcAACxBjbG9jay1yYW5kb20tb2sK",
 );
 
+const SCHED_YIELD_WASM = base64ToBytes(
+  "AGFzbQEAAAABGgVgAAF/YAR/f39/AX9gAX8AYAN/f38AYAAAAmsDFndhc2lfc25hcHNob3RfcHJldmlldzELc2NoZWRfeWllbGQAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAgMEAwMDBAUDAQABBxMCBm1lbW9yeQIABl9zdGFydAAFClADDgAgACABRwRAIAIQAgsLKwBBACAANgIAQQQgATYCAEEBQQBBAUEIEAFBACACEANBCCgCACABIAIQAwsTABAAQQBBChADQYAIQQ9BCxAECwsWAQBBgAgLD3NjaGVkLXlpZWxkLW9rCg==",
+);
+
 const READ_FILE_WASM = base64ToBytes(
   "AGFzbQEAAAABLwdgAn9/AX9gA39/fwF/YAl/f39/f35+f38Bf2AEf39/fwF/YAF/AX9gAX8AYAAAAqoCCBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDmZkX3ByZXN0YXRfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRNmZF9wcmVzdGF0X2Rpcl9uYW1lAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwYXRoX29wZW4AAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxD2ZkX2ZpbGVzdGF0X2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAADFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfY2xvc2UABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQABQMDAgUGBQMBAAEGPAp/AEEAC38AQcAAC38AQaABC38AQbABC38AQbQBC38AQbgBC38AQcABC38AQYACC38AQYAEC38AQaAECwcTAgZtZW1vcnkCAAZfc3RhcnQACQqxBAIGACAAEAcLpwQBAn9BAyMAEAAhACAABEBBChAICyMALQAAQQBHBEBBCxAICyMAQQRqKAIAQQpHBEBBDBAIC0EDIwZBChABIQAgAARAQQ0QCAsjBi0AAEEvRwRAQQ4QCAsjBkEJai0AAEHlAEcEQEEPEAgLQQMQBSEAIABBCEcEQEEQEAgLIwIjBzYCACMCQQRqQSA2AgBBAyMCQQEjAxAEIQAgAEEfRwRAQREQCAsjBUHjADYCAEEDQQAjCUELQQBCAkIAQQAjBRACIQAgAEEsRwRAQRQQCAsjBSgCAEHjAEcEQEEVEAgLQQlBACMIQQlBAEICQgBBACMFEAIhACAAQQhHBEBBFhAIC0EBQQAjCEEJQQBCAkIAQQAjBRACIQAgAEHMAEcEQEEXEAgLQQNBACMIQQlBAUICQgBBACMFEAIhACAAQcwARwRAQRgQCAtBA0EAIwhBCUEAQgJCAEEAIwUQAiEAIAAEQEEeEAgLIwUoAgAhASABQQNNBEBBHxAICyABIwEQAyEAIAAEQEEgEAgLIwFBEGotAABBBEcEQEEhEAgLIwFBIGopAwBCDVIEQEEiEAgLIwIjBzYCACMCQQRqQSA2AgAgASMCQQEjAxAEIQAgAARAQSgQCAsjAygCAEENRwRAQSkQCAsgARAFIQAgAARAQSoQCAsgASMCQQEjAxAEIQAgAEEIRwRAQSsQCAsjAiMHNgIAIwJBBGpBDTYCAEEBIwJBASMEEAYaCwshAgBBgAQLCWhlbGxvLnR4dABBoAQLC21pc3NpbmcudHh0",
 );
@@ -367,6 +371,32 @@ test("raw WASI executor supports clock and random imports", async () => {
   assert.deepEqual(result, { exitCode: 0 });
   assert.deepEqual(randomChunks, [65536, 4464]);
   assert.equal(output.stdout, "clock-random-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor supports sched_yield", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: SCHED_YIELD_WASM,
+    command: "sched-yield",
+    id: "sched-yield",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "sched-yield",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "sched-yield-ok\n");
   assert.equal(output.stderr, "");
 });
 
@@ -910,6 +940,53 @@ test("command worker runs raw WASI modules that use clock and random imports", a
       failureStage: null,
       stderrBytes: 0,
       stdoutBytes: 16,
+      timedOut: false,
+    },
+  });
+});
+
+test("command worker runs raw WASI modules that yield cooperatively", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-sched-yield",
+    package: {
+      artifactKind: "wasi-module",
+      command: "sched-yield",
+      id: "sched-yield",
+      wasiModule: {
+        bytes: SCHED_YIELD_WASM,
+      },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-sched-yield",
+    packageId: "sched-yield",
+    command: "sched-yield",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.type === "command.loaded",
+  );
+  assert.equal(loaded.artifactKind, "wasi-module");
+  assert.equal(loaded.packageType, "wasi-module");
+  assert.equal(stdoutText(port.messages), "sched-yield-ok\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-sched-yield",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 15,
       timedOut: false,
     },
   });

@@ -57,7 +57,7 @@ until the boundaries are stable enough to split.
   `codex --version` smoke path with args/env, clocks, random bytes, preloaded
   stdin, cooperative yield, read-only package file reads, metadata, and
   directory listing, volatile `/tmp` scratch directory create/rename/remove and
-  file advise/allocate/write/rename/truncate/sync, stdio fd stat,
+  file advise/allocate/write/renumber/rename/truncate/sync, stdio fd stat,
   stdout/stderr, and exit status capture for the narrow fixture import set.
 - The browser adapter package has an automated command-worker-boundary smoke
   for the Codex `codex --version` contract, plus an optional local-artifact

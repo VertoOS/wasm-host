@@ -450,6 +450,7 @@ class WasiPreview1Runtime {
       fd_datasync: (fd) => this.fdSync(fd, WASI_RIGHT_FD_DATASYNC),
       fd_readdir: (fd, bufferPtr, bufferLength, cookie, bufferUsedPtr) =>
         this.fdReaddir(fd, bufferPtr, bufferLength, cookie, bufferUsedPtr),
+      fd_renumber: (fd, to) => this.fdRenumber(fd, to),
       fd_seek: (fd, offset, whence, newOffsetPtr) =>
         this.fdSeek(fd, offset, whence, newOffsetPtr),
       fd_sync: (fd) => this.fdSync(fd, WASI_RIGHT_FD_SYNC),
@@ -772,6 +773,27 @@ class WasiPreview1Runtime {
       return ERRNO_SUCCESS;
     }
     return ERRNO_BADF;
+  }
+
+  fdRenumber(fd, to) {
+    this.throwIfAborted();
+    const file = this.openFiles.get(fd);
+    if (!file) {
+      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
+    }
+    if (!isDynamicFileFdNumber(to)) {
+      return ERRNO_NOTCAPABLE;
+    }
+    if (fd === to) {
+      return ERRNO_SUCCESS;
+    }
+
+    this.openFiles.delete(fd);
+    this.openFiles.set(to, file);
+    if (to >= this.nextFileFd) {
+      this.nextFileFd = to + 1;
+    }
+    return ERRNO_SUCCESS;
   }
 
   fdFilestatGet(fd, filestatPtr) {
@@ -1636,6 +1658,10 @@ function canAllocateFile(file) {
 
 function isOpenDirectory(file) {
   return file?.kind === "directory";
+}
+
+function isDynamicFileFdNumber(fd) {
+  return Number.isInteger(fd) && fd >= FIRST_FILE_FD;
 }
 
 function resizeOpenFile(file, size) {

@@ -299,13 +299,13 @@ package-file fixtures:
 `fd_filestat_set_size`, `fd_prestat_dir_name`, `fd_prestat_get`, `fd_read`,
 `fd_readdir`, `fd_seek`, `fd_sync`, `fd_tell`, `fd_fdstat_get`,
 `fd_fdstat_set_flags`, `fd_write`, `path_create_directory`,
-`path_filestat_get`, `path_open`,
+`path_filestat_get`, `path_open`, `path_rename`,
 `path_remove_directory`, `path_unlink_file`, `random_get`, and `proc_exit`.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, and provides a volatile in-memory `/tmp` scratch preopen for narrow
-directory create/list/remove and file
-create/write/readback/stat/truncate/sync/unlink fixtures. It is not a general
+directory create/list/rename/remove and file
+create/write/readback/stat/rename/truncate/sync/unlink fixtures. It is not a general
 WASIX runtime and does not provide persistent filesystems, sockets, threads, or
 WebC metadata execution.
 

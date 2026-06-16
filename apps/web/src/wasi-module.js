@@ -50,6 +50,8 @@ const WASI_RIGHT_PATH_CREATE_DIRECTORY = 1n << 9n;
 const WASI_RIGHT_PATH_CREATE_FILE = 1n << 10n;
 const WASI_RIGHT_PATH_OPEN = 1n << 13n;
 const WASI_RIGHT_FD_READDIR = 1n << 14n;
+const WASI_RIGHT_PATH_RENAME_SOURCE = 1n << 16n;
+const WASI_RIGHT_PATH_RENAME_TARGET = 1n << 17n;
 const WASI_RIGHT_PATH_FILESTAT_GET = 1n << 18n;
 const WASI_RIGHT_PATH_FILESTAT_SET_SIZE = 1n << 19n;
 const WASI_RIGHT_PATH_FILESTAT_SET_TIMES = 1n << 20n;
@@ -75,6 +77,8 @@ const WASI_TMP_RIGHTS =
   WASI_RIGHT_PATH_CREATE_DIRECTORY |
   WASI_RIGHT_PATH_UNLINK_FILE |
   WASI_RIGHT_PATH_REMOVE_DIRECTORY |
+  WASI_RIGHT_PATH_RENAME_SOURCE |
+  WASI_RIGHT_PATH_RENAME_TARGET |
   WASI_RIGHT_FD_FILESTAT_GET;
 const WASI_REGULAR_FILE_RIGHTS =
   WASI_RIGHT_FD_READ |
@@ -98,6 +102,8 @@ const WASI_WRITE_RIGHTS =
   WASI_RIGHT_PATH_CREATE_FILE |
   WASI_RIGHT_PATH_FILESTAT_SET_SIZE |
   WASI_RIGHT_PATH_FILESTAT_SET_TIMES |
+  WASI_RIGHT_PATH_RENAME_SOURCE |
+  WASI_RIGHT_PATH_RENAME_TARGET |
   WASI_RIGHT_FD_FILESTAT_SET_SIZE |
   WASI_RIGHT_FD_FILESTAT_SET_TIMES |
   WASI_RIGHT_PATH_REMOVE_DIRECTORY |
@@ -479,6 +485,22 @@ class WasiPreview1Runtime {
         this.pathFilestatGet(fd, flags, pathPtr, pathLen, filestatPtr),
       path_create_directory: (fd, pathPtr, pathLen) =>
         this.pathCreateDirectory(fd, pathPtr, pathLen),
+      path_rename: (
+        oldFd,
+        oldPathPtr,
+        oldPathLen,
+        newFd,
+        newPathPtr,
+        newPathLen,
+      ) =>
+        this.pathRename(
+          oldFd,
+          oldPathPtr,
+          oldPathLen,
+          newFd,
+          newPathPtr,
+          newPathLen,
+        ),
       path_remove_directory: (fd, pathPtr, pathLen) =>
         this.pathRemoveDirectory(fd, pathPtr, pathLen),
       path_unlink_file: (fd, pathPtr, pathLen) =>
@@ -803,7 +825,7 @@ class WasiPreview1Runtime {
       return { entries: () => this.scratchDirectoryEntries("") };
     }
     const file = this.openFiles.get(fd);
-    if (isOpenDirectory(file)) {
+    if (isOpenDirectory(file) && file.path != null) {
       return { entries: () => this.scratchDirectoryEntries(file.path) };
     }
     return null;
@@ -1147,12 +1169,187 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
+  pathRename(oldFd, oldPathPtr, oldPathLen, newFd, newPathPtr, newPathLen) {
+    this.throwIfAborted();
+    const sourceBase = this.scratchBasePathForRight(
+      oldFd,
+      WASI_RIGHT_PATH_RENAME_SOURCE,
+    );
+    if (sourceBase.errno != null) {
+      return sourceBase.errno;
+    }
+    const targetBase = this.scratchBasePathForRight(
+      newFd,
+      WASI_RIGHT_PATH_RENAME_TARGET,
+    );
+    if (targetBase.errno != null) {
+      return targetBase.errno;
+    }
+
+    const source = resolveScratchPath(
+      sourceBase.value,
+      this.readString(oldPathPtr, oldPathLen),
+    );
+    if (source.errno != null) {
+      return source.errno;
+    }
+    const target = resolveScratchPath(
+      targetBase.value,
+      this.readString(newPathPtr, newPathLen),
+    );
+    if (target.errno != null) {
+      return target.errno;
+    }
+    if (source.value === target.value) {
+      return this.scratchPathExists(source.value) ? ERRNO_SUCCESS : ERRNO_NOENT;
+    }
+
+    const sourceKind = this.scratchPathKind(source.value);
+    if (sourceKind == null) {
+      return ERRNO_NOENT;
+    }
+    if (
+      sourceKind === "directory" &&
+      target.value.startsWith(`${source.value}/`)
+    ) {
+      return ERRNO_INVAL;
+    }
+
+    const targetKind = this.scratchPathKind(target.value);
+    if (targetKind == null) {
+      const targetParent = scratchParentStatus(
+        this.scratchFiles,
+        this.scratchDirs,
+        target.value,
+      );
+      if (targetParent.errno != null) {
+        return targetParent.errno;
+      }
+    } else if (sourceKind === "file") {
+      if (targetKind === "directory") {
+        return ERRNO_ISDIR;
+      }
+    } else if (targetKind === "file") {
+      return ERRNO_NOTDIR;
+    } else if (
+      pathHasChildren(this.scratchFiles, this.scratchDirs, target.value)
+    ) {
+      return ERRNO_NOTEMPTY;
+    }
+
+    if (sourceKind === "file") {
+      this.renameScratchFile(source.value, target.value);
+    } else {
+      this.renameScratchDirectory(source.value, target.value);
+    }
+    return ERRNO_SUCCESS;
+  }
+
+  scratchBasePathForRight(fd, right) {
+    if (fd === TMP_FD) {
+      return { value: "" };
+    }
+    const file = this.openFiles.get(fd);
+    if (isOpenDirectory(file)) {
+      if (file.path == null) {
+        return { errno: ERRNO_NOTCAPABLE };
+      }
+      if ((file.rights & right) === 0n) {
+        return { errno: ERRNO_NOTCAPABLE };
+      }
+      return { value: file.path };
+    }
+    return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
+  }
+
+  scratchPathExists(path) {
+    return this.scratchPathKind(path) != null;
+  }
+
+  scratchPathKind(path) {
+    if (this.scratchFiles.has(path)) {
+      return "file";
+    }
+    if (
+      this.scratchDirs.has(path) ||
+      pathHasChildren(this.scratchFiles, this.scratchDirs, path)
+    ) {
+      return "directory";
+    }
+    return null;
+  }
+
+  renameScratchFile(sourcePath, targetPath) {
+    const file = this.scratchFiles.get(sourcePath);
+    const replacedFile = this.scratchFiles.get(targetPath);
+    if (replacedFile && replacedFile !== file) {
+      replacedFile.path = null;
+    }
+    this.scratchFiles.delete(sourcePath);
+    file.path = targetPath;
+    this.scratchFiles.set(targetPath, file);
+    for (const openFile of this.openFiles.values()) {
+      if (isOpenDirectory(openFile)) {
+        continue;
+      }
+      if (openFile.record === file) {
+        openFile.path = targetPath;
+      } else if (openFile.record === replacedFile) {
+        openFile.path = null;
+      }
+    }
+  }
+
+  renameScratchDirectory(sourcePath, targetPath) {
+    this.detachOpenScratchDirectory(targetPath);
+    this.scratchDirs.delete(targetPath);
+
+    const movedDirs = new Set();
+    for (const dir of this.scratchDirs) {
+      if (dir === sourcePath || dir.startsWith(`${sourcePath}/`)) {
+        movedDirs.add(replacePathPrefix(dir, sourcePath, targetPath));
+      } else {
+        movedDirs.add(dir);
+      }
+    }
+    this.scratchDirs = movedDirs;
+
+    const movedFiles = new Map();
+    for (const [path, file] of this.scratchFiles) {
+      if (path === sourcePath || path.startsWith(`${sourcePath}/`)) {
+        const nextPath = replacePathPrefix(path, sourcePath, targetPath);
+        file.path = nextPath;
+        movedFiles.set(nextPath, file);
+      } else {
+        movedFiles.set(path, file);
+      }
+    }
+    this.scratchFiles = movedFiles;
+
+    for (const openFile of this.openFiles.values()) {
+      if (
+        openFile.path === sourcePath ||
+        openFile.path?.startsWith(`${sourcePath}/`)
+      ) {
+        openFile.path = replacePathPrefix(openFile.path, sourcePath, targetPath);
+      }
+    }
+  }
+
+  detachOpenScratchDirectory(path) {
+    for (const openFile of this.openFiles.values()) {
+      if (isOpenDirectory(openFile) && openFile.path === path) {
+        openFile.path = null;
+      }
+    }
+  }
+
   scratchBasePath(fd) {
     if (fd === TMP_FD) {
       return "";
     }
     const file = this.openFiles.get(fd);
-    return isOpenDirectory(file) ? file.path : null;
+    return isOpenDirectory(file) && file.path != null ? file.path : null;
   }
 
   pathStat(fd, pathValue) {
@@ -1498,6 +1695,12 @@ function pathHasChildren(files, dirs, path) {
     }
   }
   return false;
+}
+
+function replacePathPrefix(path, sourcePath, targetPath) {
+  return path === sourcePath
+    ? targetPath
+    : `${targetPath}${path.slice(sourcePath.length)}`;
 }
 
 function resolveScratchPath(basePath, pathValue, options = {}) {

@@ -1,11 +1,13 @@
 const WASM_MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
 const DEFAULT_PACKAGE_ID = "codex-browser";
 const DEFAULT_COMMAND = "build-request";
+const MODEL_REQUEST_COMMAND = "model-request";
 const DEFAULT_ENTRYPOINT = "codex_build_request";
 const DEFAULT_MODEL = "gpt-5";
 const CODEX_BROWSER_ARTIFACT_KIND = "codex-browser";
 const CODEX_BROWSER_RUNTIME = "wasm32-unknown-unknown";
 const DEFAULT_OUTPUT_LIMIT = 1024 * 1024;
+const DEFAULT_RESPONSE_BODY_LIMIT = 1024 * 1024;
 const REQUIRED_EXPORTS = new Map([
   ["memory", "memory"],
   ["codex_alloc", "function"],
@@ -104,7 +106,7 @@ export async function runCodexBrowserRequestBuilder(
       { exitCode: 127 },
     );
   }
-  if (request.command !== DEFAULT_COMMAND) {
+  if (request.command !== DEFAULT_COMMAND && request.command !== MODEL_REQUEST_COMMAND) {
     throw new BrowserCodexBrowserError(
       "command_not_found",
       `unsupported codex-browser command: ${request.command}`,
@@ -114,11 +116,15 @@ export async function runCodexBrowserRequestBuilder(
   }
   throwIfAborted(request.signal);
 
+  const endpoint =
+    request.command === MODEL_REQUEST_COMMAND
+      ? modelEndpointFromRequest(request, options)
+      : null;
   const prompt = request.args[0];
   if (prompt == null || String(prompt).length === 0) {
     throw new BrowserCodexBrowserError(
       "invalid_request",
-      "codex-browser build-request requires a prompt argument",
+      `codex-browser ${request.command} requires a prompt argument`,
       "startup",
       { exitCode: 2 },
     );
@@ -130,6 +136,22 @@ export async function runCodexBrowserRequestBuilder(
     options.defaultModel ??
     DEFAULT_MODEL;
 
+  const runtime = await instantiateCodexBrowserPackage(packageRecord, options);
+
+  const requestJson = callCodexBuildRequest(runtime.exports, runtime.memory, {
+    model: String(model),
+    outputLimit: options.outputLimit ?? DEFAULT_OUTPUT_LIMIT,
+    prompt: String(prompt),
+    signal: request.signal,
+  });
+  if (request.command === MODEL_REQUEST_COMMAND) {
+    return dispatchCodexModelRequest(request, output, requestJson, endpoint, options);
+  }
+  await output.writeStdout(`${requestJson}\n`);
+  return { exitCode: 0 };
+}
+
+async function instantiateCodexBrowserPackage(packageRecord, options) {
   const module =
     packageRecord.module ??
     (await compileCodexBrowserModule(toUint8Array(packageRecord.bytes)));
@@ -149,15 +171,93 @@ export async function runCodexBrowserRequestBuilder(
     );
   }
   exports.codex_clear_output();
+  return { exports, memory };
+}
 
-  const requestJson = callCodexBuildRequest(exports, memory, {
-    model: String(model),
-    outputLimit: options.outputLimit ?? DEFAULT_OUTPUT_LIMIT,
-    prompt: String(prompt),
-    signal: request.signal,
-  });
-  await output.writeStdout(`${requestJson}\n`);
+async function dispatchCodexModelRequest(
+  request,
+  output,
+  requestJson,
+  endpoint,
+  options,
+) {
+  const transport = request.httpTransport;
+  if (typeof transport?.dispatch !== "function") {
+    throw new BrowserCodexBrowserError(
+      "unsupported",
+      "codex-browser model-request requires an HTTP transport",
+      "startup",
+    );
+  }
+  const writer = new ModelResponseWriter(output);
+  await transport.dispatch(
+    {
+      body: encoder.encode(requestJson),
+      headers: [
+        { name: "content-type", value: "application/json" },
+        { name: "accept", value: "text/event-stream, application/json" },
+      ],
+      id: `${request.package.id}:${request.command}`,
+      method: "POST",
+      responseBodyLimit: optionalPositiveInteger(
+        request.env.CODEX_MODEL_RESPONSE_BODY_LIMIT ??
+          options.responseBodyLimit ??
+          DEFAULT_RESPONSE_BODY_LIMIT,
+        "CODEX_MODEL_RESPONSE_BODY_LIMIT",
+      ),
+      timeoutMs: optionalPositiveInteger(
+        request.env.CODEX_MODEL_TIMEOUT_MS ?? options.timeoutMs,
+        "CODEX_MODEL_TIMEOUT_MS",
+        { optional: true },
+      ),
+      url: endpoint,
+    },
+    writer,
+    request.signal,
+  );
+  throwIfAborted(request.signal);
+  if (!isSuccessfulHttpStatus(writer.status)) {
+    throw new BrowserCodexBrowserError(
+      "transport",
+      `codex-browser model request failed with status ${writer.status}`,
+      "runtime",
+      { exitCode: 1 },
+    );
+  }
   return { exitCode: 0 };
+}
+
+class ModelResponseWriter {
+  constructor(output) {
+    this.headers = [];
+    this.output = output;
+    this.status = null;
+  }
+
+  async start(status, headers) {
+    this.status = Number(status);
+    this.headers = headers ?? [];
+  }
+
+  async writeBodyChunk(chunk) {
+    if (this.status != null && !isSuccessfulHttpStatus(this.status)) {
+      return;
+    }
+    await this.output.writeStdout(chunk);
+  }
+
+  async finish(status, headers, body) {
+    this.status = Number(status);
+    this.headers = headers ?? [];
+    const bytes = toUint8Array(body ?? new Uint8Array(), {
+      allowEmpty: true,
+      message: "codex-browser model response body must be bytes",
+      stage: "runtime",
+    });
+    if (isSuccessfulHttpStatus(this.status) && bytes.byteLength > 0) {
+      await this.output.writeStdout(bytes);
+    }
+  }
 }
 
 function callCodexVersion(exports, memory, options) {
@@ -432,7 +532,7 @@ function startsWithBytes(bytes, prefix) {
   return prefix.every((byte, index) => bytes[index] === byte);
 }
 
-function toUint8Array(value) {
+function toUint8Array(value, options = {}) {
   if (value instanceof Uint8Array) {
     return value;
   }
@@ -442,10 +542,13 @@ function toUint8Array(value) {
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   }
+  if (options.allowEmpty && value == null) {
+    return new Uint8Array();
+  }
   throw new BrowserCodexBrowserError(
     "invalid_package",
-    "codex-browser bytes must be a byte buffer",
-    "package_load",
+    options.message ?? "codex-browser bytes must be a byte buffer",
+    options.stage ?? "package_load",
   );
 }
 
@@ -459,6 +562,41 @@ function nonEmptyString(value) {
     );
   }
   return text;
+}
+
+function modelEndpointFromRequest(request, options) {
+  const endpoint =
+    request.args[2] ?? request.env.CODEX_MODEL_ENDPOINT ?? options.endpoint;
+  const text = String(endpoint ?? "").trim();
+  if (!text) {
+    throw new BrowserCodexBrowserError(
+      "invalid_request",
+      "codex-browser model-request requires an endpoint argument",
+      "startup",
+      { exitCode: 2 },
+    );
+  }
+  return text;
+}
+
+function optionalPositiveInteger(value, name, options = {}) {
+  if ((value == null || value === "") && options.optional) {
+    return undefined;
+  }
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number <= 0) {
+    throw new BrowserCodexBrowserError(
+      "invalid_request",
+      `${name} must be a positive integer`,
+      "startup",
+      { exitCode: 2 },
+    );
+  }
+  return number;
+}
+
+function isSuccessfulHttpStatus(status) {
+  return Number.isInteger(status) && status >= 200 && status <= 299;
 }
 
 function throwIfAborted(signal) {

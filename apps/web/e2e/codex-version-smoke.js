@@ -1,5 +1,6 @@
 import {
   assertCodexBrowserRequestPayload,
+  codexBrowserModelRequestFixture,
   codexBrowserRequestBuilderFixture,
 } from "../fixtures/codex-browser-request-builder-core.js";
 import {
@@ -67,6 +68,7 @@ export async function runCodexVersionSmoke() {
     const hardTimeout = await runNonCooperativeTimeout(worker);
     const httpBridge = await runHttpBridgeSmoke(worker);
     const requestBuilder = await runCodexBrowserRequestBuilder(worker);
+    const modelTurn = await runCodexBrowserModelTurn(worker);
 
     return {
       artifactKind: load.loaded.artifactKind,
@@ -74,6 +76,7 @@ export async function runCodexVersionSmoke() {
       exitCode: result.exitCode,
       hardTimeout,
       httpBridge,
+      modelTurn,
       requestBuilder,
       stderr,
       stdout,
@@ -86,6 +89,32 @@ export async function runCodexVersionSmoke() {
   } finally {
     worker.terminate();
   }
+}
+
+async function runCodexBrowserModelTurn(worker) {
+  const url = new URL("./codex-model-response.txt", import.meta.url).href;
+  assert(
+    new URL(url).origin === location.origin,
+    "Codex model fixture should be same-origin",
+  );
+  const fixture = await codexBrowserModelRequestFixture(url);
+  const load = await dispatchAndCollect(worker, fixture.commandLoad);
+  assert(
+    load.loaded.artifactKind === "codex-browser",
+    "Codex browser model package should load",
+  );
+  const run = await dispatchAndCollect(worker, fixture.commandRun);
+  const stdout = chunksText(run.stdout);
+  const stderr = chunksText(run.stderr);
+  assert(stdout === "mock model response\n", "Codex model stdout should match");
+  assert(stderr === "", "Codex model stderr should be empty");
+  return {
+    exitCode: run.complete.result.exitCode,
+    stderr,
+    stdout,
+    stdoutBytes: run.complete.result.stdoutBytes,
+    urlPath: new URL(url).pathname,
+  };
 }
 
 async function runCodexBrowserRequestBuilder(worker) {

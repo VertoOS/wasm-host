@@ -332,9 +332,11 @@ available.
 The browser adapter also has a separate `codex-browser` request-builder path for
 the Codex repo's `wasm32-unknown-unknown` browser artifact. This path validates
 the custom exports, calls `codex_build_request(prompt, model)`, and emits
-generated Responses API request JSON through command stdout. It is intentionally
-not modeled as raw WASI and does not imply full Codex CLI, auth, app-server,
-workspace, tool, or MCP support.
+generated Responses API request JSON through command stdout. It can also run a
+mocked model turn by posting that generated JSON through the browser HTTP bridge
+and streaming local fixture response chunks to stdout. It is intentionally not
+modeled as raw WASI and does not imply real credentials, full Codex CLI, auth,
+app-server, workspace, tool, or MCP support.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,
 hard termination of non-cooperative Wasm, or final WebC/WASIX package

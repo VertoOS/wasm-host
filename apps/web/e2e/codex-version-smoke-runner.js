@@ -93,6 +93,13 @@ async function runCodexVersionSmokePage(page) {
     stdoutBytes: 15,
     urlPath: "/e2e/http-bridge-smoke.txt",
   });
+  assert.deepEqual(status.result.modelTurn, {
+    exitCode: 0,
+    stderr: "",
+    stdout: "mock model response\n",
+    stdoutBytes: 20,
+    urlPath: "/e2e/codex-model-response.txt",
+  });
   assert.equal(status.result.requestBuilder.exitCode, 0);
   assert.equal(status.result.requestBuilder.model, "gpt-5.1");
   assert.equal(status.result.requestBuilder.prompt, "Explain wasm-host");
@@ -105,6 +112,7 @@ async function runCodexVersionSmokePage(page) {
   assert.equal(status.result.workerEntrypoint, "/src/command-worker-entry.js");
   return [
     `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`,
+    `PASS browser Codex model-turn e2e: ${status.result.modelTurn.stdout.trim()}`,
     `PASS browser Codex request-builder e2e: ${status.result.requestBuilder.model}`,
   ].join("\n");
 }

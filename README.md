@@ -57,6 +57,9 @@ until the boundaries are stable enough to split.
   `wasm32-unknown-unknown` custom-export request-builder artifact, call its
   `codex_build_request` ABI, and emit deterministic Responses API request JSON
   through the command worker stdout path.
+- The same `codex-browser` executor can run a mocked model turn by POSTing the
+  generated request JSON through the selected browser HTTP transport and
+  streaming local fixture response chunks to command stdout.
 - The browser adapter package can execute the interim raw WASI preview1
   `codex --version` smoke path with args/env, clocks, random bytes, preloaded
   stdin, cooperative yield, read-only package file reads and positioned reads,

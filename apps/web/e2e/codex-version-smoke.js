@@ -13,6 +13,7 @@ const decoder = new TextDecoder();
 const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAAKCQEHAANADAALCw==",
 );
+const HTTP_BRIDGE_SMOKE_STDOUT = "HTTP_BRIDGE_OK\n";
 
 export async function runCodexVersionSmoke() {
   const manifest = await codexVersionSmokeManifest();
@@ -60,12 +61,14 @@ export async function runCodexVersionSmoke() {
     );
     assert(stderr === fixture.expected.stderr, "Codex stderr should be empty");
     const hardTimeout = await runNonCooperativeTimeout(worker);
+    const httpBridge = await runHttpBridgeSmoke(worker);
 
     return {
       artifactKind: load.loaded.artifactKind,
       artifactUrl,
       exitCode: result.exitCode,
       hardTimeout,
+      httpBridge,
       stderr,
       stdout,
       stdoutBytes: result.stdoutBytes,
@@ -77,6 +80,56 @@ export async function runCodexVersionSmoke() {
   } finally {
     worker.terminate();
   }
+}
+
+async function runHttpBridgeSmoke(worker) {
+  const url = new URL("./http-bridge-smoke.txt", import.meta.url).href;
+  assert(
+    new URL(url).origin === location.origin,
+    "HTTP bridge smoke fixture should be same-origin",
+  );
+  const load = await dispatchAndCollect(worker, {
+    type: "command.load",
+    id: "load-http-smoke",
+    package: {
+      commands: ["http-smoke"],
+      id: "http-smoke",
+      type: "http-smoke",
+    },
+  });
+  assert(load.loaded.packageId === "http-smoke", "HTTP smoke package should load");
+  assert(
+    load.loaded.packageType === "http-smoke",
+    "HTTP smoke package should use the built-in executor",
+  );
+  const run = await dispatchAndCollect(worker, {
+    type: "command.run",
+    id: "run-http-smoke",
+    packageId: "http-smoke",
+    command: "http-smoke",
+    args: [url],
+    timeoutMs: 5000,
+  });
+  const stdout = chunksText(run.stdout);
+  const stderr = chunksText(run.stderr);
+  const result = run.complete.result;
+  assert(
+    result?.exitCode === 0,
+    "HTTP bridge smoke should exit successfully",
+  );
+  assert(
+    stdout === HTTP_BRIDGE_SMOKE_STDOUT,
+    "HTTP bridge smoke stdout should match the fixture",
+  );
+  assert(stderr === "", "HTTP bridge smoke stderr should be empty");
+  return {
+    exitCode: result.exitCode,
+    stderr,
+    stderrBytes: result.stderrBytes,
+    stdout,
+    stdoutBytes: result.stdoutBytes,
+    urlPath: new URL(url).pathname,
+  };
 }
 
 async function runNonCooperativeTimeout(worker) {

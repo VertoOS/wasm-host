@@ -262,6 +262,195 @@ test("BrowserCommandWorkerRuntime preserves HTTP bridge errors for executors", a
   assert.equal(port.messages.at(-1).type, "command.complete");
 });
 
+test("BrowserCommandWorkerRuntime runs the built-in HTTP smoke executor", async () => {
+  const port = recordingPort();
+  const seen = {};
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: {
+      direct: recordingHttpTransport("direct", seen),
+      gateway: recordingHttpTransport("gateway", seen),
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-http-smoke",
+    package: {
+      id: "http-smoke",
+      type: "http-smoke",
+      commands: ["http-smoke"],
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-http-smoke",
+    packageId: "http-smoke",
+    command: "http-smoke",
+    args: ["https://example.test/smoke"],
+    httpTransport: "gateway",
+  });
+
+  assert.deepEqual(port.messages.find((message) => message.id === "load-http-smoke"), {
+    type: "command.loaded",
+    id: "load-http-smoke",
+    artifactKind: null,
+    cache: null,
+    contentSha256: null,
+    entrypoint: "http-smoke",
+    packageId: "http-smoke",
+    packageType: "http-smoke",
+    commands: ["http-smoke"],
+  });
+  assert.deepEqual(seen, {
+    body: "",
+    headers: [],
+    method: "GET",
+    name: "gateway",
+    signalAborted: false,
+    url: "https://example.test/smoke",
+  });
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-http-smoke")),
+    "hello world",
+  );
+  assert.equal(chunksText(stderrChunks(port.messages, "run-http-smoke")), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-http-smoke",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 11,
+      timedOut: false,
+    },
+  });
+});
+
+test("BrowserCommandWorkerRuntime runs HTTP smoke URL from env", async () => {
+  const port = recordingPort();
+  const seen = {};
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: { direct: recordingHttpTransport("direct", seen) },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-http-smoke-env",
+    package: {
+      id: "http-smoke-env",
+      type: "http-smoke",
+      commands: ["http-smoke"],
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-http-smoke-env",
+    packageId: "http-smoke-env",
+    command: "http-smoke",
+    env: {
+      WASM_HOST_HTTP_SMOKE_URL: "https://example.test/from-env",
+    },
+  });
+
+  assert.equal(seen.url, "https://example.test/from-env");
+  assert.equal(port.messages.at(-1).type, "command.complete");
+});
+
+test("BrowserCommandWorkerRuntime reports missing HTTP smoke URLs", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: { direct: recordingHttpTransport("direct", {}) },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-http-smoke-missing-url",
+    package: {
+      id: "http-smoke-missing-url",
+      type: "http-smoke",
+      commands: ["http-smoke"],
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-http-smoke-missing-url",
+    packageId: "http-smoke-missing-url",
+    command: "http-smoke",
+  });
+
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-http-smoke-missing-url",
+    error: {
+      kind: "invalid_request",
+      message: "browser HTTP smoke URL is required",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      exitCode: null,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
+test("BrowserCommandWorkerRuntime reports HTTP smoke status failures", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    port,
+    httpTransports: {
+      direct: {
+        async dispatch(_request, writer) {
+          await writer.finish(503, [], "unavailable");
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-http-smoke-fail",
+    package: {
+      id: "http-smoke",
+      type: "http-smoke",
+      commands: ["http-smoke"],
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-http-smoke-fail",
+    packageId: "http-smoke",
+    command: "http-smoke",
+    args: ["https://example.test/fail"],
+  });
+
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-http-smoke-fail",
+    error: {
+      kind: "transport",
+      message: "browser HTTP smoke request failed with status 503",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 1,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
 test("BrowserCommandWorkerRuntime times out HTTP bridge dispatches", async () => {
   const port = recordingPort();
   let transportSignal = null;
@@ -1169,6 +1358,12 @@ function rejectAbortErrorOnAbort(signal) {
 function stdoutChunks(messages, id) {
   return messages
     .filter((message) => message.type === "command.stdout" && message.id === id)
+    .map((message) => message.chunk);
+}
+
+function stderrChunks(messages, id) {
+  return messages
+    .filter((message) => message.type === "command.stderr" && message.id === id)
     .map((message) => message.chunk);
 }
 

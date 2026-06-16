@@ -18,6 +18,7 @@ test("resolveBrowserPackageSource returns the built-in Codex smoke package", asy
   assert.equal(source.loadMessage.package.artifactKind, "wasi-module");
   assert.equal(source.loadMessage.package.wasiModule.byteLength, 146);
   assert.deepEqual(source.runMessage.args, ["--version"]);
+  assert.equal(source.runMessage.stdinOpen, false);
   assert.equal(source.metadata.sourceKind, "builtin-codex");
 });
 

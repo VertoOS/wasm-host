@@ -18,6 +18,7 @@ import {
 } from "../src/wasi-module.js";
 
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 const ARGV_ECHO_WASM = base64ToBytes(
   "AGFzbQEAAAABFgRgAn9/AX9gBH9/f38Bf2ABfwBgAAAC4AEGFndhc2lfc25hcHNob3RfcHJldmlldzEOYXJnc19zaXplc19nZXQAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGFyZ3NfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRFlbnZpcm9uX3NpemVzX2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzELZW52aXJvbl9nZXQAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAgMCAQMFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQABgpEAUIAQQBBBBAAGkEIQQwQAhpBwABBgAIQARpB4ABBgAQQAxpBgAFBxAAoAgA2AgBBhAFBCTYCAEEBQYABQQFBEBAEGgs=",
@@ -27,12 +28,20 @@ const STDERR_EXIT_WASM = base64ToBytes(
   "AGFzbQEAAAABEANgBH9/f38Bf2ABfwBgAAACRgIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAEDAgECBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAIKFAESAEECQcAAQQFBEBAAGkEHEAELCxkCAEGAAgsEYmFkCgBBwAALCAABAAAEAAAA",
 );
 
+const STDIN_ECHO_WASM = base64ToBytes(
+  "AGFzbQEAAAABEANgBH9/f38Bf2ABfwBgAAACZwMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAEDAgECBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAMKVQFTAEEAQYABNgIAQQRBIDYCAEEAQQBBAUEQEAAaQQRBECgCADYCAEEBQQBBAUEUEAEaQQRBIDYCAEEAQQBBAUEQEAAaQRAoAgBBAEcEQEHGABACCws=",
+);
+
+const STDIN_BADF_WASM = base64ToBytes(
+  "AGFzbQEAAAABEANgBH9/f38Bf2ABfwBgAAACRQIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAQMCAQIFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAgofAR0AQQBBwAA2AgBBBEEINgIAQQNBAEEBQRAQABABCw==",
+);
+
 const MISSING_MEMORY_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABwoBBl9zdGFydAAACgQBAgAL",
 );
 
 const UNSUPPORTED_IMPORT_WASM = base64ToBytes(
-  "AGFzbQEAAAABDAJgBH9/f38Bf2AAAAIiARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3JlYWQAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoEAQIACw==",
+  "AGFzbQEAAAABDAJgBH9+f38Bf2AAAAIiARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3NlZWsAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoPAQ0AQQBCAEEAQRAQABoL",
 );
 
 const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
@@ -164,6 +173,86 @@ test("raw WASI executor captures stderr and proc_exit status", async () => {
   assert.equal(output.stderr, "bad\n");
 });
 
+test("raw WASI executor serves preloaded stdin through fd_read", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor();
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: STDIN_ECHO_WASM,
+    command: "cat",
+    id: "cat",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "cat",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: asyncByteChunks(["hello ", "world\n"]),
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "hello world\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor treats missing stdin as EOF", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor();
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: STDIN_ECHO_WASM,
+    command: "cat",
+    id: "cat",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "cat",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI fd_read reports BADF for non-stdin fds", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor();
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: STDIN_BADF_WASM,
+    command: "badf",
+    id: "badf",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "badf",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: asyncByteChunks(["ignored"]),
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 8 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
 test("raw WASI worker executor forwards output and exit status", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleWorkerExecutor({
@@ -205,6 +294,229 @@ test("raw WASI worker executor forwards output and exit status", async () => {
   );
   assert.deepEqual(secondResult, { exitCode: 0 });
   assert.equal(secondOutput.stdout, "again-run");
+});
+
+test("raw WASI worker executor forwards preloaded stdin", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleWorkerExecutor({
+    createWorker: createNodeWasiWorker,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: STDIN_ECHO_WASM,
+    command: "cat",
+    id: "cat",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "cat",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: asyncByteChunks(["worker ", "stdin\n"]),
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "worker stdin\n");
+  assert.equal(output.stderr, "");
+  assert.equal(packageRecord.bytes.byteLength, STDIN_ECHO_WASM.byteLength);
+});
+
+test("raw WASI worker request carries only preloaded stdin bytes", async () => {
+  const output = recordingOutput();
+  const worker = recordingWasiWorker();
+  const executor = createRawWasiModuleWorkerExecutor({
+    createWorker: () => worker,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: STDIN_ECHO_WASM,
+    command: "cat",
+    id: "cat",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "cat",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: asyncByteChunks(["transfer"]),
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(worker.messages.length, 1);
+  assert.equal(worker.messages[0].type, "wasi.run");
+  assert.equal(worker.messages[0].request.stdin, undefined);
+  assert.deepEqual(
+    worker.messages[0].request.stdinBytes,
+    encoder.encode("transfer"),
+  );
+  assert.deepEqual(worker.transferLists, [
+    [worker.messages[0].request.stdinBytes.buffer],
+  ]);
+  assert.equal(packageRecord.bytes.byteLength, STDIN_ECHO_WASM.byteLength);
+});
+
+test("command worker passes initial stdin to raw WASI modules", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await loadStdinEchoPackage(runtime);
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-cat",
+    packageId: "cat",
+    command: "cat",
+    stdinChunks: [encoder.encode("hello "), encoder.encode("cat\n")],
+  });
+
+  assert.equal(stdoutText(port.messages), "hello cat\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-cat",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 10,
+      timedOut: false,
+    },
+  });
+});
+
+test("command worker preloads streaming stdin before raw WASI start", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await loadStdinEchoPackage(runtime);
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "run-stream-cat",
+    packageId: "cat",
+    command: "cat",
+    stdinOpen: true,
+  });
+  await waitForMessage(
+    port.messages,
+    (message) =>
+      message.type === "command.started" && message.id === "run-stream-cat",
+  );
+  await runtime.handleMessage({
+    type: "command.stdin",
+    id: "run-stream-cat",
+    chunk: encoder.encode("stream "),
+  });
+  await runtime.handleMessage({
+    type: "command.stdin",
+    id: "run-stream-cat",
+    chunk: encoder.encode("stdin\n"),
+  });
+  await runtime.handleMessage({
+    type: "command.stdin.end",
+    id: "run-stream-cat",
+  });
+  await run;
+
+  assert.equal(stdoutText(port.messages), "stream stdin\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assert.equal(port.messages.at(-1).result.stdoutBytes, 13);
+});
+
+test("command worker can cancel raw WASI stdin preload", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await loadStdinEchoPackage(runtime);
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "cancel-cat",
+    packageId: "cat",
+    command: "cat",
+    stdinOpen: true,
+  });
+  await waitForMessage(
+    port.messages,
+    (message) => message.type === "command.started" && message.id === "cancel-cat",
+  );
+  await runtime.handleMessage({ type: "command.cancel", id: "cancel-cat" });
+  await withTimeout(run, 1000, "raw WASI stdin preload cancel did not finish");
+
+  assert.equal(stdoutText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "cancel-cat",
+    error: {
+      kind: "cancelled",
+      message: "browser command cancelled",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: true,
+      exitCode: 130,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
+test("command worker can time out raw WASI stdin preload", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await loadStdinEchoPackage(runtime);
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "timeout-cat",
+    packageId: "cat",
+    command: "cat",
+    stdinOpen: true,
+    timeoutMs: 20,
+  });
+  await withTimeout(run, 1000, "raw WASI stdin preload timeout did not finish");
+
+  assert.equal(stdoutText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "timeout-cat",
+    error: {
+      kind: "timeout",
+      message: "browser command exceeded wall time limit",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 124,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: true,
+    },
+  });
 });
 
 test("raw WASI executor reports command resolution failures", async () => {
@@ -265,7 +577,7 @@ test("raw WASI executor reports invalid modules and unsupported imports", async 
     executor.run(baseRunRequest(unsupportedImport), recordingOutput()),
     (error) => {
       assert.equal(error.kind, "runtime");
-      assert.match(error.message, /fd_read/);
+      assert.match(error.message, /fd_seek/);
       return true;
     },
   );
@@ -411,6 +723,21 @@ function loadLoopPackage(runtime) {
   });
 }
 
+function loadStdinEchoPackage(runtime) {
+  return runtime.handleMessage({
+    type: "command.load",
+    id: "load-cat",
+    package: {
+      artifactKind: "wasi-module",
+      command: "cat",
+      id: "cat",
+      wasiModule: {
+        bytes: STDIN_ECHO_WASM,
+      },
+    },
+  });
+}
+
 function baseRunRequest(packageRecord) {
   return {
     args: [],
@@ -427,8 +754,8 @@ function createNodeWasiWorker() {
   );
   const listeners = new Map();
   return {
-    postMessage(message) {
-      worker.postMessage(message);
+    postMessage(message, transferList) {
+      worker.postMessage(message, transferList);
     },
     terminate() {
       return worker.terminate();
@@ -449,6 +776,46 @@ function createNodeWasiWorker() {
       worker.off(record.eventName, record.wrapped);
     },
   };
+}
+
+function recordingWasiWorker() {
+  const listeners = new Map();
+  return {
+    messages: [],
+    terminated: false,
+    transferLists: [],
+    postMessage(message, transferList = []) {
+      this.messages.push(message);
+      this.transferLists.push(transferList);
+      const listener = listeners.get("message");
+      queueMicrotask(() => {
+        listener?.({
+          data: {
+            type: "wasi.complete",
+            id: message.id,
+            result: { exitCode: 0 },
+          },
+        });
+      });
+    },
+    terminate() {
+      this.terminated = true;
+    },
+    addEventListener(type, listener) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type, listener) {
+      if (listeners.get(type) === listener) {
+        listeners.delete(type);
+      }
+    },
+  };
+}
+
+async function* asyncByteChunks(chunks) {
+  for (const chunk of chunks) {
+    yield typeof chunk === "string" ? encoder.encode(chunk) : chunk;
+  }
 }
 
 function workerEventName(type) {

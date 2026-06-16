@@ -128,6 +128,7 @@ export function normalizeCodexBrowserRunFixture(manifest) {
       args: [...manifest.args],
       env: {},
       cwd: "/workspace",
+      stdinOpen: false,
     },
     expected: {
       exitCode: manifest.expectedExitCode,

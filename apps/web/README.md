@@ -27,6 +27,12 @@ Current scope:
   bytes, verifies optional sha256 pins, normalizes command metadata for
   `command.load`, and derives IndexedDB-safe package/module cache paths from
   content hashes. It does not parse full WebC metadata or execute packages yet.
+- `src/artifact-manifest.js` consumes the interim Codex
+  `codex-wasix/dist/artifact-manifest.json` shape. It validates the raw
+  `wasi-module` `codex --version` contract, normalizes it into command
+  load/run fixture messages, and can fetch artifact bytes through an injectable
+  transport while verifying size and sha256. It does not instantiate or execute
+  the Wasm module yet.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.
@@ -41,6 +47,9 @@ Current scope:
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.
+- `test/artifact-manifest.test.js` covers valid Codex manifest normalization,
+  unsupported capability/artifact cases, fake artifact fetches, size checks,
+  streaming overflow, and sha256 mismatch handling.
 
 Run the web adapter checks:
 

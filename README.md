@@ -58,8 +58,10 @@ until the boundaries are stable enough to split.
   stdin, cooperative yield, read-only package file reads and positioned reads,
   metadata, and
   directory listing, volatile `/tmp` scratch directory create/rename/remove and
-  file advise/allocate/write/positioned-write/renumber/rename/set-times,
-  truncate/sync,
+  file advise/allocate/write/positioned-write/renumber/rename/fd-and-path
+  set-times/truncate/sync,
+  deterministic unsupported results for link/symlink/readlink, poll, signal,
+  and socket imports,
   stdio fd stat, descriptor rights reduction, stdout/stderr, and exit status
   capture for the narrow fixture import set.
 - The browser adapter package has an automated command-worker-boundary smoke

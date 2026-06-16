@@ -71,9 +71,10 @@ Current scope:
   `/workspace` package-file preopen through `fd_prestat_get`,
   `fd_prestat_dir_name`, `path_open`, `path_filestat_get`, `fd_readdir`,
   `fd_filestat_get`, `fd_close`, and file-backed `fd_read`, `fd_seek`, and
-  `fd_tell`, plus `fd_write` and `proc_exit`. It captures stdout/stderr and
+  `fd_tell`, plus a volatile in-memory `/tmp` scratch preopen for create,
+  write, readback, stat, and `path_unlink_file`. It captures stdout/stderr and
   exit status for the interim browser smoke; it is not an interactive
-  TTY/readline, writable filesystem, networking, WASIX, or WebC runtime.
+  TTY/readline, persistent filesystem, networking, WASIX, or WebC runtime.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.
@@ -119,9 +120,9 @@ Current scope:
 - `test/wasi-module.test.js` covers raw WASI module byte loading, argv/env
   plumbing, clocks, random bytes, stdin, read-only package files, stdio fd
   stat, path/file metadata, directory listing and cookies, file seek/tell
-  behavior, stdout/stderr capture, `proc_exit` status mapping, command worker
-  lifecycle integration, and the local Codex version-smoke artifact when it is
-  present.
+  behavior, volatile scratch-file writes, stdout/stderr capture, `proc_exit`
+  status mapping, command worker lifecycle integration, and the local Codex
+  version-smoke artifact when it is present.
 
 Run the web adapter checks:
 

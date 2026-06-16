@@ -55,9 +55,9 @@ until the boundaries are stable enough to split.
   fixture messages, and verify fetched artifact bytes by size and sha256.
 - The browser adapter package can execute the interim raw WASI preview1
   `codex --version` smoke path with args/env, clocks, random bytes, preloaded
-  stdin, read-only package file reads, metadata, and directory listing, stdio
-  fd stat, stdout/stderr, and exit status capture for the narrow fixture import
-  set.
+  stdin, read-only package file reads, metadata, and directory listing,
+  volatile `/tmp` scratch file writes, stdio fd stat, stdout/stderr, and exit
+  status capture for the narrow fixture import set.
 - The browser adapter package has an automated command-worker-boundary smoke
   for the Codex `codex --version` contract, plus an optional local-artifact
   variant when `codex-wasix/dist` outputs are present.

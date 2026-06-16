@@ -40,6 +40,10 @@ const FDSTAT_WASM = base64ToBytes(
   "AGFzbQEAAAABFgRgAn9/AX9gBH9/f38Bf2ABfwBgAAACmgEEFndhc2lfc25hcHNob3RfcHJldmlldzENZmRfZmRzdGF0X2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzETZmRfZmRzdGF0X3NldF9mbGFncwAAFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwMCAgMFAwEAAQYQA38AQQALfwBBIAt/AEEwCwcTAgZtZW1vcnkCAAZfc3RhcnQABQqSAwIGACAAEAMLiAMBAX9BACMAEAAhACAABEBBChAECyMALQAAQQJHBEBBCxAECyMAQQJqLwEAQQBHBEBBDBAECyMAQQhqKQMAQgpSBEBBDRAECyMAQRBqKQMAQgBSBEBBDhAEC0EAQQQQASEAIAAEQEEPEAQLQQAjABAAIQAgAARAQRAQBAsjAEECai8BAEEARwRAQREQBAtBASMAEAAhACAABEBBFBAECyMALQAAQQJHBEBBFRAECyMAQQJqLwEAQQBHBEBBFhAECyMAQQhqKQMAQsgAUgRAQRcQBAsjAEEQaikDAEIAUgRAQRgQBAtBAUEEEAEhACAABEBBGRAEC0ECIwAQACEAIAAEQEEeEAQLIwBBCGopAwBCyABSBEBBHxAEC0ECQQQQASEAIAAEQEEgEAQLIwBB4wA6AABBCSMAEAAhACAAQQhHBEBBKBAECyMALQAAQeMARwRAQSkQBAtBCUEEEAEhACAAQQhHBEBBKhAECyMBQcAANgIAIwFBBGpBCjYCAEEBIwFBASMCEAIaCwsRAQBBwAALCmZkc3RhdC1vawo=",
 );
 
+const CLOCK_RANDOM_WASM = base64ToBytes(
+  "AGFzbQEAAAABHQVgA39+fwF/YAJ/fwF/YAR/f39/AX9gAX8AYAAAArkBBRZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDmNsb2NrX3RpbWVfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQ1jbG9ja19yZXNfZ2V0AAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQpyYW5kb21fZ2V0AAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQACFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAMDAwIDBAUDAQACBhsFfwBBAAt/AEEQC38AQSALfwBBMAt/AEGACAsHEwIGbWVtb3J5AgAGX3N0YXJ0AAYKlQMCBgAgABAEC4sDAQJ/QQAjARABIQAgAARAQQoQBQsjASkDAFAEQEELEAULQQBCACMAEAAhACAABEBBDBAFCyMAKQMAUARAQQ0QBQtBASMBEAEhACAABEBBFBAFCyMBKQMAUARAQRUQBQtBAUIAIwAQACEAIAAEQEEWEAULIwApAwBQBEBBFxAFCyMAQojvmavF6IyRETcDAEEJQgAjABAAIQAgAEEcRwRAQR4QBQsjACkDAEKI75mrxeiMkRFSBEBBHxAFCyMBQpHEzKHUytm7iH83AwBBCSMBEAEhACAAQRxHBEBBIBAFCyMBKQMAQpHEzKHUytm7iH9SBEBBIRAFCyMEQfCiBBACIQAgAARAQSgQBQsjBCgCACMEQQRqKAIAciMEQQhqKAIAIwRBDGooAgByciEBIAFFBEBBKRAFCyMEQdCDBGooAgAjBEHUgwRqKAIAciMEQdiDBGooAgAjBEHcgwRqKAIAcnIhASABRQRAQSoQBQsjAkHAADYCACMCQQRqQRA2AgBBASMCQQEjAxADGgsLFwEAQcAACxBjbG9jay1yYW5kb20tb2sK",
+);
+
 const MISSING_MEMORY_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABwoBBl9zdGFydAAACgQBAgAL",
 );
@@ -283,6 +287,45 @@ test("raw WASI executor supports stdio fd stat imports", async () => {
   assert.equal(output.stderr, "");
 });
 
+test("raw WASI executor supports clock and random imports", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: CLOCK_RANDOM_WASM,
+    command: "clock-random",
+    id: "clock-random",
+  });
+  const randomChunks = [];
+  const originalGetRandomValues = globalThis.crypto.getRandomValues;
+  globalThis.crypto.getRandomValues = (array) => {
+    randomChunks.push(array.byteLength);
+    array.fill(randomChunks.length);
+    return array;
+  };
+
+  let result;
+  try {
+    result = await executor.run(
+      {
+        args: [],
+        command: "clock-random",
+        env: {},
+        package: packageRecord,
+        signal: new AbortController().signal,
+      },
+      output,
+    );
+  } finally {
+    globalThis.crypto.getRandomValues = originalGetRandomValues;
+  }
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.deepEqual(randomChunks, [65536, 4464]);
+  assert.equal(output.stdout, "clock-random-ok\n");
+  assert.equal(output.stderr, "");
+});
+
 test("raw WASI worker executor forwards output and exit status", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleWorkerExecutor({
@@ -469,6 +512,53 @@ test("command worker runs raw WASI modules that inspect stdio fd stat", async ()
       failureStage: null,
       stderrBytes: 0,
       stdoutBytes: 10,
+      timedOut: false,
+    },
+  });
+});
+
+test("command worker runs raw WASI modules that use clock and random imports", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-clock-random",
+    package: {
+      artifactKind: "wasi-module",
+      command: "clock-random",
+      id: "clock-random",
+      wasiModule: {
+        bytes: CLOCK_RANDOM_WASM,
+      },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-clock-random",
+    packageId: "clock-random",
+    command: "clock-random",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.type === "command.loaded",
+  );
+  assert.equal(loaded.artifactKind, "wasi-module");
+  assert.equal(loaded.packageType, "wasi-module");
+  assert.equal(stdoutText(port.messages), "clock-random-ok\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-clock-random",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 16,
       timedOut: false,
     },
   });

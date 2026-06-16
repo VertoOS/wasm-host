@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from wasm_host import HostCommand, Mount, RunOptions, load_library, run
+from wasm_host import ABI_VERSION, HostCommand, Mount, RunOptions, load_library, run
 
 
 @unittest.skipUnless(os.environ.get("WASM_HOST_LIBRARY"), "WASM_HOST_LIBRARY is not set")
@@ -12,6 +12,10 @@ class PythonBindingTests(unittest.TestCase):
 
     def test_version_comes_from_c_abi(self):
         self.assertRegex(self.library.version(), r"^\d+\.\d+\.\d+")
+
+    def test_abi_version_comes_from_c_abi(self):
+        self.assertEqual(ABI_VERSION, 1)
+        self.assertEqual(self.library.abi_version(), ABI_VERSION)
 
     def test_empty_command_returns_error_result(self):
         result = run(RunOptions(webc="missing.webc", command=[]), self.library)

@@ -19,6 +19,7 @@ import (
 const (
 	StatusOK    = int32(C.WASM_HOST_STATUS_OK)
 	StatusError = int32(C.WASM_HOST_STATUS_ERROR)
+	ABIVersion  = uint32(C.WASM_HOST_ABI_VERSION)
 )
 
 type Alias struct {
@@ -72,6 +73,10 @@ func (result Result) ErrorText() string {
 
 func Version() string {
 	return C.GoString(C.wasm_host_version())
+}
+
+func LinkedABIVersion() uint32 {
+	return uint32(C.wasm_host_abi_version())
 }
 
 func ReadOnlyMount(source, target string) Mount {

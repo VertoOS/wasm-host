@@ -10,6 +10,7 @@ from typing import Mapping, Optional, Sequence
 
 WASM_HOST_STATUS_OK = 0
 WASM_HOST_STATUS_ERROR = 1
+ABI_VERSION = 1
 
 
 class WasmHostError(RuntimeError):
@@ -126,6 +127,9 @@ class HostLibrary:
         self._lib.wasm_host_version.argtypes = []
         self._lib.wasm_host_version.restype = ctypes.c_char_p
 
+        self._lib.wasm_host_abi_version.argtypes = []
+        self._lib.wasm_host_abi_version.restype = ctypes.c_uint32
+
         self._lib.wasm_host_run_json.argtypes = [ctypes.c_char_p]
         self._lib.wasm_host_run_json.restype = ctypes.c_void_p
 
@@ -161,6 +165,9 @@ class HostLibrary:
         if value is None:
             raise WasmHostError("wasm_host_version returned null")
         return value.decode("utf-8")
+
+    def abi_version(self) -> int:
+        return int(self._lib.wasm_host_abi_version())
 
     def run_json(self, options_json: str) -> Result:
         raw_result = self._lib.wasm_host_run_json(options_json.encode("utf-8"))

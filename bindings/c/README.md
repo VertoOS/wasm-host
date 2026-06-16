@@ -6,6 +6,10 @@ this layer instead of duplicating runtime behavior.
 
 ## Surface
 
+`wasm_host_version` reports the package version for the linked native library.
+`WASM_HOST_ABI_VERSION` and `wasm_host_abi_version` report the compatibility
+contract for the C ABI and should match at runtime.
+
 `wasm_host_run_json` accepts a UTF-8 JSON object and returns an owned opaque
 result. Callers must release the result with `wasm_host_result_free`.
 

@@ -9,6 +9,10 @@ or native release artifacts need to be independent from the core runtime repo.
 The implementation calls the C ABI in `bindings/c` through cgo and keeps Go
 types as thin wrappers over the shared host contract.
 
+`ABIVersion` is the Go package's compiled-against C ABI version.
+`LinkedABIVersion()` returns the version exported by the linked native library
+so callers can detect mismatched artifacts.
+
 See [`../README.md`](../README.md) for binding distribution and future split
 criteria.
 

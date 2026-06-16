@@ -110,6 +110,12 @@ int main(int argc, char **argv) {
   if (version == NULL || version[0] == '\0') {
     return fail("version should be non-empty");
   }
+  if (WASM_HOST_ABI_VERSION != 1) {
+    return fail("compiled ABI version should be 1");
+  }
+  if (wasm_host_abi_version() != WASM_HOST_ABI_VERSION) {
+    return fail("linked ABI version should match header ABI version");
+  }
 
   WasmHostRunResult *null_result = wasm_host_run_json(NULL);
   if (expect_error_result(null_result, "options_json cannot be null") != 0) {

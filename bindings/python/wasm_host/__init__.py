@@ -1,4 +1,5 @@
 from ._ffi import (
+    ABI_VERSION,
     Alias,
     HostCommand,
     HostLibrary,
@@ -11,6 +12,7 @@ from ._ffi import (
 )
 
 __all__ = [
+    "ABI_VERSION",
     "Alias",
     "HostCommand",
     "HostLibrary",

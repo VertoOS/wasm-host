@@ -22,6 +22,7 @@ const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 const DEFAULT_EVENT_QUEUE_SIZE: usize = 4096;
 const WASM_HOST_STATUS_OK: i32 = 0;
 const WASM_HOST_STATUS_ERROR: i32 = 1;
+const ABI_VERSION: u32 = 1;
 const VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
 
 pub struct WasmHostRunResult {
@@ -85,6 +86,11 @@ struct FfiHostCommand {
 #[no_mangle]
 pub extern "C" fn wasm_host_version() -> *const c_char {
     VERSION.as_ptr().cast()
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_host_abi_version() -> u32 {
+    ABI_VERSION
 }
 
 #[no_mangle]

@@ -12,8 +12,10 @@ typedef struct WasmHostRunResult WasmHostRunResult;
 
 #define WASM_HOST_STATUS_OK 0
 #define WASM_HOST_STATUS_ERROR 1
+#define WASM_HOST_ABI_VERSION 1
 
 const char *wasm_host_version(void);
+uint32_t wasm_host_abi_version(void);
 
 WasmHostRunResult *wasm_host_run_json(const char *options_json);
 

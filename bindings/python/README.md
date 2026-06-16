@@ -9,6 +9,10 @@ The package metadata lives in `pyproject.toml` and publishes the `wasm_host`
 import package. During local development, the wrapper loads the C ABI shared
 library through `WASM_HOST_LIBRARY` or an explicit path.
 
+`ABI_VERSION` is the Python package's compiled-against C ABI version.
+`HostLibrary.abi_version()` returns the version exported by the linked native
+library so callers can detect mismatched artifacts.
+
 See [`../README.md`](../README.md) for binding distribution and future split
 criteria.
 

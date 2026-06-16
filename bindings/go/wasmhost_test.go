@@ -12,6 +12,15 @@ func TestVersionComesFromCABI(t *testing.T) {
 	}
 }
 
+func TestABIVersionComesFromCABI(t *testing.T) {
+	if ABIVersion != 1 {
+		t.Fatalf("compiled ABI version = %d, want 1", ABIVersion)
+	}
+	if LinkedABIVersion() != ABIVersion {
+		t.Fatalf("linked ABI version = %d, want %d", LinkedABIVersion(), ABIVersion)
+	}
+}
+
 func TestEmptyCommandReturnsErrorResult(t *testing.T) {
 	result, err := Run(Options{WebC: "missing.webc", Command: []string{}})
 	if err != nil {
@@ -34,9 +43,9 @@ func TestEmptyCommandReturnsErrorResult(t *testing.T) {
 
 func TestOptionsEncodeStdin(t *testing.T) {
 	payload, err := (Options{
-		WebC:           "missing.webc",
-		Command:        []string{"tool"},
-		Stdin:          []byte("hello"),
+		WebC:    "missing.webc",
+		Command: []string{"tool"},
+		Stdin:   []byte("hello"),
 		HostCommands: []HostCommand{
 			{GuestPath: "/tools/echo", HostCommand: "/bin/echo"},
 		},

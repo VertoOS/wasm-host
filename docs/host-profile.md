@@ -224,6 +224,20 @@ entrypoint through a Node worker and local HTTP fixtures for direct Fetch,
 gateway, streaming body, and cancellation coverage. This is not yet the full
 WebC package startup or browser filesystem runtime.
 
+The initial browser command lifecycle runtime lives in
+`apps/web/src/command-worker.js`. It accepts `command.load` messages for
+package metadata, `command.run` messages with package id, command, argv, env,
+cwd, stdin, timeout, and HTTP transport selection, `command.cancel` messages for
+the active run, and `command.stdin` / `command.stdin.end` /
+`command.stdin.error` messages for streamed input. It emits `command.loaded`,
+`command.started`, `command.stdout`, `command.stderr`, `command.complete`, and
+`command.error` events. Completion payloads mirror the native runner shape at
+the browser message boundary: exit code, stdout/stderr byte counts, failure
+stage, cancellation state, and timeout state. The first built-in `smoke`
+executor is only a lifecycle fixture for worker-boundary tests; real WebC
+package loading, filesystem wiring, and terminal UI integration remain separate
+browser adapter layers.
+
 The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json

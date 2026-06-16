@@ -14,6 +14,14 @@ Current scope:
   `http.request.body.error` messages.
 - `src/http-worker-entry.js` is the browser worker entrypoint for starting the
   HTTP bridge worker runtime.
+- `src/command-worker.js` implements the first browser command lifecycle
+  runtime. It handles `command.load`, `command.run`, `command.cancel`, stdin
+  messages, stdout/stderr events, timeout/cancellation result shaping, and
+  pluggable HTTP bridge transport selection. Its built-in `smoke` executor is a
+  lifecycle fixture only; real WebC package execution still depends on package
+  loading and runtime wiring.
+- `src/command-worker-entry.js` is the browser worker entrypoint for starting
+  the command lifecycle runtime.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.
@@ -21,6 +29,10 @@ Current scope:
   gateway streaming upload/response, timeout, response-limit,
   unavailable-gateway, invalid-gateway-response, stream-error, and cancellation
   scenarios across a real worker message boundary using local HTTP fixtures.
+- `test/command-worker.test.js` and `test/command-worker-entry.test.js` cover
+  command lifecycle success, startup failure, stdin, cancellation, timeout,
+  duplicate-run rejection, HTTP transport selection, and the smoke command
+  across a real worker message boundary.
 
 Run the web adapter checks:
 
@@ -34,5 +46,5 @@ This package should eventually own:
 - WebC worker startup and package loading
 - terminal UI integration
 - OPFS/IndexedDB workspace persistence
-- wiring the HTTP worker runtime into actual WebC execution
+- wiring the command and HTTP worker runtimes into actual WebC execution
 - browser e2e wiring

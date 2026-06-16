@@ -8,19 +8,71 @@ const ERRNO_SUCCESS = 0;
 const ERRNO_BADF = 8;
 const ERRNO_FAULT = 21;
 const ERRNO_INVAL = 28;
+const ERRNO_ISDIR = 31;
+const ERRNO_NOENT = 44;
+const ERRNO_NOTCAPABLE = 76;
 const STDIN_FD = 0;
 const STDOUT_FD = 1;
 const STDERR_FD = 2;
+const WORKSPACE_FD = 3;
+const FIRST_FILE_FD = 4;
 const WASI_CLOCK_REALTIME = 0;
 const WASI_CLOCK_MONOTONIC = 1;
 const WASI_FILETYPE_CHARACTER_DEVICE = 2;
+const WASI_FILETYPE_DIRECTORY = 3;
+const WASI_FILETYPE_REGULAR_FILE = 4;
+const WASI_PREOPENTYPE_DIR = 0;
+const WASI_OFLAGS_CREAT = 1 << 0;
+const WASI_OFLAGS_DIRECTORY = 1 << 1;
+const WASI_OFLAGS_EXCL = 1 << 2;
+const WASI_OFLAGS_TRUNC = 1 << 3;
+const WASI_LOOKUP_SYMLINK_FOLLOW = 1 << 0;
+const WASI_FDFLAGS_APPEND = 1 << 0;
+const WASI_RIGHT_FD_DATASYNC = 1n << 0n;
 const WASI_RIGHT_FD_READ = 1n << 1n;
+const WASI_RIGHT_FD_SEEK = 1n << 2n;
 const WASI_RIGHT_FD_FDSTAT_SET_FLAGS = 1n << 3n;
+const WASI_RIGHT_FD_SYNC = 1n << 4n;
+const WASI_RIGHT_FD_TELL = 1n << 5n;
 const WASI_RIGHT_FD_WRITE = 1n << 6n;
+const WASI_RIGHT_FD_ALLOCATE = 1n << 8n;
+const WASI_RIGHT_PATH_CREATE_DIRECTORY = 1n << 9n;
+const WASI_RIGHT_PATH_CREATE_FILE = 1n << 10n;
+const WASI_RIGHT_PATH_OPEN = 1n << 13n;
+const WASI_RIGHT_PATH_FILESTAT_GET = 1n << 18n;
+const WASI_RIGHT_PATH_FILESTAT_SET_SIZE = 1n << 19n;
+const WASI_RIGHT_PATH_FILESTAT_SET_TIMES = 1n << 20n;
+const WASI_RIGHT_FD_FILESTAT_GET = 1n << 21n;
+const WASI_RIGHT_FD_FILESTAT_SET_SIZE = 1n << 22n;
+const WASI_RIGHT_FD_FILESTAT_SET_TIMES = 1n << 23n;
+const WASI_RIGHT_PATH_UNLINK_FILE = 1n << 26n;
 const WASI_STDIN_RIGHTS =
   WASI_RIGHT_FD_READ | WASI_RIGHT_FD_FDSTAT_SET_FLAGS;
 const WASI_STDOUT_RIGHTS =
   WASI_RIGHT_FD_WRITE | WASI_RIGHT_FD_FDSTAT_SET_FLAGS;
+const WASI_WORKSPACE_RIGHTS =
+  WASI_RIGHT_PATH_OPEN |
+  WASI_RIGHT_PATH_FILESTAT_GET |
+  WASI_RIGHT_FD_FILESTAT_GET;
+const WASI_REGULAR_FILE_RIGHTS =
+  WASI_RIGHT_FD_READ |
+  WASI_RIGHT_FD_SEEK |
+  WASI_RIGHT_FD_FDSTAT_SET_FLAGS |
+  WASI_RIGHT_FD_TELL |
+  WASI_RIGHT_FD_FILESTAT_GET;
+const WASI_WRITE_RIGHTS =
+  WASI_RIGHT_FD_DATASYNC |
+  WASI_RIGHT_FD_SYNC |
+  WASI_RIGHT_FD_WRITE |
+  WASI_RIGHT_FD_ALLOCATE |
+  WASI_RIGHT_PATH_CREATE_DIRECTORY |
+  WASI_RIGHT_PATH_CREATE_FILE |
+  WASI_RIGHT_PATH_FILESTAT_SET_SIZE |
+  WASI_RIGHT_PATH_FILESTAT_SET_TIMES |
+  WASI_RIGHT_FD_FILESTAT_SET_SIZE |
+  WASI_RIGHT_FD_FILESTAT_SET_TIMES |
+  WASI_RIGHT_PATH_UNLINK_FILE;
+const WORKSPACE_PREOPEN_PATH = "/workspace";
 const NANOS_PER_MILLI = 1_000_000n;
 const CLOCK_RESOLUTION_NANOS = NANOS_PER_MILLI;
 const RANDOM_GET_CHUNK_SIZE = 65_536;
@@ -52,6 +104,7 @@ export async function loadRawWasiModulePackage(input = {}) {
   const defaultCommand = normalizeDefaultCommand(input, commands);
   const entrypoint = nonEmptyString(input.entrypoint ?? DEFAULT_ENTRYPOINT);
   const id = nonEmptyString(input.id ?? input.packageId ?? DEFAULT_PACKAGE_ID);
+  const files = normalizeWasiFiles(input.files ?? input.wasiModule?.files);
   const source = normalizeSource(input.source);
   const byteLength = bytes.byteLength;
 
@@ -64,6 +117,7 @@ export async function loadRawWasiModulePackage(input = {}) {
     contentSha256: sha256,
     defaultCommand,
     entrypoint,
+    files,
     id,
     metadata: {
       ...(input.metadata ?? {}),
@@ -71,6 +125,7 @@ export async function loadRawWasiModulePackage(input = {}) {
       byteLength,
       defaultCommand,
       entrypoint,
+      fileCount: files.length,
       sha256,
       source,
       wasi: "preview1",
@@ -135,6 +190,7 @@ export async function runRawWasiModule(request, output, options = {}) {
   const wasi = new WasiPreview1Runtime({
     args: [request.command, ...request.args],
     env: request.env,
+    files: packageRecord.files,
     getInstance: () => instance,
     output,
     signal: request.signal,
@@ -312,6 +368,14 @@ class WasiPreview1Runtime {
     this.getInstance = options.getInstance;
     this.memory = null;
     this.output = options.output;
+    this.files = new Map(
+      (options.files ?? []).map((file) => [
+        file.path,
+        { bytes: toUint8Array(file.bytes), path: file.path },
+      ]),
+    );
+    this.openFiles = new Map();
+    this.nextFileFd = FIRST_FILE_FD;
     this.signal = options.signal;
     this.stdin = toUint8Array(options.stdin ?? new Uint8Array());
     this.stdinOffset = 0;
@@ -339,8 +403,36 @@ class WasiPreview1Runtime {
         this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
       fd_fdstat_get: (fd, fdstatPtr) => this.fdFdstatGet(fd, fdstatPtr),
       fd_fdstat_set_flags: (fd, flags) => this.fdFdstatSetFlags(fd, flags),
+      fd_close: (fd) => this.fdClose(fd),
+      fd_filestat_get: (fd, filestatPtr) =>
+        this.fdFilestatGet(fd, filestatPtr),
+      fd_prestat_dir_name: (fd, pathPtr, pathLen) =>
+        this.fdPrestatDirName(fd, pathPtr, pathLen),
+      fd_prestat_get: (fd, prestatPtr) => this.fdPrestatGet(fd, prestatPtr),
       fd_write: (fd, iovsPtr, iovsLen, nwrittenPtr) =>
         this.fdWrite(fd, iovsPtr, iovsLen, nwrittenPtr),
+      path_open: (
+        fd,
+        dirflags,
+        pathPtr,
+        pathLen,
+        oflags,
+        rightsBase,
+        rightsInheriting,
+        fdflags,
+        openedFdPtr,
+      ) =>
+        this.pathOpen(
+          fd,
+          dirflags,
+          pathPtr,
+          pathLen,
+          oflags,
+          rightsBase,
+          rightsInheriting,
+          fdflags,
+          openedFdPtr,
+        ),
       random_get: (bufferPtr, bufferLength) =>
         this.randomGet(bufferPtr, bufferLength),
       proc_exit: (exitCode) => {
@@ -440,27 +532,38 @@ class WasiPreview1Runtime {
 
   fdRead(fd, iovsPtr, iovsLen, nreadPtr) {
     this.throwIfAborted();
-    if (fd !== STDIN_FD) {
+    if (fd === WORKSPACE_FD) {
+      this.writeU32(nreadPtr, 0);
+      return ERRNO_ISDIR;
+    }
+    const file = this.openFiles.get(fd);
+    if (fd !== STDIN_FD && !file) {
       this.writeU32(nreadPtr, 0);
       return ERRNO_BADF;
     }
 
     let total = 0;
     for (let index = 0; index < iovsLen; index += 1) {
-      if (this.stdinOffset >= this.stdin.byteLength) {
+      const input = file?.bytes ?? this.stdin;
+      const inputOffset = file?.offset ?? this.stdinOffset;
+      if (inputOffset >= input.byteLength) {
         break;
       }
       const iovPtr = iovsPtr + index * 8;
       const dataPtr = this.readU32(iovPtr);
       const dataLength = this.readU32(iovPtr + 4);
-      const available = this.stdin.byteLength - this.stdinOffset;
+      const available = input.byteLength - inputOffset;
       const readLength = Math.min(dataLength, available);
       if (readLength > 0) {
         this.bytes().set(
-          this.stdin.subarray(this.stdinOffset, this.stdinOffset + readLength),
+          input.subarray(inputOffset, inputOffset + readLength),
           dataPtr,
         );
-        this.stdinOffset += readLength;
+        if (file) {
+          file.offset += readLength;
+        } else {
+          this.stdinOffset += readLength;
+        }
         total += readLength;
       }
     }
@@ -470,22 +573,160 @@ class WasiPreview1Runtime {
 
   fdFdstatGet(fd, fdstatPtr) {
     this.throwIfAborted();
-    const rights = stdioRights(fd);
-    if (rights == null) {
+    const stat = this.fdStat(fd);
+    if (!stat) {
       return ERRNO_BADF;
     }
-    this.writeU8(fdstatPtr, WASI_FILETYPE_CHARACTER_DEVICE);
+    this.writeU8(fdstatPtr, stat.filetype);
     this.writeU8(fdstatPtr + 1, 0);
     this.writeU16(fdstatPtr + 2, 0);
     this.writeU32(fdstatPtr + 4, 0);
-    this.writeU64(fdstatPtr + 8, rights);
-    this.writeU64(fdstatPtr + 16, 0n);
+    this.writeU64(fdstatPtr + 8, stat.rights);
+    this.writeU64(fdstatPtr + 16, stat.inheriting ?? 0n);
     return ERRNO_SUCCESS;
   }
 
   fdFdstatSetFlags(fd, _flags) {
     this.throwIfAborted();
-    return stdioRights(fd) == null ? ERRNO_BADF : ERRNO_SUCCESS;
+    return this.fdStat(fd) ? ERRNO_SUCCESS : ERRNO_BADF;
+  }
+
+  fdClose(fd) {
+    this.throwIfAborted();
+    if (this.openFiles.delete(fd)) {
+      return ERRNO_SUCCESS;
+    }
+    return ERRNO_BADF;
+  }
+
+  fdFilestatGet(fd, filestatPtr) {
+    this.throwIfAborted();
+    const stat = this.fdStat(fd);
+    if (!stat) {
+      return ERRNO_BADF;
+    }
+    this.writeFilestat(filestatPtr, stat.filetype, stat.size ?? 0);
+    return ERRNO_SUCCESS;
+  }
+
+  fdPrestatGet(fd, prestatPtr) {
+    this.throwIfAborted();
+    if (fd !== WORKSPACE_FD) {
+      return ERRNO_BADF;
+    }
+    this.writeU32(prestatPtr, WASI_PREOPENTYPE_DIR);
+    this.writeU32(prestatPtr + 4, encodeText(WORKSPACE_PREOPEN_PATH).byteLength);
+    return ERRNO_SUCCESS;
+  }
+
+  fdPrestatDirName(fd, pathPtr, pathLen) {
+    this.throwIfAborted();
+    if (fd !== WORKSPACE_FD) {
+      return ERRNO_BADF;
+    }
+    const path = encodeText(WORKSPACE_PREOPEN_PATH);
+    if ((pathLen >>> 0) < path.byteLength) {
+      return ERRNO_INVAL;
+    }
+    this.bytes().set(path, pathPtr);
+    return ERRNO_SUCCESS;
+  }
+
+  pathOpen(
+    fd,
+    dirflags,
+    pathPtr,
+    pathLen,
+    oflags,
+    rightsBase,
+    rightsInheriting,
+    fdflags,
+    openedFdPtr,
+  ) {
+    this.throwIfAborted();
+    if (fd !== WORKSPACE_FD) {
+      return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
+    }
+    if ((dirflags & ~WASI_LOOKUP_SYMLINK_FOLLOW) !== 0) {
+      return ERRNO_INVAL;
+    }
+    if (
+      (oflags &
+        (WASI_OFLAGS_CREAT |
+          WASI_OFLAGS_DIRECTORY |
+          WASI_OFLAGS_EXCL |
+          WASI_OFLAGS_TRUNC)) !== 0 ||
+      (fdflags & WASI_FDFLAGS_APPEND) !== 0 ||
+      requestsWriteRights(rightsBase) ||
+      requestsWriteRights(rightsInheriting)
+    ) {
+      return ERRNO_NOTCAPABLE;
+    }
+    const path = normalizeWasiPath(this.readString(pathPtr, pathLen));
+    if (!path) {
+      return ERRNO_NOTCAPABLE;
+    }
+    const file = this.files.get(path);
+    if (!file) {
+      return ERRNO_NOENT;
+    }
+    const openedFd = this.nextFileFd;
+    this.nextFileFd += 1;
+    this.openFiles.set(openedFd, {
+      bytes: file.bytes,
+      offset: 0,
+      path,
+    });
+    this.writeU32(openedFdPtr, openedFd);
+    return ERRNO_SUCCESS;
+  }
+
+  fdStat(fd) {
+    const stdioRightsValue = stdioRights(fd);
+    if (stdioRightsValue != null) {
+      return {
+        filetype: WASI_FILETYPE_CHARACTER_DEVICE,
+        inheriting: 0n,
+        rights: stdioRightsValue,
+        size: 0,
+      };
+    }
+    if (fd === WORKSPACE_FD) {
+      return {
+        filetype: WASI_FILETYPE_DIRECTORY,
+        inheriting: WASI_REGULAR_FILE_RIGHTS,
+        rights: WASI_WORKSPACE_RIGHTS,
+        size: 0,
+      };
+    }
+    const file = this.openFiles.get(fd);
+    if (file) {
+      return {
+        filetype: WASI_FILETYPE_REGULAR_FILE,
+        inheriting: 0n,
+        rights: WASI_REGULAR_FILE_RIGHTS,
+        size: file.bytes.byteLength,
+      };
+    }
+    return null;
+  }
+
+  readString(ptr, length) {
+    return decodeText(this.bytes().slice(ptr, ptr + (length >>> 0)));
+  }
+
+  writeFilestat(ptr, filetype, size) {
+    this.writeU64(ptr, 0n);
+    this.writeU64(ptr + 8, 0n);
+    this.writeU8(ptr + 16, filetype);
+    this.writeU8(ptr + 17, 0);
+    this.writeU16(ptr + 18, 0);
+    this.writeU32(ptr + 20, 0);
+    this.writeU64(ptr + 24, 1n);
+    this.writeU64(ptr + 32, BigInt(size));
+    this.writeU64(ptr + 40, 0n);
+    this.writeU64(ptr + 48, 0n);
+    this.writeU64(ptr + 56, 0n);
   }
 
   readU32(ptr) {
@@ -578,6 +819,10 @@ function checkedMemoryRange(start, length, memoryLength) {
   return end;
 }
 
+function requestsWriteRights(rights) {
+  return (BigInt(rights) & WASI_WRITE_RIGHTS) !== 0n;
+}
+
 function stdioRights(fd) {
   switch (fd) {
     case STDIN_FD:
@@ -630,6 +875,77 @@ function validateWasmMagic(bytes) {
       "package_load",
     );
   }
+}
+
+function normalizeWasiFiles(value) {
+  if (value == null) {
+    return [];
+  }
+  const entries = Array.isArray(value)
+    ? value
+    : Object.entries(value).map(([path, bytes]) => ({ bytes, path }));
+  return entries.map((entry) => {
+    const path = normalizePackageFilePath(entry.path ?? entry.name);
+    if (!path) {
+      throw new BrowserWasiModuleError(
+        "invalid_package",
+        "raw WASI module file paths must be relative to /workspace",
+        "package_load",
+      );
+    }
+    return {
+      bytes: wasiFileBytes(entry),
+      path,
+    };
+  });
+}
+
+function wasiFileBytes(entry) {
+  const value =
+    entry.bytes ?? entry.content ?? entry.contents ?? entry.data ?? entry;
+  if (typeof value === "string") {
+    return encodeText(value);
+  }
+  return copyBytes(value);
+}
+
+function normalizePackageFilePath(value) {
+  let path = String(value ?? "");
+  if (path === WORKSPACE_PREOPEN_PATH) {
+    return null;
+  }
+  if (path.startsWith(`${WORKSPACE_PREOPEN_PATH}/`)) {
+    path = path.slice(WORKSPACE_PREOPEN_PATH.length + 1);
+  }
+  if (path.startsWith("/")) {
+    return null;
+  }
+  return normalizeRelativeWasiPath(path);
+}
+
+function normalizeWasiPath(value) {
+  const path = String(value ?? "");
+  if (path.startsWith("/")) {
+    return null;
+  }
+  return normalizeRelativeWasiPath(path);
+}
+
+function normalizeRelativeWasiPath(path) {
+  if (!path || path.includes("\0")) {
+    return null;
+  }
+  const segments = [];
+  for (const segment of path.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      return null;
+    }
+    segments.push(segment);
+  }
+  return segments.length > 0 ? segments.join("/") : null;
 }
 
 function normalizeCommands(input) {
@@ -858,16 +1174,24 @@ function postMessageToWorkerHost(message) {
 
 function stringListBufferSize(values) {
   return values.reduce(
-    (total, value) => total + new TextEncoder().encode(value).byteLength + 1,
+    (total, value) => total + encodeText(value).byteLength + 1,
     0,
   );
 }
 
 function encodeCString(value) {
-  const text = new TextEncoder().encode(value);
+  const text = encodeText(value);
   const result = new Uint8Array(text.byteLength + 1);
   result.set(text);
   return result;
+}
+
+function encodeText(value) {
+  return new TextEncoder().encode(String(value));
+}
+
+function decodeText(value) {
+  return new TextDecoder().decode(value);
 }
 
 async function sha256Hex(bytes) {

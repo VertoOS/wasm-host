@@ -33,7 +33,7 @@ const STDIN_ECHO_WASM = base64ToBytes(
 );
 
 const STDIN_BADF_WASM = base64ToBytes(
-  "AGFzbQEAAAABEANgBH9/f38Bf2ABfwBgAAACRQIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAQMCAQIFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAgofAR0AQQBBwAA2AgBBBEEINgIAQQNBAEEBQRAQABABCw==",
+  "AGFzbQEAAAABEANgBH9/f38Bf2ABfwBgAAACRQIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAQMCAQIFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAgofAR0AQQBBwAE2AgBBBEEINgIAQQlBAEEBQRAQABABCw==",
 );
 
 const FDSTAT_WASM = base64ToBytes(
@@ -42,6 +42,10 @@ const FDSTAT_WASM = base64ToBytes(
 
 const CLOCK_RANDOM_WASM = base64ToBytes(
   "AGFzbQEAAAABHQVgA39+fwF/YAJ/fwF/YAR/f39/AX9gAX8AYAAAArkBBRZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDmNsb2NrX3RpbWVfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQ1jbG9ja19yZXNfZ2V0AAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQpyYW5kb21fZ2V0AAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQACFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAMDAwIDBAUDAQACBhsFfwBBAAt/AEEQC38AQSALfwBBMAt/AEGACAsHEwIGbWVtb3J5AgAGX3N0YXJ0AAYKlQMCBgAgABAEC4sDAQJ/QQAjARABIQAgAARAQQoQBQsjASkDAFAEQEELEAULQQBCACMAEAAhACAABEBBDBAFCyMAKQMAUARAQQ0QBQtBASMBEAEhACAABEBBFBAFCyMBKQMAUARAQRUQBQtBAUIAIwAQACEAIAAEQEEWEAULIwApAwBQBEBBFxAFCyMAQojvmavF6IyRETcDAEEJQgAjABAAIQAgAEEcRwRAQR4QBQsjACkDAEKI75mrxeiMkRFSBEBBHxAFCyMBQpHEzKHUytm7iH83AwBBCSMBEAEhACAAQRxHBEBBIBAFCyMBKQMAQpHEzKHUytm7iH9SBEBBIRAFCyMEQfCiBBACIQAgAARAQSgQBQsjBCgCACMEQQRqKAIAciMEQQhqKAIAIwRBDGooAgByciEBIAFFBEBBKRAFCyMEQdCDBGooAgAjBEHUgwRqKAIAciMEQdiDBGooAgAjBEHcgwRqKAIAcnIhASABRQRAQSoQBQsjAkHAADYCACMCQQRqQRA2AgBBASMCQQEjAxADGgsLFwEAQcAACxBjbG9jay1yYW5kb20tb2sK",
+);
+
+const READ_FILE_WASM = base64ToBytes(
+  "AGFzbQEAAAABLwdgAn9/AX9gA39/fwF/YAl/f39/f35+f38Bf2AEf39/fwF/YAF/AX9gAX8AYAAAAqoCCBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDmZkX3ByZXN0YXRfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRNmZF9wcmVzdGF0X2Rpcl9uYW1lAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwYXRoX29wZW4AAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxD2ZkX2ZpbGVzdGF0X2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAADFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfY2xvc2UABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQABQMDAgUGBQMBAAEGPAp/AEEAC38AQcAAC38AQaABC38AQbABC38AQbQBC38AQbgBC38AQcABC38AQYACC38AQYAEC38AQaAECwcTAgZtZW1vcnkCAAZfc3RhcnQACQqxBAIGACAAEAcLpwQBAn9BAyMAEAAhACAABEBBChAICyMALQAAQQBHBEBBCxAICyMAQQRqKAIAQQpHBEBBDBAIC0EDIwZBChABIQAgAARAQQ0QCAsjBi0AAEEvRwRAQQ4QCAsjBkEJai0AAEHlAEcEQEEPEAgLQQMQBSEAIABBCEcEQEEQEAgLIwIjBzYCACMCQQRqQSA2AgBBAyMCQQEjAxAEIQAgAEEfRwRAQREQCAsjBUHjADYCAEEDQQAjCUELQQBCAkIAQQAjBRACIQAgAEEsRwRAQRQQCAsjBSgCAEHjAEcEQEEVEAgLQQlBACMIQQlBAEICQgBBACMFEAIhACAAQQhHBEBBFhAIC0EBQQAjCEEJQQBCAkIAQQAjBRACIQAgAEHMAEcEQEEXEAgLQQNBACMIQQlBAUICQgBBACMFEAIhACAAQcwARwRAQRgQCAtBA0EAIwhBCUEAQgJCAEEAIwUQAiEAIAAEQEEeEAgLIwUoAgAhASABQQNNBEBBHxAICyABIwEQAyEAIAAEQEEgEAgLIwFBEGotAABBBEcEQEEhEAgLIwFBIGopAwBCDVIEQEEiEAgLIwIjBzYCACMCQQRqQSA2AgAgASMCQQEjAxAEIQAgAARAQSgQCAsjAygCAEENRwRAQSkQCAsgARAFIQAgAARAQSoQCAsgASMCQQEjAxAEIQAgAEEIRwRAQSsQCAsjAiMHNgIAIwJBBGpBDTYCAEEBIwJBASMEEAYaCwshAgBBgAQLCWhlbGxvLnR4dABBoAQLC21pc3NpbmcudHh0",
 );
 
 const MISSING_MEMORY_WASM = base64ToBytes(
@@ -326,6 +330,36 @@ test("raw WASI executor supports clock and random imports", async () => {
   assert.equal(output.stderr, "");
 });
 
+test("raw WASI executor reads packaged files through a workspace preopen", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: READ_FILE_WASM,
+    command: "read-file",
+    files: {
+      "hello.txt": "from package\n",
+    },
+    id: "read-file",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "read-file",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(packageRecord.metadata.fileCount, 1);
+  assert.equal(output.stdout, "from package\n");
+  assert.equal(output.stderr, "");
+});
+
 test("raw WASI worker executor forwards output and exit status", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleWorkerExecutor({
@@ -559,6 +593,59 @@ test("command worker runs raw WASI modules that use clock and random imports", a
       failureStage: null,
       stderrBytes: 0,
       stdoutBytes: 16,
+      timedOut: false,
+    },
+  });
+});
+
+test("command worker runs raw WASI modules with packaged files", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-read-file",
+    package: {
+      artifactKind: "wasi-module",
+      command: "read-file",
+      id: "read-file",
+      wasiModule: {
+        bytes: READ_FILE_WASM,
+        files: [
+          {
+            content: "from package\n",
+            path: "/workspace/hello.txt",
+          },
+        ],
+      },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-read-file",
+    packageId: "read-file",
+    command: "read-file",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.type === "command.loaded",
+  );
+  assert.equal(loaded.artifactKind, "wasi-module");
+  assert.equal(loaded.packageType, "wasi-module");
+  assert.equal(stdoutText(port.messages), "from package\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-read-file",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 13,
       timedOut: false,
     },
   });

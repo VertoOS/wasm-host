@@ -17,7 +17,7 @@ export class BrowserPackageLoaderError extends Error {
 export class BrowserPackageLoader {
   constructor(options = {}) {
     this.cache = options.cache ?? new MemoryPackageCache();
-    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.fetchImpl = options.fetchImpl ?? defaultFetchImpl();
     this.packageBytesLimit =
       options.packageBytesLimit ?? DEFAULT_PACKAGE_BYTES_LIMIT;
   }
@@ -404,6 +404,12 @@ function normalizeSource(source) {
     kind: nonEmptyString(source.kind ?? "bytes"),
     label: nonEmptyString(source.label ?? source.kind ?? "explicit-bytes"),
   };
+}
+
+function defaultFetchImpl() {
+  return typeof globalThis.fetch === "function"
+    ? globalThis.fetch.bind(globalThis)
+    : undefined;
 }
 
 function sanitizeUrlForSource(value) {

@@ -154,7 +154,7 @@ async function resolveManifestJsonSource(input, options) {
 
 async function resolveManifestUrlSource(input, options) {
   const url = nonEmptyString(input.url, "manifest URL is required");
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const fetchImpl = options.fetchImpl ?? defaultFetchImpl();
   if (typeof fetchImpl !== "function") {
     throw new BrowserPackageSourceError(
       "transport",
@@ -190,7 +190,7 @@ async function resolveManifestFixture(manifest, input, options) {
   const file = input.file ?? null;
   const fetchImpl = file
     ? fileBackedFetchImpl(await fileBytes(file))
-    : options.fetchImpl ?? globalThis.fetch;
+    : options.fetchImpl ?? defaultFetchImpl();
   try {
     const { artifactUrl, fixture } = await fetchCodexArtifactBytes(manifest, {
       baseUrl: options.baseUrl,
@@ -434,4 +434,10 @@ function nonEmptyString(value, message) {
     throw new BrowserPackageSourceError("invalid_request", message);
   }
   return text;
+}
+
+function defaultFetchImpl() {
+  return typeof globalThis.fetch === "function"
+    ? globalThis.fetch.bind(globalThis)
+    : undefined;
 }

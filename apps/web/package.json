@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check src/http.js && node --check src/http-worker.js && node --check src/http-worker-entry.js && node --check src/command-worker.js && node --check src/command-worker-entry.js && node --check fixtures/http-worker-entry-fixture.js && node --check fixtures/command-worker-entry-fixture.js && node --check test/http.test.js && node --check test/http-worker.test.js && node --check test/http-worker-entry.test.js && node --check test/command-worker.test.js && node --check test/command-worker-entry.test.js",
+    "check": "node --check src/http.js && node --check src/http-worker.js && node --check src/http-worker-entry.js && node --check src/command-worker.js && node --check src/command-worker-entry.js && node --check src/package-loader.js && node --check fixtures/http-worker-entry-fixture.js && node --check fixtures/command-worker-entry-fixture.js && node --check test/http.test.js && node --check test/http-worker.test.js && node --check test/http-worker-entry.test.js && node --check test/command-worker.test.js && node --check test/command-worker-entry.test.js && node --check test/package-loader.test.js",
     "test": "node --test"
   }
 }

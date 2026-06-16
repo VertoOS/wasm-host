@@ -238,6 +238,18 @@ executor is only a lifecycle fixture for worker-boundary tests; real WebC
 package loading, filesystem wiring, and terminal UI integration remain separate
 browser adapter layers.
 
+The initial browser package loading surface lives in
+`apps/web/src/package-loader.js`. It accepts explicit package bytes or a
+Fetch-backed URL, validates WebC (`\0webc`) and Wasm (`\0asm`) magic bytes,
+hashes content with SHA-256, verifies optional expected hashes, and derives
+browser-safe cache paths under `wasm-host/v1/packages/sha256/` and
+`wasm-host/v1/modules/sha256/`. The loader normalizes command names,
+entrypoints, artifact kind, source metadata, content hash, and cache metadata
+into a `command.load` package shape for the command lifecycle runtime. This is
+only the package input/cache boundary: full WebC metadata parsing, compiled
+module cache persistence, filesystem mounts, and actual WebC/Wasm execution are
+later browser runtime layers.
+
 The terminal gateway uses JSON over `POST` for buffered requests:
 
 ```json

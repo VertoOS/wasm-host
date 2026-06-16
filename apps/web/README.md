@@ -22,6 +22,11 @@ Current scope:
   loading and runtime wiring.
 - `src/command-worker-entry.js` is the browser worker entrypoint for starting
   the command lifecycle runtime.
+- `src/package-loader.js` implements the first browser package loading surface
+  for explicit bytes and Fetch-backed artifacts. It validates WebC/Wasm magic
+  bytes, verifies optional sha256 pins, normalizes command metadata for
+  `command.load`, and derives IndexedDB-safe package/module cache paths from
+  content hashes. It does not parse full WebC metadata or execute packages yet.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.
@@ -33,6 +38,9 @@ Current scope:
   command lifecycle success, startup failure, stdin, cancellation, timeout,
   duplicate-run rejection, HTTP transport selection, and the smoke command
   across a real worker message boundary.
+- `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
+  loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
+  package errors, and handoff into the command lifecycle worker.
 
 Run the web adapter checks:
 

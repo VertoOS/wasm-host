@@ -211,12 +211,16 @@ The initial browser HTTP worker message runtime lives in
 normalized request metadata, optional body chunks, timeouts, and response body
 limits; it accepts `http.cancel` messages for in-flight requests; and it emits
 `http.response.body`, `http.response.complete`, or `http.response.error` events.
-This is the worker-side message layer for pluggable direct/gateway transports.
-`apps/web/src/http-worker-entry.js` starts that runtime in a browser worker
-context. The local worker-boundary harness uses the same entrypoint through a
-Node worker and local HTTP fixtures for direct Fetch, gateway, and cancellation
-coverage. This is not yet the full WebC package startup or browser filesystem
-runtime.
+Streaming uploads use `streamingBody: true` on the dispatch request and then
+send ordered `http.request.body` chunk messages with either `chunk` bytes or
+`chunkBase64`, followed by `http.request.body.end`. Producers can fail the
+stream with `http.request.body.error` and a bridge-shaped `{kind, message}`
+error. This is the worker-side message layer for pluggable direct/gateway
+transports. `apps/web/src/http-worker-entry.js` starts that runtime in a
+browser worker context. The local worker-boundary harness uses the same
+entrypoint through a Node worker and local HTTP fixtures for direct Fetch,
+gateway, streaming body, and cancellation coverage. This is not yet the full
+WebC package startup or browser filesystem runtime.
 
 The terminal gateway uses JSON over `POST` for buffered requests:
 

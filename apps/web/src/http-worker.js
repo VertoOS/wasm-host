@@ -48,8 +48,9 @@ export class HttpBridgeWorkerRuntime {
     this.detach?.();
     this.listener = null;
     this.detach = null;
-    for (const controller of this.inFlight.values()) {
-      controller.abort();
+    for (const record of this.inFlight.values()) {
+      record.controller.abort();
+      record.bodyStream?.cancel();
     }
     this.inFlight.clear();
   }
@@ -65,33 +66,112 @@ export class HttpBridgeWorkerRuntime {
       case "http.cancel":
         this.cancel(message.id);
         break;
+      case "http.request.body":
+        this.handleBodyChunk(message);
+        break;
+      case "http.request.body.end":
+        this.handleBodyEnd(message);
+        break;
+      case "http.request.body.error":
+        this.handleBodyError(message);
+        break;
     }
   }
 
   cancel(id) {
-    this.inFlight.get(id)?.abort();
+    const record = this.inFlight.get(id);
+    if (!record) {
+      return;
+    }
+    record.controller.abort();
+    record.bodyStream?.cancel();
   }
 
   async dispatch(message) {
     const id = message.id ?? message.request?.id;
     const controller = new AbortController();
-    this.inFlight.set(id, controller);
+    const bodyStream = streamingBodyRequested(message)
+      ? new WorkerRequestBodyStream()
+      : null;
+    const record = { controller, bodyStream, reportedError: false };
+    this.inFlight.set(id, record);
     try {
       const transport = this.resolveTransport(message.transport);
       await transport.dispatch(
-        requestFromDispatchMessage(message),
+        requestFromDispatchMessage(message, bodyStream),
         new WorkerResponseWriter(this.port, id),
         controller.signal,
       );
     } catch (error) {
-      postMessageToPort(this.port, {
-        type: "http.response.error",
-        id,
-        error: normalizeBridgeError(error),
-      });
+      if (!record.reportedError) {
+        postMessageToPort(this.port, {
+          type: "http.response.error",
+          id,
+          error: normalizeBridgeError(error),
+        });
+      }
     } finally {
       this.inFlight.delete(id);
     }
+  }
+
+  handleBodyChunk(message) {
+    const record = this.recordForBodyMessage(message);
+    if (!record) {
+      return;
+    }
+    try {
+      record.bodyStream.push(bodyChunkFromMessage(message));
+    } catch (error) {
+      this.failBodyMessage(record, message.id, error);
+    }
+  }
+
+  handleBodyEnd(message) {
+    const record = this.recordForBodyMessage(message);
+    if (!record) {
+      return;
+    }
+    try {
+      record.bodyStream.end();
+    } catch (error) {
+      this.failBodyMessage(record, message.id, error);
+    }
+  }
+
+  handleBodyError(message) {
+    const record = this.recordForBodyMessage(message);
+    if (!record) {
+      return;
+    }
+    this.failBodyMessage(record, message.id, errorFromBodyStreamMessage(message));
+  }
+
+  recordForBodyMessage(message) {
+    const record = this.inFlight.get(message.id);
+    if (record?.bodyStream) {
+      return record;
+    }
+    postMessageToPort(this.port, {
+      type: "http.response.error",
+      id: message.id,
+      error: {
+        kind: "invalid_request",
+        message: "unknown streaming HTTP request body",
+      },
+    });
+    return null;
+  }
+
+  failBodyMessage(record, id, error) {
+    record.reportedError = true;
+    record.bodyStream.fail(error);
+    record.controller.abort();
+    postMessageToPort(this.port, {
+      type: "http.response.error",
+      id,
+      error: normalizeBridgeError(error),
+    });
   }
 
   resolveTransport(name) {
@@ -162,14 +242,107 @@ class WorkerResponseWriter {
   }
 }
 
-function requestFromDispatchMessage(message) {
+class WorkerRequestBodyStream {
+  constructor() {
+    this.chunks = [];
+    this.waiters = [];
+    this.closed = false;
+    this.error = null;
+  }
+
+  push(chunk) {
+    if (this.closed) {
+      throw new HttpBridgeError(
+        "invalid_request",
+        "HTTP request body stream is already closed",
+      );
+    }
+    if (this.error) {
+      throw this.error;
+    }
+    const bytes = toUint8Array(chunk);
+    if (bytes.length === 0) {
+      return;
+    }
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter.resolve(bytes);
+      return;
+    }
+    this.chunks.push(bytes);
+  }
+
+  end() {
+    if (this.closed) {
+      throw new HttpBridgeError(
+        "invalid_request",
+        "HTTP request body stream is already closed",
+      );
+    }
+    this.closed = true;
+    this.resolveWaiters(null);
+  }
+
+  fail(error) {
+    if (this.error) {
+      return;
+    }
+    this.error = normalizeStreamError(error);
+    this.rejectWaiters(this.error);
+  }
+
+  cancel() {
+    this.fail(new HttpBridgeError("cancelled", "HTTP request cancelled"));
+  }
+
+  readChunk() {
+    if (this.chunks.length > 0) {
+      return Promise.resolve(this.chunks.shift());
+    }
+    if (this.error) {
+      return Promise.reject(this.error);
+    }
+    if (this.closed) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve, reject) => {
+      this.waiters.push({ resolve, reject });
+    });
+  }
+
+  async *[Symbol.asyncIterator]() {
+    while (true) {
+      const chunk = await this.readChunk();
+      if (chunk == null) {
+        return;
+      }
+      yield chunk;
+    }
+  }
+
+  resolveWaiters(value) {
+    const waiters = this.waiters.splice(0);
+    for (const waiter of waiters) {
+      waiter.resolve(value);
+    }
+  }
+
+  rejectWaiters(error) {
+    const waiters = this.waiters.splice(0);
+    for (const waiter of waiters) {
+      waiter.reject(error);
+    }
+  }
+}
+
+function requestFromDispatchMessage(message, bodyStream = null) {
   const request = message.request ?? {};
   return {
     id: request.id ?? message.id,
     method: request.method,
     url: request.url,
     headers: normalizeHeaders(request.headers ?? []),
-    body: requestBodyFromMessage(request),
+    body: requestBodyFromMessage(request, bodyStream),
     gatewayResponseLimit:
       request.gatewayResponseLimit ?? message.gatewayResponseLimit,
     responseBodyLimit: request.responseBodyLimit ?? message.responseBodyLimit,
@@ -177,7 +350,16 @@ function requestFromDispatchMessage(message) {
   };
 }
 
-function requestBodyFromMessage(request) {
+function requestBodyFromMessage(request, bodyStream = null) {
+  if (bodyStream) {
+    if (hasBufferedBody(request)) {
+      throw new HttpBridgeError(
+        "invalid_request",
+        "streaming HTTP request bodies cannot include buffered body fields",
+      );
+    }
+    return bodyStream;
+  }
   if (request.body != null) {
     return toUint8Array(request.body);
   }
@@ -191,6 +373,57 @@ function requestBodyFromMessage(request) {
     return request.bodyChunksBase64.map(base64ToBytes);
   }
   return null;
+}
+
+function streamingBodyRequested(message) {
+  return message.streamingBody === true || message.request?.streamingBody === true;
+}
+
+function hasBufferedBody(request) {
+  return (
+    request.body != null ||
+    request.bodyBase64 != null ||
+    request.bodyChunks != null ||
+    request.bodyChunksBase64 != null
+  );
+}
+
+function bodyChunkFromMessage(message) {
+  const hasChunk = message.chunk != null;
+  const hasChunkBase64 = message.chunkBase64 != null;
+  if (hasChunk === hasChunkBase64) {
+    throw new HttpBridgeError(
+      "invalid_request",
+      "HTTP request body messages must include exactly one chunk",
+    );
+  }
+  return hasChunk ? toUint8Array(message.chunk) : base64ToBytes(message.chunkBase64);
+}
+
+function errorFromBodyStreamMessage(message) {
+  const error = message.error ?? {};
+  const kind =
+    typeof error.kind === "string" && error.kind.trim()
+      ? error.kind.trim()
+      : "transport";
+  const text =
+    typeof error.message === "string" && error.message
+      ? error.message
+      : "HTTP request body producer failed";
+  return new HttpBridgeError(kind, text);
+}
+
+function normalizeStreamError(error) {
+  if (error instanceof HttpBridgeError) {
+    return error;
+  }
+  if (typeof error?.kind === "string") {
+    return new HttpBridgeError(error.kind, String(error.message ?? ""));
+  }
+  return new HttpBridgeError(
+    "transport",
+    error?.message ?? "HTTP request body stream failed",
+  );
 }
 
 function normalizeHeaders(headers) {

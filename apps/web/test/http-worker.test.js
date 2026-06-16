@@ -187,6 +187,202 @@ test("HttpBridgeWorkerRuntime cancels in-flight dispatches", async () => {
   assert.equal(runtime.inFlight.size, 0);
 });
 
+test("HttpBridgeWorkerRuntime streams request body messages", async () => {
+  const port = recordingPort();
+  const seen = {};
+  const runtime = createHttpBridgeWorkerRuntime({
+    port,
+    transports: {
+      direct: {
+        async dispatch(request, writer) {
+          seen.bodyText = await asyncChunksText(request.body);
+          await writer.finish(200, [{ name: "x-stream", value: "yes" }]);
+        },
+      },
+    },
+  });
+
+  const dispatch = runtime.handleMessage({
+    type: "http.dispatch",
+    id: "stream-1",
+    request: {
+      method: "POST",
+      url: "https://example.test/stream",
+      headers: [],
+      streamingBody: true,
+    },
+  });
+  await tick();
+  await runtime.handleMessage({
+    type: "http.request.body",
+    id: "stream-1",
+    chunk: "hello ",
+  });
+  await runtime.handleMessage({
+    type: "http.request.body",
+    id: "stream-1",
+    chunkBase64: "d29ybGQ=",
+  });
+  await runtime.handleMessage({ type: "http.request.body.end", id: "stream-1" });
+  await dispatch;
+
+  assert.equal(seen.bodyText, "hello world");
+  assert.deepEqual(port.messages, [
+    {
+      type: "http.response.complete",
+      id: "stream-1",
+      status: 200,
+      headers: [{ name: "x-stream", value: "yes" }],
+      body: new Uint8Array(),
+    },
+  ]);
+});
+
+test("HttpBridgeWorkerRuntime propagates streaming body producer failures", async () => {
+  const port = recordingPort();
+  const runtime = createHttpBridgeWorkerRuntime({
+    port,
+    transports: {
+      direct: {
+        async dispatch(request) {
+          await asyncChunksText(request.body);
+        },
+      },
+    },
+  });
+
+  const dispatch = runtime.handleMessage({
+    type: "http.dispatch",
+    id: "stream-2",
+    request: {
+      method: "POST",
+      url: "https://example.test/stream-error",
+      headers: [],
+      streamingBody: true,
+    },
+  });
+  await tick();
+  await runtime.handleMessage({
+    type: "http.request.body.error",
+    id: "stream-2",
+    error: { kind: "transport", message: "producer failed" },
+  });
+  await dispatch;
+
+  assert.deepEqual(port.messages, [
+    {
+      type: "http.response.error",
+      id: "stream-2",
+      error: { kind: "transport", message: "producer failed" },
+    },
+  ]);
+});
+
+test("HttpBridgeWorkerRuntime cancels pending streaming body readers", async () => {
+  const port = recordingPort();
+  const runtime = createHttpBridgeWorkerRuntime({
+    port,
+    transports: {
+      direct: {
+        async dispatch(request) {
+          await asyncChunksText(request.body);
+        },
+      },
+    },
+  });
+
+  const dispatch = runtime.handleMessage({
+    type: "http.dispatch",
+    id: "stream-3",
+    request: {
+      method: "POST",
+      url: "https://example.test/stream-cancel",
+      headers: [],
+      streamingBody: true,
+    },
+  });
+  await tick();
+  await runtime.handleMessage({ type: "http.cancel", id: "stream-3" });
+  await dispatch;
+
+  assert.deepEqual(port.messages, [
+    {
+      type: "http.response.error",
+      id: "stream-3",
+      error: { kind: "cancelled", message: "HTTP request cancelled" },
+    },
+  ]);
+});
+
+test("HttpBridgeWorkerRuntime rejects unknown body stream messages", async () => {
+  const port = recordingPort();
+  const runtime = createHttpBridgeWorkerRuntime({
+    port,
+    transports: { direct: recordingTransport("direct", []) },
+  });
+
+  await runtime.handleMessage({
+    type: "http.request.body",
+    id: "missing-stream",
+    chunk: "orphan",
+  });
+
+  assert.deepEqual(port.messages, [
+    {
+      type: "http.response.error",
+      id: "missing-stream",
+      error: {
+        kind: "invalid_request",
+        message: "unknown streaming HTTP request body",
+      },
+    },
+  ]);
+});
+
+test("HttpBridgeWorkerRuntime rejects malformed body stream chunks once", async () => {
+  const port = recordingPort();
+  const runtime = createHttpBridgeWorkerRuntime({
+    port,
+    transports: {
+      direct: {
+        async dispatch(request) {
+          await asyncChunksText(request.body);
+        },
+      },
+    },
+  });
+
+  const dispatch = runtime.handleMessage({
+    type: "http.dispatch",
+    id: "stream-4",
+    request: {
+      method: "POST",
+      url: "https://example.test/stream-invalid",
+      headers: [],
+      streamingBody: true,
+    },
+  });
+  await tick();
+  await runtime.handleMessage({
+    type: "http.request.body",
+    id: "stream-4",
+    chunk: "bad",
+    chunkBase64: "YmFk",
+  });
+  await dispatch;
+
+  assert.deepEqual(port.messages, [
+    {
+      type: "http.response.error",
+      id: "stream-4",
+      error: {
+        kind: "invalid_request",
+        message: "HTTP request body messages must include exactly one chunk",
+      },
+    },
+  ]);
+});
+
 test("HttpBridgeWorkerRuntime can attach to a worker-style port", async () => {
   const port = eventPort();
   const runtime = createHttpBridgeWorkerRuntime({
@@ -275,6 +471,14 @@ function eventPort() {
 function chunksText(chunks) {
   const bytes = concatChunks(chunks);
   return decoder.decode(bytes);
+}
+
+async function asyncChunksText(chunks) {
+  const result = [];
+  for await (const chunk of chunks) {
+    result.push(chunk);
+  }
+  return chunksText(result);
 }
 
 function concatChunks(chunks) {

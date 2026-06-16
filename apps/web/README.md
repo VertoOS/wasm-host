@@ -9,13 +9,17 @@ Current scope:
   surfaces for browser workers.
 - `src/http-worker.js` implements a small worker-side message runtime that
   dispatches serialized HTTP bridge requests through pluggable transports.
+  Buffered bodies can travel on `http.dispatch`; streaming uploads use
+  `streamingBody: true` plus `http.request.body`, `http.request.body.end`, and
+  `http.request.body.error` messages.
 - `src/http-worker-entry.js` is the browser worker entrypoint for starting the
   HTTP bridge worker runtime.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.
-- `test/http-worker-entry.test.js` runs direct Fetch, gateway, and cancellation
-  scenarios across a real worker message boundary using local HTTP fixtures.
+- `test/http-worker-entry.test.js` runs direct Fetch, gateway, streaming body,
+  and cancellation scenarios across a real worker message boundary using local
+  HTTP fixtures.
 
 Run the web adapter checks:
 

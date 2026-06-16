@@ -32,6 +32,59 @@ test("HTTP worker entry dispatches direct Fetch through worker messages", async 
   }
 });
 
+test("HTTP worker entry streams direct Fetch request bodies", async () => {
+  let captured = null;
+  const server = await localHttpServer(async (request, response) => {
+    captured = {
+      method: request.method,
+      url: request.url,
+      body: await readRequestText(request),
+    };
+    response.writeHead(210, { "Content-Type": "text/plain" });
+    response.end("stream-ok");
+  });
+  const worker = createHttpWorker();
+  try {
+    const result = dispatchAndCollect(worker, {
+      type: "http.dispatch",
+      id: "direct-stream-1",
+      request: {
+        method: "POST",
+        url: `${server.url}/stream`,
+        headers: [{ name: "content-type", value: "text/plain" }],
+        streamingBody: true,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    worker.postMessage({
+      type: "http.request.body",
+      id: "direct-stream-1",
+      chunk: "hello ",
+    });
+    worker.postMessage({
+      type: "http.request.body",
+      id: "direct-stream-1",
+      chunkBase64: "d29ybGQ=",
+    });
+    worker.postMessage({
+      type: "http.request.body.end",
+      id: "direct-stream-1",
+    });
+
+    const response = await result;
+    assert.deepEqual(captured, {
+      method: "POST",
+      url: "/stream",
+      body: "hello world",
+    });
+    assert.equal(response.complete.status, 210);
+    assert.equal(chunksText(response.bodyChunks), "stream-ok");
+  } finally {
+    await worker.terminate();
+    await server.close();
+  }
+});
+
 test("HTTP worker entry dispatches gateway requests through worker messages", async () => {
   let captured = null;
   const server = await localHttpServer(async (request, response) => {

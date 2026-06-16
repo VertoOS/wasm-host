@@ -42,6 +42,9 @@ until the boundaries are stable enough to split.
 - The browser adapter package can execute the interim raw WASI preview1
   `codex --version` smoke path with args/env, stdout/stderr, and exit status
   capture for the narrow fixture import set.
+- The browser adapter package has an automated command-worker-boundary smoke
+  for the Codex `codex --version` contract, plus an optional local-artifact
+  variant when `codex-wasix/dist` outputs are present.
 - C ABI and initial Python/Go binding smoke tests are implemented, including
   generated WebC success-path fixtures.
 - Full browser WebC/WASIX runtime wiring, packaged runtime artifacts, and full
@@ -178,7 +181,8 @@ with `WASM_HOST_GO_COMMAND` and `WASM_HOST_GO_ARGS`.
 The browser adapter package currently owns direct Fetch and gateway-backed
 transport code, initial HTTP and command worker message runtimes, a package
 loader/cache boundary, the interim Codex artifact manifest consumer, the narrow
-raw WASI preview1 smoke executor, and deterministic
+raw WASI preview1 smoke executor, command-worker-boundary Codex version smoke,
+and deterministic
 browser-networking/lifecycle/loading tests. Run them with:
 
 ```sh

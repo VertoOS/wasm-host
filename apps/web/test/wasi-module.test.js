@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import test from "node:test";
 
+import {
+  hasLocalCodexVersionSmokeArtifact,
+  readLocalCodexVersionSmokeArtifact,
+} from "../fixtures/codex-version-smoke-fixture.js";
 import {
   fetchCodexArtifactBytes,
   parseArtifactManifestJson,
@@ -31,13 +32,6 @@ const MISSING_MEMORY_WASM = base64ToBytes(
 const UNSUPPORTED_IMPORT_WASM = base64ToBytes(
   "AGFzbQEAAAABDAJgBH9/f38Bf2AAAAIiARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3JlYWQAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoEAQIACw==",
 );
-
-const CODEX_MANIFEST_PATH =
-  process.env.WASM_HOST_CODEX_ARTIFACT_MANIFEST ??
-  "/home/codex/.codex/worktrees/a29d/codex/codex-wasix/dist/artifact-manifest.json";
-const CODEX_WASM_PATH =
-  process.env.WASM_HOST_CODEX_SMOKE_WASM ??
-  resolve(dirname(CODEX_MANIFEST_PATH), "codex-version-smoke.wasm");
 
 test("loadRawWasiModulePackage validates explicit raw WASI module bytes", async () => {
   const expectedSha256 = await sha256Hex(ARGV_ECHO_WASM);
@@ -232,15 +226,16 @@ test(
   "local Codex version-smoke artifact runs through the browser WASI executor",
   {
     skip:
-      !existsSync(CODEX_MANIFEST_PATH) || !existsSync(CODEX_WASM_PATH)
+      !hasLocalCodexVersionSmokeArtifact()
         ? "local Codex WASI artifact is not available"
         : false,
   },
   async () => {
+    const { bytes: artifactBytes, manifestText } =
+      await readLocalCodexVersionSmokeArtifact();
     const manifest = parseArtifactManifestJson(
-      await readFile(CODEX_MANIFEST_PATH, "utf8"),
+      manifestText,
     );
-    const artifactBytes = new Uint8Array(await readFile(CODEX_WASM_PATH));
     const { fixture } = await fetchCodexArtifactBytes(manifest, {
       fetchImpl: async () =>
         new Response(artifactBytes, {

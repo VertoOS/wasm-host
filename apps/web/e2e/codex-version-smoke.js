@@ -4,6 +4,10 @@ import {
   codexVersionSmokeManifest,
 } from "../fixtures/codex-version-smoke-core.js";
 import { fetchCodexArtifactBytes } from "../src/artifact-manifest.js";
+import {
+  createBrowserTerminalSession,
+  createTerminalTranscript,
+} from "../src/terminal.js";
 
 const decoder = new TextDecoder();
 
@@ -29,9 +33,14 @@ export async function runCodexVersionSmoke() {
   );
   try {
     const load = await dispatchAndCollect(worker, fixture.commandLoad);
-    const run = await dispatchAndCollect(worker, fixture.commandRun);
-    const stdout = chunksText(run.stdout);
-    const stderr = chunksText(run.stderr);
+    const transcript = createTerminalTranscript();
+    const terminal = createBrowserTerminalSession({
+      port: worker,
+      sink: transcript.sink,
+    });
+    const result = await terminal.start(fixture.commandRun);
+    const stdout = transcript.stdoutText();
+    const stderr = transcript.stderrText();
 
     assert(load.loaded.packageId === "codex", "Codex package should load");
     assert(
@@ -39,7 +48,7 @@ export async function runCodexVersionSmoke() {
       "Codex package should load as a raw WASI module",
     );
     assert(
-      run.complete.result.exitCode === fixture.expected.exitCode,
+      result.exitCode === fixture.expected.exitCode,
       "Codex version smoke should exit successfully",
     );
     assert(
@@ -51,10 +60,10 @@ export async function runCodexVersionSmoke() {
     return {
       artifactKind: load.loaded.artifactKind,
       artifactUrl,
-      exitCode: run.complete.result.exitCode,
+      exitCode: result.exitCode,
       stderr,
       stdout,
-      stdoutBytes: run.complete.result.stdoutBytes,
+      stdoutBytes: result.stdoutBytes,
       workerEntrypoint: new URL(
         "../src/command-worker-entry.js",
         import.meta.url,
@@ -83,6 +92,12 @@ function dispatchAndCollect(worker, message) {
         return;
       }
       if (data.type === "command.started") {
+        return;
+      }
+      if (
+        data.type === "command.stdout.close" ||
+        data.type === "command.stderr.close"
+      ) {
         return;
       }
       cleanup();

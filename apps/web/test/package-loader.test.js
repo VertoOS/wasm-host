@@ -130,6 +130,7 @@ test("command lifecycle worker loads package bytes through BrowserPackageLoader"
       command: "smoke",
       executorType: "smoke",
       id: "worker-pkg",
+      source: { kind: "url", label: "data: URL" },
     },
   });
   await runtime.handleMessage({
@@ -176,6 +177,16 @@ test("BrowserPackageLoader loads URL-backed Wasm bytes without external network"
   assert.deepEqual(record.source, {
     kind: "url",
     label: "https://example.test/pkg.wasm",
+  });
+
+  const dataRecord = await loader.loadUrl({
+    command: "main",
+    id: "data-pkg",
+    url: "data:application/octet-stream;base64,AGFzbQAAAAA=",
+  });
+  assert.deepEqual(dataRecord.source, {
+    kind: "url",
+    label: "data: URL",
   });
 });
 

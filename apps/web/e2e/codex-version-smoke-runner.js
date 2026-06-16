@@ -81,7 +81,8 @@ async function runTerminalShellPage(page) {
   await page.send("Log.enable");
 
   const ready = await waitForTerminalShellStatus(page, { timeoutMs: 15000 });
-  assert.equal(ready.status, "ready", ready.error?.message);
+  assert.equal(ready.status, "ready", terminalStatusMessage(ready));
+  assert.equal(ready.packageSource.metadata.packageId, "codex");
 
   await page.send("Runtime.evaluate", {
     expression: `
@@ -96,12 +97,60 @@ async function runTerminalShellPage(page) {
     returnByValue: true,
   });
 
-  const status = await waitForTerminalShellStatus(page, { timeoutMs: 15000 });
-  assert.equal(status.status, "passed", status.error?.message);
+  const status = await waitForTerminalShellStatus(page, {
+    expectedOutputPrefix: "codex-cli ",
+    timeoutMs: 15000,
+  });
+  assert.equal(status.status, "passed", terminalStatusMessage(status));
   assert.equal(status.result.exitCode, 0);
   assert.match(status.output, /^codex-cli /);
   assert.deepEqual(status.size, { columns: "96", rows: "28" });
-  return `PASS browser terminal shell e2e: ${status.output.trim()}`;
+
+  await page.send("Runtime.evaluate", {
+    expression: `
+      (() => {
+        const bytes = new Uint8Array([0, 119, 101, 98, 99, 115, 109, 111, 107, 101]);
+        const encoded = btoa(String.fromCharCode(...bytes));
+        const source = document.querySelector("[data-package-source]");
+        source.value = "package-url";
+        source.dispatchEvent(new Event("change", { bubbles: true }));
+        document.querySelector("[data-package-url]").value =
+          "data:application/octet-stream;base64," + encoded;
+        document.querySelector("[data-package-id]").value = "url-smoke";
+        document.querySelector("[data-package-command]").value = "smoke";
+        document.querySelector("[data-package-args]").value = "";
+        document.querySelector("[data-package-executor]").value = "smoke";
+        document.querySelector("[data-package-apply]").click();
+        return true;
+      })()
+    `,
+    returnByValue: true,
+  });
+
+  const packageStatus = await waitForPackageSourceStatus(page, {
+    packageId: "url-smoke",
+    timeoutMs: 15000,
+  });
+  assert.equal(packageStatus.phase, "ready", packageStatus.error?.message);
+  assert.equal(packageStatus.metadata.sourceLabel, "data: URL");
+  assert.equal(packageStatus.metadata.artifactKind, "webc-package");
+
+  await page.send("Runtime.evaluate", {
+    expression: 'document.querySelector("[data-terminal-run]").click()',
+    returnByValue: true,
+  });
+  const urlStatus = await waitForTerminalShellStatus(page, {
+    expectedOutputPrefix: "BROWSER_SMOKE_OK",
+    timeoutMs: 15000,
+  });
+  assert.equal(urlStatus.status, "passed", terminalStatusMessage(urlStatus));
+  assert.equal(urlStatus.result.exitCode, 0);
+  assert.match(urlStatus.output, /^BROWSER_SMOKE_OK/);
+
+  return [
+    `PASS browser terminal shell e2e: ${status.output.trim()}`,
+    `PASS browser package URL shell e2e: ${urlStatus.output.trim()}`,
+  ].join("\\n");
 }
 
 function skipReason() {
@@ -320,14 +369,25 @@ async function waitForSmokeStatus(page, options = {}) {
 
 async function waitForTerminalShellStatus(page, options = {}) {
   const deadline = Date.now() + (options.timeoutMs ?? 10000);
+  let lastStatus = null;
   while (Date.now() < deadline) {
     const evaluation = await page.send("Runtime.evaluate", {
       expression: "window.__wasmHostTerminalShellStatus",
       returnByValue: true,
     });
     const status = evaluation.result?.value;
-    if (status?.status === "ready" || status?.status === "passed") {
+    lastStatus = status ?? lastStatus;
+    if (status?.status === "ready" && !options.expectedOutputPrefix) {
       return status;
+    }
+    if (status?.status === "passed") {
+      const output = String(status.output ?? "");
+      if (
+        !options.expectedOutputPrefix ||
+        output.startsWith(options.expectedOutputPrefix)
+      ) {
+        return status;
+      }
     }
     if (status?.status === "failed") {
       return status;
@@ -335,7 +395,44 @@ async function waitForTerminalShellStatus(page, options = {}) {
     await delay(100);
   }
   throw new Error(
-    `timed out waiting for terminal shell status: ${JSON.stringify(page.events)}`,
+    `timed out waiting for terminal shell status: ${JSON.stringify({
+      lastStatus,
+      events: page.events,
+    })}`,
+  );
+}
+
+function terminalStatusMessage(status) {
+  return JSON.stringify({
+    error: status?.error ?? null,
+    output: status?.output ?? "",
+    phase: status?.phase ?? null,
+    result: status?.result ?? null,
+    status: status?.status ?? null,
+  });
+}
+
+async function waitForPackageSourceStatus(page, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? 10000);
+  while (Date.now() < deadline) {
+    const evaluation = await page.send("Runtime.evaluate", {
+      expression: "window.__wasmHostTerminalShellStatus?.packageSource",
+      returnByValue: true,
+    });
+    const status = evaluation.result?.value;
+    if (status?.phase === "error") {
+      return status;
+    }
+    if (
+      status?.phase === "ready" &&
+      (!options.packageId || status.metadata?.packageId === options.packageId)
+    ) {
+      return status;
+    }
+    await delay(100);
+  }
+  throw new Error(
+    `timed out waiting for package source status: ${JSON.stringify(page.events)}`,
   );
 }
 

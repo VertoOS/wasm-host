@@ -40,6 +40,10 @@ until the boundaries are stable enough to split.
   renders command output, accepts typed or pasted stdin, propagates resize,
   EOF, and cancellation controls, and runs the Codex version smoke through the
   real browser command worker.
+- The browser terminal shell has package source controls for the built-in Codex
+  smoke, uploaded package bytes, package URLs, manifest JSON, and manifest URLs;
+  selected sources are normalized through the package loader or artifact
+  manifest boundaries before the worker runs them.
 - The browser adapter package has an initial package loader for explicit bytes
   and Fetch-backed WebC/Wasm artifacts, including magic-byte validation,
   optional sha256 pinning, command metadata normalization, and browser-safe
@@ -194,8 +198,8 @@ transport code, initial HTTP and command worker message runtimes, a package
 loader/cache boundary, the interim Codex artifact manifest consumer, the narrow
 raw WASI preview1 smoke executor, command-worker-boundary Codex version smoke,
 real-browser Codex version smoke, a terminal/stdio adapter, an interactive
-terminal UI shell, and deterministic browser-networking/lifecycle/loading tests.
-Run them with:
+terminal UI shell, package source controls, and deterministic
+browser-networking/lifecycle/loading tests. Run them with:
 
 ```sh
 npm --prefix apps/web run check

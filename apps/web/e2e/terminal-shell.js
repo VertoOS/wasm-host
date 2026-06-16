@@ -1,15 +1,20 @@
-import { mountCodexVersionTerminalShell } from "../src/codex-terminal-shell.js";
+import { mountCodexPackageTerminalShell } from "../src/codex-terminal-shell.js";
 
 const root = document.getElementById("app");
+const state = {
+  packageSource: null,
+};
 
-mountCodexVersionTerminalShell({
+mountCodexPackageTerminalShell({
   onStateChange: updateStatus,
+  onPackageStateChange: updatePackageStatus,
   root,
 })
-  .then((controller) => {
-    window.__wasmHostTerminalShellController = controller;
+  .then((app) => {
+    window.__wasmHostTerminalShellController = app;
     window.__wasmHostTerminalShellStatus = {
-      phase: controller.phase,
+      packageSource: app.packageSources.state,
+      phase: app.terminal.phase,
       status: "ready",
     };
   })
@@ -21,47 +26,77 @@ window.addEventListener("beforeunload", () => {
   window.__wasmHostTerminalShellController?.destroy();
 });
 
-function updateStatus(state) {
+function updateStatus(terminalState) {
   const output = document.querySelector("[data-terminal-output]");
   const columns = document.querySelector("[data-terminal-columns]");
   const rows = document.querySelector("[data-terminal-rows]");
   const status = {
     output: output?.textContent ?? "",
-    phase: state.phase,
-    result: state.result ?? null,
+    packageSource: window.__wasmHostTerminalShellStatus?.packageSource ?? null,
+    phase: terminalState.phase,
+    result: terminalState.result ?? null,
     size: {
       columns: columns?.value ?? null,
       rows: rows?.value ?? null,
     },
-    status: state.phase,
+    status: terminalState.phase,
   };
-  if (state.phase === "complete") {
+  if (terminalState.phase === "complete") {
     if (
-      status.output.startsWith("codex-cli ") &&
-      state.result?.exitCode === 0
+      (status.output.startsWith("codex-cli ") ||
+        status.output.startsWith("BROWSER_SMOKE_OK")) &&
+      terminalState.result?.exitCode === 0
     ) {
       status.status = "passed";
     } else {
       status.status = "failed";
       status.error = {
-        message: "terminal shell output did not match Codex version smoke",
+        message: "terminal shell output did not match expected smoke output",
       };
     }
   }
-  if (state.phase === "error" || state.phase === "cancelled") {
+  if (terminalState.phase === "error" || terminalState.phase === "cancelled") {
     status.status = "failed";
-    status.error = state.error ?? { message: state.status };
+    status.error = serializeError(
+      terminalState.error ?? { message: terminalState.status },
+    );
   }
   window.__wasmHostTerminalShellStatus = status;
 }
 
+function updatePackageStatus(packageState) {
+  state.packageSource = {
+    error: packageState.error
+      ? {
+          message: packageState.error.message,
+          name: packageState.error.name,
+        }
+      : null,
+    metadata: packageState.metadata ?? null,
+    phase: packageState.phase,
+  };
+  window.__wasmHostTerminalShellStatus = {
+    ...(window.__wasmHostTerminalShellStatus ?? {}),
+    packageSource: state.packageSource,
+  };
+}
+
 function failureStatus(error) {
   return {
-    error: {
-      message: error?.message ?? String(error),
-      name: error?.name ?? "Error",
-      stack: error?.stack ?? null,
-    },
+    error: serializeError(error),
     status: "failed",
+  };
+}
+
+function serializeError(error) {
+  if (!error) {
+    return null;
+  }
+  return {
+    kind: error.kind ?? null,
+    message: error.message ?? String(error),
+    name: error.name ?? "Error",
+    stack: error.stack ?? null,
+    stage: error.stage ?? null,
   };
 }

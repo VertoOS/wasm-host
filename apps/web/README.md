@@ -34,6 +34,14 @@ Current scope:
   paste for stdin, exposes run/cancel/EOF/clear/resize controls, starts commands
   with the current terminal dimensions, and keeps the surface replaceable by a
   future xterm.js-backed renderer without changing the worker/session contract.
+- `src/package-source.js` normalizes terminal package selections. Built-in
+  Codex smoke and manifest inputs go through the Codex artifact manifest
+  consumer; package file and URL inputs go through `BrowserPackageLoader` before
+  the resulting bytes and command metadata are handed to the worker.
+- `src/package-source-ui.js` renders the package source controls around the
+  terminal shell. It supports built-in, file, URL, manifest JSON, and manifest
+  URL sources, shows selected package metadata, and reports validation errors
+  without echoing secret-bearing URL query strings or credentials.
 - `src/codex-terminal-shell.js` wires that shell to the deterministic interim
   Codex `codex --version` raw WASI fixture for the default browser app and
   browser e2e coverage.
@@ -73,6 +81,11 @@ Current scope:
 - `test/terminal-ui.test.js` covers the terminal shell controller's output
   rendering, keyboard stdin, paste stdin, EOF, resize, cancellation, and
   pre-run terminal size handling with a fake DOM and fake worker.
+- `test/package-source.test.js` covers built-in, file, URL, manifest JSON, and
+  manifest URL source normalization, worker load/run message shaping, URL
+  redaction, and package arg parsing.
+- `test/package-source-ui.test.js` covers the package source controller's apply
+  flow, terminal reconfiguration, metadata rendering, and validation errors.
 - `fixtures/codex-version-smoke-core.js` owns the browser-safe deterministic
   inline Codex version-smoke manifest and raw WASI fixture. The Node-only
   `fixtures/codex-version-smoke-fixture.js` wrapper adds optional local artifact
@@ -83,7 +96,9 @@ Current scope:
   Chromium/Chrome pages through the DevTools protocol, start
   `src/command-worker-entry.js` as a module worker, assert the Codex
   `codex --version` stdout/stderr/exit contract, and drive the terminal UI shell
-  through DOM controls.
+  through DOM controls. The terminal shell e2e also applies a package URL source
+  backed by a local data URL, verifies sanitized package metadata, and runs the
+  selected package through the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.
@@ -114,7 +129,7 @@ still tracked by #6, and hard termination of non-cooperative Wasm remains #50.
 This package should eventually own:
 
 - full WebC worker startup and package loading
-- package selection/upload controls for the terminal shell (#57)
+- persistent package source history and richer release artifact selection
 - xterm.js/readline-grade terminal rendering and TTY compatibility
 - OPFS/IndexedDB workspace persistence
 - wiring the command and HTTP worker runtimes into actual WebC execution

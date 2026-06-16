@@ -17,23 +17,26 @@ export class BrowserPackageLoaderError extends Error {
 export class BrowserPackageLoader {
   constructor(options = {}) {
     this.cache = options.cache ?? new MemoryPackageCache();
-    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.fetchImpl = options.fetchImpl ?? defaultFetchImpl();
     this.packageBytesLimit =
       options.packageBytesLimit ?? DEFAULT_PACKAGE_BYTES_LIMIT;
   }
 
   async load(input = {}) {
     const source = input.source ?? {};
+    if (source.bytes != null || input.bytes != null) {
+      return this.loadBytes({
+        ...input,
+        bytes: source.bytes ?? input.bytes,
+      });
+    }
     if (source.kind === "url" || input.url != null) {
       return this.loadUrl({
         ...input,
         url: source.url ?? input.url,
       });
     }
-    return this.loadBytes({
-      ...input,
-      bytes: source.bytes ?? input.bytes,
-    });
+    return this.loadBytes(input);
   }
 
   async loadBytes(input = {}) {
@@ -406,9 +409,18 @@ function normalizeSource(source) {
   };
 }
 
+function defaultFetchImpl() {
+  return typeof globalThis.fetch === "function"
+    ? globalThis.fetch.bind(globalThis)
+    : undefined;
+}
+
 function sanitizeUrlForSource(value) {
   try {
     const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return `${url.protocol} URL`;
+    }
     url.username = "";
     url.password = "";
     url.search = "";

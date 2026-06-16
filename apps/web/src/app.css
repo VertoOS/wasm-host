@@ -64,8 +64,89 @@ button:focus-visible,
   outline-offset: 2px;
 }
 
+.package-source,
 .terminal-shell {
   display: grid;
+}
+
+.package-source {
+  gap: 0.75rem;
+  padding: 1rem 1rem 0;
+}
+
+.package-source__controls {
+  display: grid;
+  grid-template-columns:
+    minmax(7rem, 0.8fr)
+    minmax(9rem, 1fr)
+    minmax(9rem, 1.2fr)
+    minmax(8rem, 1fr)
+    minmax(8rem, 1fr)
+    minmax(8rem, 1fr)
+    minmax(8rem, 1fr);
+  gap: 0.45rem 0.6rem;
+  align-items: end;
+}
+
+.package-source__controls label,
+.package-source > label {
+  color: #c7d4c6;
+  font-size: 0.85rem;
+}
+
+.package-source__controls input,
+.package-source__controls select,
+.package-source > textarea {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.package-source > textarea {
+  min-height: 7rem;
+  resize: vertical;
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace,
+    monospace;
+}
+
+.package-source[data-package-source-kind="builtin-codex"] > label,
+.package-source[data-package-source-kind="builtin-codex"] > textarea,
+.package-source[data-package-source-kind="package-file"] > label,
+.package-source[data-package-source-kind="package-file"] > textarea,
+.package-source[data-package-source-kind="package-url"] > label,
+.package-source[data-package-source-kind="package-url"] > textarea,
+.package-source[data-package-source-kind="manifest-url"] > label,
+.package-source[data-package-source-kind="manifest-url"] > textarea {
+  display: none;
+}
+
+.package-source__summary dl {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.package-source__summary dt {
+  color: #9cae9e;
+  font-size: 0.75rem;
+}
+
+.package-source__summary dd {
+  overflow: hidden;
+  margin: 0;
+  color: #f3f7f2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-source__error {
+  min-height: 1.2rem;
+  color: #ffb3a6;
+}
+
+.terminal-shell {
   min-height: 100vh;
   grid-template-rows: auto auto minmax(18rem, 1fr) auto;
   gap: 0.75rem;
@@ -165,6 +246,15 @@ button:focus-visible,
 }
 
 @media (max-width: 720px) {
+  .package-source {
+    padding: 0.75rem 0.75rem 0;
+  }
+
+  .package-source__controls,
+  .package-source__summary dl {
+    grid-template-columns: 1fr;
+  }
+
   .terminal-shell {
     padding: 0.75rem;
   }

@@ -73,6 +73,27 @@ export class BrowserTerminalShellController {
     return this.activeRunPromise;
   }
 
+  configurePackage(options = {}) {
+    if (this.phase === "loading" || this.phase === "running") {
+      throw new BrowserTerminalShellError(
+        "invalid_state",
+        "cannot change packages while a command is running",
+      );
+    }
+    this.loadMessage = cloneMessage(options.loadMessage);
+    this.runMessage = cloneMessage(options.runMessage);
+    this.commandLabel =
+      options.commandLabel ?? commandLabelFromRunMessage(this.runMessage);
+    this.lastError = null;
+    this.lastResult = null;
+    this.loaded = false;
+    this.loadPromise = null;
+    this.runCount = 0;
+    this.resetWorker();
+    this.clearOutput();
+    this.setPhase("idle", `Ready: ${this.commandLabel}`);
+  }
+
   writeStdin(text) {
     if (!this.session || this.phase !== "running") {
       return false;
@@ -118,9 +139,14 @@ export class BrowserTerminalShellController {
     }
     this.session?.dispose();
     this.session = null;
+    this.resetWorker();
+  }
+
+  resetWorker() {
     this.worker?.terminate?.();
     this.worker = null;
     this.loaded = false;
+    this.loadPromise = null;
   }
 
   async runOnce() {

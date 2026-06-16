@@ -150,7 +150,7 @@ export function normalizeCodexBrowserRunFixture(manifest) {
 export async function fetchCodexArtifactBytes(manifest, options = {}) {
   const fixture = normalizeCodexBrowserRunFixture(manifest);
   const fetchImpl =
-    "fetchImpl" in options ? options.fetchImpl : globalThis.fetch;
+    "fetchImpl" in options ? options.fetchImpl : defaultFetchImpl();
   if (typeof fetchImpl !== "function") {
     throw new ArtifactManifestError(
       "artifact_fetch_failed",
@@ -221,6 +221,12 @@ function validateObject(manifest) {
       "artifact manifest must be an object",
     );
   }
+}
+
+function defaultFetchImpl() {
+  return typeof globalThis.fetch === "function"
+    ? globalThis.fetch.bind(globalThis)
+    : undefined;
 }
 
 function validateRequiredFields(manifest) {

@@ -135,6 +135,83 @@ test("BrowserTerminalShellController keeps resize values ready before a run", ()
   assert.equal(controller.elements.status.textContent, "Ready: 120x40");
 });
 
+test("BrowserTerminalShellController can reconfigure package messages between runs", async () => {
+  const firstWorker = fakeWorker();
+  const secondWorker = fakeWorker();
+  const workers = [firstWorker, secondWorker];
+  const controller = createBrowserTerminalShell({
+    document: fakeDocument(),
+    elements: fakeElements(),
+    createWorker: () => workers.shift(),
+    loadMessage: {
+      type: "command.load",
+      id: "load-one",
+      package: { id: "one", type: "smoke", commands: ["one"] },
+    },
+    runMessage: {
+      type: "command.run",
+      id: "run-one",
+      packageId: "one",
+      command: "one",
+    },
+  });
+
+  const firstCompletion = controller.run();
+  const firstRun = await waitForSent(firstWorker, "command.run");
+  firstWorker.emit({
+    type: "command.stdout",
+    id: firstRun.id,
+    chunk: encoder.encode("old output"),
+  });
+  firstWorker.emit({
+    type: "command.complete",
+    id: firstRun.id,
+    result: completeResult(10),
+  });
+  await firstCompletion;
+
+  controller.configurePackage({
+    commandLabel: "two --version",
+    loadMessage: {
+      type: "command.load",
+      id: "load-two",
+      package: { id: "two", type: "smoke", commands: ["two"] },
+    },
+    runMessage: {
+      type: "command.run",
+      id: "run-two",
+      packageId: "two",
+      command: "two",
+      args: ["--version"],
+    },
+  });
+
+  assert.equal(firstWorker.terminated, true);
+  assert.equal(controller.elements.output.textContent, "");
+  assert.equal(controller.elements.status.textContent, "Ready: two --version");
+
+  const secondCompletion = controller.run();
+  const secondRun = await waitForSent(secondWorker, "command.run");
+  assert.equal(secondRun.id, "run-two-1");
+  assert.equal(secondRun.packageId, "two");
+  assert.deepEqual(
+    secondWorker.sent.filter((message) => message.type === "command.load"),
+    [
+      {
+        type: "command.load",
+        id: "load-two",
+        package: { id: "two", type: "smoke", commands: ["two"] },
+      },
+    ],
+  );
+  secondWorker.emit({
+    type: "command.complete",
+    id: secondRun.id,
+    result: completeResult(0),
+  });
+  await secondCompletion;
+});
+
 function terminalShell({ worker }) {
   return createBrowserTerminalShell({
     document: fakeDocument(),
@@ -255,7 +332,21 @@ function fakeWorker() {
         listeners.delete(listener);
       }
     },
-    terminate() {},
+    terminated: false,
+    terminate() {
+      this.terminated = true;
+    },
+  };
+}
+
+function completeResult(stdoutBytes) {
+  return {
+    cancelled: false,
+    exitCode: 0,
+    failureStage: null,
+    stderrBytes: 0,
+    stdoutBytes,
+    timedOut: false,
   };
 }
 

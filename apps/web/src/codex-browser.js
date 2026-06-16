@@ -295,16 +295,22 @@ class ModelResponseWriter {
   constructor(output) {
     this.headers = [];
     this.output = output;
+    this.sse = null;
     this.status = null;
   }
 
   async start(status, headers) {
     this.status = Number(status);
     this.headers = headers ?? [];
+    this.configureResponseDecoder();
   }
 
   async writeBodyChunk(chunk) {
     if (this.status != null && !isSuccessfulHttpStatus(this.status)) {
+      return;
+    }
+    if (this.sse) {
+      await this.sse.write(chunk);
       return;
     }
     await this.output.writeStdout(chunk);
@@ -313,15 +319,158 @@ class ModelResponseWriter {
   async finish(status, headers, body) {
     this.status = Number(status);
     this.headers = headers ?? [];
+    this.configureResponseDecoder();
     const bytes = toUint8Array(body ?? new Uint8Array(), {
       allowEmpty: true,
       message: "codex-browser model response body must be bytes",
       stage: "runtime",
     });
     if (isSuccessfulHttpStatus(this.status) && bytes.byteLength > 0) {
-      await this.output.writeStdout(bytes);
+      await this.writeBodyChunk(bytes);
+    }
+    if (isSuccessfulHttpStatus(this.status) && this.sse) {
+      await this.sse.finish();
     }
   }
+
+  configureResponseDecoder() {
+    if (
+      this.sse ||
+      !isSuccessfulHttpStatus(this.status) ||
+      !isEventStreamResponse(this.headers)
+    ) {
+      return;
+    }
+    this.sse = new ResponsesSseModelWriter(this.output);
+  }
+}
+
+class ResponsesSseModelWriter {
+  constructor(output) {
+    this.buffer = "";
+    this.decoder = new TextDecoder();
+    this.output = output;
+  }
+
+  async write(chunk) {
+    this.buffer += this.decoder.decode(toUint8Array(chunk), { stream: true });
+    await this.drainEvents();
+  }
+
+  async finish() {
+    this.buffer += this.decoder.decode();
+    await this.drainEvents({ final: true });
+  }
+
+  async drainEvents(options = {}) {
+    normalizeSseNewlines(this);
+    while (true) {
+      const delimiter = this.buffer.indexOf("\n\n");
+      if (delimiter === -1) {
+        break;
+      }
+      const frame = this.buffer.slice(0, delimiter);
+      this.buffer = this.buffer.slice(delimiter + 2);
+      await this.handleFrame(frame);
+    }
+    if (options.final && this.buffer.trim() !== "") {
+      const frame = this.buffer;
+      this.buffer = "";
+      await this.handleFrame(frame);
+    }
+  }
+
+  async handleFrame(frame) {
+    const event = parseSseFrame(frame);
+    if (!event) {
+      return;
+    }
+    if (event.data.trim() === "[DONE]") {
+      return;
+    }
+
+    let payload = null;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (_error) {
+      throw invalidModelSse("codex-browser model SSE event was not JSON");
+    }
+
+    const type = String(payload?.type ?? event.event ?? "");
+    switch (type) {
+      case "response.output_text.delta":
+        await this.writeTextDelta(payload);
+        return;
+      case "response.completed":
+        return;
+      case "response.error":
+        throw invalidModelSse("codex-browser model SSE event reported an error");
+      default:
+        return;
+    }
+  }
+
+  async writeTextDelta(payload) {
+    if (typeof payload?.delta !== "string") {
+      throw invalidModelSse("codex-browser model SSE delta was invalid");
+    }
+    if (payload.delta.length > 0) {
+      await this.output.writeStdout(encoder.encode(payload.delta));
+    }
+  }
+}
+
+function normalizeSseNewlines(writer) {
+  writer.buffer = writer.buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function parseSseFrame(frame) {
+  let event = "";
+  const data = [];
+  for (const line of frame.split("\n")) {
+    if (line === "" || line.startsWith(":")) {
+      continue;
+    }
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) {
+      value = value.slice(1);
+    }
+    if (field === "event") {
+      event = value;
+    } else if (field === "data") {
+      data.push(value);
+    }
+  }
+  if (!event && data.length === 0) {
+    return null;
+  }
+  return { data: data.join("\n"), event };
+}
+
+function isEventStreamResponse(headers) {
+  return headerValue(headers, "content-type")
+    .toLowerCase()
+    .split(";")
+    .map((value) => value.trim())
+    .includes("text/event-stream");
+}
+
+function headerValue(headers, name) {
+  const normalizedName = name.toLowerCase();
+  for (const header of headers ?? []) {
+    if (String(header.name ?? "").toLowerCase() === normalizedName) {
+      return String(header.value ?? "");
+    }
+  }
+  return "";
+}
+
+function invalidModelSse(message) {
+  return new BrowserCodexBrowserError("invalid_response", message, "runtime", {
+    exitCode: 1,
+  });
 }
 
 function callCodexVersion(exports, memory, options) {

@@ -136,6 +136,94 @@ test("codex-browser model-request streams direct Fetch responses to stdout", asy
   assert.equal(port.messages.at(-1).result.exitCode, 0);
 });
 
+test("codex-browser model-request decodes Responses SSE text deltas", async () => {
+  const seen = {};
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: {
+      direct: new DirectFetchHttpTransport({
+        fetchImpl: async (url, init) => {
+          seen.url = url;
+          seen.headers = Array.from(init.headers.entries());
+          seen.body = JSON.parse(await readableBodyText(init.body));
+          return new Response(
+            readableStream([
+              ": keepalive\n\n",
+              sseEvent("response.created", {
+                response: { id: "resp_direct_sse" },
+              }),
+              "event: response.output_text.delta\n",
+              'data: {"type":"response.output_text.delta","delta":"hel',
+              'lo "}\n\n',
+              sseEvent("response.output_text.delta", { delta: "model" }),
+              sseEvent("response.completed", {
+                response: { id: "resp_direct_sse" },
+              }),
+            ]),
+            {
+              headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+              status: 200,
+            },
+          );
+        },
+      }),
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage(fixture.commandRun);
+
+  assert.equal(seen.url, "https://model.example.test/v1/responses");
+  assert.deepEqual(seen.headers, [
+    ["accept", "text/event-stream, application/json"],
+    ["content-type", "application/json"],
+  ]);
+  assertCodexBrowserRequestPayload(seen.body, fixture.expected);
+  assert.equal(stdoutText(port.messages), "hello model");
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assertNoMessageLeak(port.messages, ["response.output_text.delta", "event:"]);
+});
+
+test("codex-browser model-request preserves non-SSE JSON response bodies", async () => {
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: {
+      direct: new DirectFetchHttpTransport({
+        fetchImpl: async () =>
+          new Response(
+            readableStream([
+              '{"type":"response.output_text.delta","delta":"json"}',
+            ]),
+            {
+              headers: { "Content-Type": "application/json" },
+              status: 200,
+            },
+          ),
+      }),
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    id: "run-codex-browser-model-json-passthrough",
+  });
+
+  assert.equal(
+    stdoutText(port.messages),
+    '{"type":"response.output_text.delta","delta":"json"}',
+  );
+  assert.equal(port.messages.at(-1).type, "command.complete");
+});
+
 test("codex-browser model-request streams gateway responses to stdout", async () => {
   const seen = {};
   const fixture = await codexBrowserModelRequestFixture(
@@ -205,12 +293,79 @@ test("codex-browser model-request streams gateway responses to stdout", async ()
     { name: "authorization", value: `Bearer ${MODEL_SECRET_TOKEN}` },
   ]);
   assertCodexBrowserRequestPayload(
-    JSON.parse(decoder.decode(Buffer.from(seen.body.body_chunks_base64[0], "base64"))),
+    JSON.parse(
+      decoder.decode(Buffer.from(seen.body.body_chunks_base64[0], "base64")),
+    ),
     fixture.expected,
   );
   assert.equal(stdoutText(port.messages), "gateway model");
   assert.equal(port.messages.at(-1).type, "command.complete");
   assertNoMessageLeak(port.messages, [MODEL_SECRET_TOKEN]);
+});
+
+test("codex-browser model-request decodes gateway SSE text deltas", async () => {
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: {
+      gateway: new GatewayFetchHttpTransport({
+        endpoint: "https://gateway.example.test/bridge",
+        fetchImpl: async () =>
+          new Response(
+            readableStream([
+              gatewayFrame({
+                headers: [
+                  { name: "content-type", value: "text/event-stream" },
+                ],
+                status: 200,
+                type: "response",
+              }),
+              gatewayFrame({
+                body_base64: base64(
+                  sseEvent("response.output_text.delta", {
+                    delta: "gateway ",
+                  }),
+                ),
+                type: "body_chunk",
+              }),
+              gatewayFrame({
+                body_base64: base64(
+                  sseEvent("response.output_text.delta", { delta: "model" }),
+                ),
+                type: "body_chunk",
+              }),
+              gatewayFrame({
+                body_base64: base64(
+                  sseEvent("response.completed", {
+                    response: { id: "resp_gateway_sse" },
+                  }),
+                ),
+                type: "body_chunk",
+              }),
+              gatewayFrame({ type: "body_end" }),
+            ]),
+            {
+              headers: { "Content-Type": "application/x-ndjson" },
+              status: 200,
+            },
+          ),
+      }),
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    httpTransport: "gateway",
+    id: "run-codex-browser-model-gateway-sse",
+  });
+
+  assert.equal(stdoutText(port.messages), "gateway model");
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assertNoMessageLeak(port.messages, ["response.output_text.delta", "event:"]);
 });
 
 test("codex-browser model-request injects host bearer secrets into direct Fetch", async () => {
@@ -353,6 +508,90 @@ test("codex-browser model-request rejects missing bearer secrets without leaking
   assert.equal(error.result.exitCode, 2);
   assert.equal(stdoutText(port.messages), "");
   assertNoMessageLeak(port.messages, [MODEL_SECRET_REF, MODEL_SECRET_TOKEN]);
+});
+
+test("codex-browser model-request rejects malformed SSE without leaking payloads", async () => {
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    codexBrowser: {
+      secretProvider: createMemorySecretProvider({
+        [MODEL_SECRET_REF]: MODEL_SECRET_TOKEN,
+      }),
+    },
+    httpTransports: {
+      direct: new DirectFetchHttpTransport({
+        fetchImpl: async () =>
+          new Response(
+            readableStream([
+              `event: response.output_text.delta\ndata: not-json-${MODEL_SECRET_TOKEN}\n\n`,
+            ]),
+            {
+              headers: { "Content-Type": "text/event-stream" },
+              status: 200,
+            },
+          ),
+      }),
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    env: {
+      ...fixture.commandRun.env,
+      [MODEL_SECRET_REF_ENV]: MODEL_SECRET_REF,
+    },
+    id: "run-codex-browser-model-invalid-sse",
+  });
+
+  const error = port.messages.at(-1);
+  assert.equal(error.type, "command.error");
+  assert.equal(error.error.kind, "invalid_response");
+  assert.equal(error.error.message, "codex-browser model SSE event was not JSON");
+  assert.equal(error.result.exitCode, 1);
+  assert.equal(stdoutText(port.messages), "");
+  assertNoMessageLeak(port.messages, [MODEL_SECRET_TOKEN, "not-json"]);
+});
+
+test("codex-browser model-request rejects invalid SSE text deltas", async () => {
+  const fixture = await codexBrowserModelRequestFixture(
+    "https://model.example.test/v1/responses",
+  );
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: {
+      direct: new DirectFetchHttpTransport({
+        fetchImpl: async () =>
+          new Response(
+            readableStream([
+              sseEvent("response.output_text.delta", { delta: 42 }),
+            ]),
+            {
+              headers: { "Content-Type": "text/event-stream" },
+              status: 200,
+            },
+          ),
+      }),
+    },
+    port,
+  });
+
+  await runtime.handleMessage(fixture.commandLoad);
+  await runtime.handleMessage({
+    ...fixture.commandRun,
+    id: "run-codex-browser-model-invalid-sse-delta",
+  });
+
+  const error = port.messages.at(-1);
+  assert.equal(error.type, "command.error");
+  assert.equal(error.error.kind, "invalid_response");
+  assert.equal(error.error.message, "codex-browser model SSE delta was invalid");
+  assert.equal(error.result.exitCode, 1);
+  assert.equal(stdoutText(port.messages), "");
 });
 
 test("codex-browser model-request redacts provider failure details", async () => {
@@ -586,6 +825,10 @@ function readableStream(chunks) {
 
 function gatewayFrame(frame) {
   return `${JSON.stringify(frame)}\n`;
+}
+
+function sseEvent(type, payload = {}) {
+  return `event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`;
 }
 
 function base64(value) {

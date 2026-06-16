@@ -98,7 +98,7 @@ async function runCodexVersionSmokePage(page) {
     stderr: "",
     stdout: "mock model response\n",
     stdoutBytes: 20,
-    urlPath: "/e2e/codex-model-response.txt",
+    urlPath: "/e2e/codex-model-response.sse",
   });
   assert.equal(status.result.requestBuilder.exitCode, 0);
   assert.equal(status.result.requestBuilder.model, "gpt-5.1");
@@ -649,6 +649,8 @@ function contentType(filePath) {
       return "text/javascript; charset=utf-8";
     case ".json":
       return "application/json; charset=utf-8";
+    case ".sse":
+      return "text/event-stream; charset=utf-8";
     case ".css":
       return "text/css; charset=utf-8";
     case ".wasm":

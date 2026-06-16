@@ -1,0 +1,12 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_browser_e2e"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"mock "}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"model response\n"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_browser_e2e"}}
+

@@ -92,7 +92,7 @@ export async function runCodexVersionSmoke() {
 }
 
 async function runCodexBrowserModelTurn(worker) {
-  const url = new URL("./codex-model-response.txt", import.meta.url).href;
+  const url = new URL("./codex-model-response.sse", import.meta.url).href;
   assert(
     new URL(url).origin === location.origin,
     "Codex model fixture should be same-origin",

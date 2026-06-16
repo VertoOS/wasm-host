@@ -78,6 +78,7 @@ test("normalizeCodexBrowserRunFixture validates and shapes the Codex smoke manif
       args: ["--version"],
       env: {},
       cwd: "/workspace",
+      stdinOpen: false,
     },
     expected: {
       exitCode: 0,

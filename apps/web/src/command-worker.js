@@ -370,6 +370,7 @@ export class BrowserCommandWorkerRuntime {
   abortRun(run, error) {
     run.abortError = normalizeCommandError(error);
     run.controller.abort(run.abortError);
+    run.stdin.fail(run.abortError);
   }
 
   async packageForRun(run) {

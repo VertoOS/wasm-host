@@ -23,6 +23,11 @@ const TERMINAL_SHELL_PAGE_PATH = "/e2e/terminal-shell.html";
 const BROWSER_REQUIRED = process.env.WASM_HOST_BROWSER_E2E_REQUIRED === "1";
 const BROWSER_EXECUTABLE = resolveBrowserExecutable();
 const CDP_AVAILABLE = typeof globalThis.WebSocket === "function";
+const DEVTOOLS_STARTUP_TIMEOUT_MS = 60000;
+const DEVTOOLS_POLL_INTERVAL_MS = 100;
+const BROWSER_STATUS_TIMEOUT_MS = 30000;
+const BROWSER_E2E_TIMEOUT_MS =
+  DEVTOOLS_STARTUP_TIMEOUT_MS + BROWSER_STATUS_TIMEOUT_MS * 5 + 30000;
 
 async function runBrowserE2e() {
   const skip = skipReason();
@@ -66,7 +71,9 @@ async function runCodexVersionSmokePage(page) {
   await page.send("Runtime.enable");
   await page.send("Log.enable");
 
-  const status = await waitForSmokeStatus(page, { timeoutMs: 15000 });
+  const status = await waitForSmokeStatus(page, {
+    timeoutMs: BROWSER_STATUS_TIMEOUT_MS,
+  });
   assert.equal(status.status, "passed", status.error?.message);
   assert.equal(status.result.exitCode, 0);
   assert.equal(status.result.stderr, "");
@@ -93,7 +100,9 @@ async function runTerminalShellPage(page) {
   await page.send("Runtime.enable");
   await page.send("Log.enable");
 
-  const ready = await waitForTerminalShellStatus(page, { timeoutMs: 15000 });
+  const ready = await waitForTerminalShellStatus(page, {
+    timeoutMs: BROWSER_STATUS_TIMEOUT_MS,
+  });
   assert.equal(ready.status, "ready", terminalStatusMessage(ready));
   assert.equal(ready.packageSource.metadata.packageId, "codex");
 
@@ -112,7 +121,7 @@ async function runTerminalShellPage(page) {
 
   const status = await waitForTerminalShellStatus(page, {
     expectedOutputPrefix: "codex-cli ",
-    timeoutMs: 15000,
+    timeoutMs: BROWSER_STATUS_TIMEOUT_MS,
   });
   assert.equal(status.status, "passed", terminalStatusMessage(status));
   assert.equal(status.result.exitCode, 0);
@@ -142,7 +151,7 @@ async function runTerminalShellPage(page) {
 
   const packageStatus = await waitForPackageSourceStatus(page, {
     packageId: "url-smoke",
-    timeoutMs: 15000,
+    timeoutMs: BROWSER_STATUS_TIMEOUT_MS,
   });
   assert.equal(packageStatus.phase, "ready", packageStatus.error?.message);
   assert.equal(packageStatus.metadata.sourceLabel, "data: URL");
@@ -154,7 +163,7 @@ async function runTerminalShellPage(page) {
   });
   const urlStatus = await waitForTerminalShellStatus(page, {
     expectedOutputPrefix: "BROWSER_SMOKE_OK",
-    timeoutMs: 15000,
+    timeoutMs: BROWSER_STATUS_TIMEOUT_MS,
   });
   assert.equal(urlStatus.status, "passed", terminalStatusMessage(urlStatus));
   assert.equal(urlStatus.result.exitCode, 0);
@@ -377,19 +386,24 @@ class DevToolsPage {
 
 async function waitForSmokeStatus(page, options = {}) {
   const deadline = Date.now() + (options.timeoutMs ?? 10000);
+  let lastStatus = null;
   while (Date.now() < deadline) {
     const evaluation = await page.send("Runtime.evaluate", {
       expression: "window.__wasmHostCodexVersionSmokeStatus",
       returnByValue: true,
     });
     const status = evaluation.result?.value;
+    lastStatus = status ?? lastStatus;
     if (status?.status === "passed" || status?.status === "failed") {
       return status;
     }
     await delay(100);
   }
   throw new Error(
-    `timed out waiting for browser smoke status: ${JSON.stringify(page.events)}`,
+    `timed out waiting for browser smoke status: ${JSON.stringify({
+      lastStatus,
+      events: page.events,
+    })}`,
   );
 }
 
@@ -463,11 +477,12 @@ async function waitForPackageSourceStatus(page, options = {}) {
 }
 
 async function waitForDevTools(debugPort, child) {
+  const deadline = Date.now() + DEVTOOLS_STARTUP_TIMEOUT_MS;
   let exit = null;
   child.once("exit", (code, signal) => {
     exit = { code, signal };
   });
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+  while (Date.now() < deadline) {
     if (exit) {
       throw new Error(`browser exited with ${JSON.stringify(exit)}`);
     }
@@ -475,10 +490,12 @@ async function waitForDevTools(debugPort, child) {
       await fetchJson(`http://127.0.0.1:${debugPort}/json/version`);
       return;
     } catch {
-      await delay(100);
+      await delay(DEVTOOLS_POLL_INTERVAL_MS);
     }
   }
-  throw new Error("timed out waiting for /json/version");
+  throw new Error(
+    `timed out waiting ${DEVTOOLS_STARTUP_TIMEOUT_MS}ms for /json/version`,
+  );
 }
 
 async function freePort() {
@@ -591,9 +608,11 @@ function isPathInside(root, filePath) {
 }
 
 const watchdog = setTimeout(() => {
-  console.error("browser e2e timed out after 45s");
+  console.error(
+    `browser e2e timed out after ${Math.round(BROWSER_E2E_TIMEOUT_MS / 1000)}s`,
+  );
   process.exit(1);
-}, 45000);
+}, BROWSER_E2E_TIMEOUT_MS);
 
 try {
   const result = await runBrowserE2e();

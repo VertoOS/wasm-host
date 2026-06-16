@@ -6,6 +6,7 @@ const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
 
 const ERRNO_SUCCESS = 0;
 const ERRNO_BADF = 8;
+const STDIN_FD = 0;
 let workerRunCounter = 0;
 
 export class BrowserWasiModuleError extends Error {
@@ -110,6 +111,9 @@ export async function runRawWasiModule(request, output, options = {}) {
     );
   }
 
+  const stdin = request.stdinBytes
+    ? toUint8Array(request.stdinBytes)
+    : await readAllCommandStdin(request.stdin, request.signal);
   let instance = null;
   const wasi = new WasiPreview1Runtime({
     args: [request.command, ...request.args],
@@ -117,6 +121,7 @@ export async function runRawWasiModule(request, output, options = {}) {
     getInstance: () => instance,
     output,
     signal: request.signal,
+    stdin,
   });
 
   try {
@@ -156,6 +161,7 @@ export async function runRawWasiModule(request, output, options = {}) {
 }
 
 export async function runRawWasiModuleInWorker(request, output, options = {}) {
+  const workerRequest = await workerRunRequest(request);
   let worker;
   try {
     worker = options.createWorker?.();
@@ -171,7 +177,7 @@ export async function runRawWasiModuleInWorker(request, output, options = {}) {
   const runMessage = {
     type: "wasi.run",
     id,
-    request: workerRunRequest(request),
+    request: workerRequest,
   };
 
   let settled = false;
@@ -242,7 +248,7 @@ export async function runRawWasiModuleInWorker(request, output, options = {}) {
     }
     request.signal?.addEventListener?.("abort", onAbort, { once: true });
     try {
-      worker.postMessage(runMessage);
+      postMessageToExecutionWorker(worker, runMessage, workerRequest.stdinBytes);
     } catch (error) {
       rejectWith(error);
     }
@@ -290,6 +296,8 @@ class WasiPreview1Runtime {
     this.memory = null;
     this.output = options.output;
     this.signal = options.signal;
+    this.stdin = toUint8Array(options.stdin ?? new Uint8Array());
+    this.stdinOffset = 0;
   }
 
   setMemory(memory) {
@@ -306,6 +314,8 @@ class WasiPreview1Runtime {
         this.writeStringPointers(this.env, environPtr, environBufPtr),
       environ_sizes_get: (environCountPtr, environBufSizePtr) =>
         this.writeSizes(this.env, environCountPtr, environBufSizePtr),
+      fd_read: (fd, iovsPtr, iovsLen, nreadPtr) =>
+        this.fdRead(fd, iovsPtr, iovsLen, nreadPtr),
       fd_write: (fd, iovsPtr, iovsLen, nwrittenPtr) =>
         this.fdWrite(fd, iovsPtr, iovsLen, nwrittenPtr),
       proc_exit: (exitCode) => {
@@ -359,6 +369,36 @@ class WasiPreview1Runtime {
         void this.output.writeStderr(chunk);
       }
     }
+    return ERRNO_SUCCESS;
+  }
+
+  fdRead(fd, iovsPtr, iovsLen, nreadPtr) {
+    this.throwIfAborted();
+    if (fd !== STDIN_FD) {
+      this.writeU32(nreadPtr, 0);
+      return ERRNO_BADF;
+    }
+
+    let total = 0;
+    for (let index = 0; index < iovsLen; index += 1) {
+      if (this.stdinOffset >= this.stdin.byteLength) {
+        break;
+      }
+      const iovPtr = iovsPtr + index * 8;
+      const dataPtr = this.readU32(iovPtr);
+      const dataLength = this.readU32(iovPtr + 4);
+      const available = this.stdin.byteLength - this.stdinOffset;
+      const readLength = Math.min(dataLength, available);
+      if (readLength > 0) {
+        this.bytes().set(
+          this.stdin.subarray(this.stdinOffset, this.stdinOffset + readLength),
+          dataPtr,
+        );
+        this.stdinOffset += readLength;
+        total += readLength;
+      }
+    }
+    this.writeU32(nreadPtr, total);
     return ERRNO_SUCCESS;
   }
 
@@ -534,15 +574,71 @@ function validateExecutionWorker(worker) {
   }
 }
 
-function workerRunRequest(request) {
+async function readAllCommandStdin(stdin, signal) {
+  throwIfAborted(signal);
+  if (!stdin) {
+    return new Uint8Array();
+  }
+
+  const chunks = [];
+  let total = 0;
+  const readChunk =
+    typeof stdin.readChunk === "function" ? () => stdin.readChunk() : null;
+  if (readChunk) {
+    while (true) {
+      throwIfAborted(signal);
+      const chunk = await readChunk();
+      throwIfAborted(signal);
+      if (chunk == null) {
+        break;
+      }
+      const bytes = toUint8Array(chunk);
+      chunks.push(bytes);
+      total += bytes.byteLength;
+    }
+    return concatBytes(chunks, total);
+  }
+
+  if (typeof stdin[Symbol.asyncIterator] === "function") {
+    for await (const chunk of stdin) {
+      throwIfAborted(signal);
+      const bytes = toUint8Array(chunk);
+      chunks.push(bytes);
+      total += bytes.byteLength;
+    }
+    throwIfAborted(signal);
+    return concatBytes(chunks, total);
+  }
+
+  return toUint8Array(stdin);
+}
+
+async function workerRunRequest(request) {
+  const stdinBytes =
+    request.stdinBytes != null
+      ? copyBytes(request.stdinBytes)
+      : await readAllCommandStdin(request.stdin, request.signal);
   return {
     args: normalizeStringList(request.args ?? []),
     command: nonEmptyString(request.command),
     cwd: String(request.cwd ?? "/workspace"),
     env: { ...(request.env ?? {}) },
     package: request.package,
+    stdinBytes,
     terminal: { ...(request.terminal ?? {}) },
   };
+}
+
+function concatBytes(chunks, size) {
+  const total =
+    size ?? chunks.reduce((current, chunk) => current + chunk.byteLength, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 function addWorkerListener(worker, type, listener) {
@@ -559,6 +655,14 @@ function terminateExecutionWorker(worker) {
   } catch {
     // Termination is best effort; the run is already settled.
   }
+}
+
+function postMessageToExecutionWorker(worker, message, stdinBytes) {
+  const transfer =
+    stdinBytes?.byteLength > 0 && stdinBytes.buffer instanceof ArrayBuffer
+      ? [stdinBytes.buffer]
+      : [];
+  worker.postMessage(message, transfer);
 }
 
 function workerErrorPayload(error) {
@@ -680,6 +784,11 @@ function toUint8Array(value) {
     "raw WASI module bytes must be a byte buffer",
     "package_load",
   );
+}
+
+function copyBytes(value) {
+  const bytes = toUint8Array(value);
+  return new Uint8Array(bytes);
 }
 
 function nonEmptyString(value, message = "raw WASI module fields are required") {

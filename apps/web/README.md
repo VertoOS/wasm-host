@@ -63,9 +63,10 @@ Current scope:
   load/run fixture messages, and can fetch artifact bytes through an injectable
   transport while verifying size and sha256.
 - `src/wasi-module.js` implements the narrow raw WASI preview1 fixture runner
-  for modules that import only args/env, `fd_write`, and `proc_exit`. It
-  captures stdout/stderr and exit status for the interim browser smoke; it is
-  not a general filesystem, networking, WASIX, or WebC runtime.
+  for modules that import args/env, preloaded fd 0 stdin through `fd_read`,
+  `fd_write`, and `proc_exit`. It captures stdout/stderr and exit status for
+  the interim browser smoke; it is not an interactive TTY/readline,
+  filesystem, networking, WASIX, or WebC runtime.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.

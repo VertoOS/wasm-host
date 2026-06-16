@@ -26,6 +26,7 @@ const CDP_AVAILABLE = typeof globalThis.WebSocket === "function";
 const DEVTOOLS_STARTUP_TIMEOUT_MS = 60000;
 const DEVTOOLS_POLL_INTERVAL_MS = 100;
 const BROWSER_STATUS_TIMEOUT_MS = 30000;
+const DEVTOOLS_COMMAND_TIMEOUT_MS = BROWSER_STATUS_TIMEOUT_MS;
 const BROWSER_E2E_TIMEOUT_MS =
   DEVTOOLS_STARTUP_TIMEOUT_MS + BROWSER_STATUS_TIMEOUT_MS * 5 + 30000;
 
@@ -341,7 +342,7 @@ class DevToolsPage {
     return new DevToolsPage(socket);
   }
 
-  send(method, params = {}, timeoutMs = 5000) {
+  send(method, params = {}, timeoutMs = DEVTOOLS_COMMAND_TIMEOUT_MS) {
     const id = this.nextId;
     this.nextId += 1;
     const message = { id, method, params };

@@ -28,7 +28,7 @@ Both registry records were resolved through the Wasmer GraphQL
 ## Browser Smoke Status
 
 The browser e2e at `apps/web/e2e/bash-coreutils-smoke.js` loads both pinned
-WebC URLs above, verifies their SHA-256 values, and runs two stages. The first
+WebC URLs above, verifies their SHA-256 values, and runs staged workflows. The first
 keeps the original PATH/package visibility target:
 
 ```sh
@@ -42,6 +42,11 @@ coreutils:
 bash -lc 'set -eu; export LC_ALL=C; cd /workspace; rm -rf issue-215-smoke; mkdir issue-215-smoke; printf "alpha\nbeta\n" > issue-215-smoke/input.txt; cat issue-215-smoke/input.txt; ls issue-215-smoke; rm issue-215-smoke/input.txt; ls issue-215-smoke; rm -r issue-215-smoke; printf "ISSUE_215_WORKSPACE_OK\n"'
 ```
 
+The persisted script stages write `/workspace/issue-219-script/run.sh` in one
+Bash command, then run it in a later Bash command with an argv argument. This
+proves browser workspace contents can be treated as executable script code
+without relying on native process spawn or file mode bits.
+
 Current result:
 
 - `bash` starts and prints `/workspace`.
@@ -53,6 +58,10 @@ Current result:
 - The workspace-files stage exits `0` with stdout exactly
   `alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n` and empty stderr after
   exercising `mkdir`, shell redirection, `cat`, `ls`, `rm`, and `rm -r`.
+- The workspace-script stages exit `0` with deterministic stdout after writing
+  script code into `/workspace`, invoking Bash on that path in a later command,
+  passing argv, redirecting script output, and resolving `cat`/`ls` through the
+  packaged command catalog.
 - The runtime handles `stack_checkpoint` as a browser-safe zero probe for
   non-asyncify modules, supports asyncify checkpoint/restore for modules with
   exported stack bounds or a host-owned high-memory fallback buffer, supports

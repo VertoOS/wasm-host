@@ -80,9 +80,9 @@ Current scope:
 - WebC/WASIX package runs bridge the host-owned browser workspace through
   cloneable snapshots, including snapshots returned from `proc_exec` child
   commands. That lets Bash/coreutils workflows create, redirect, read, list,
-  and remove files under `/workspace` without sending live workspace store
-  objects to workers or making raw `wasi-module` package runs first-class
-  workspace owners.
+  remove files, and execute persisted shell scripts under `/workspace` without
+  sending live workspace store objects to workers or making raw `wasi-module`
+  package runs first-class workspace owners.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, mounts
@@ -350,8 +350,9 @@ Current scope:
   methods, assert a packaged tool fixture can read the edited file with
   cwd/env/stdin through the terminal transcript adapter, load the pinned
   `wasmer/bash` and `wasmer/coreutils` WebC artifacts for the passing
-  path-command and workspace-file Bash/coreutils smoke stages, and publish named
-  stage summaries for the page-level smoke result. The browser e2e also drives
+  path-command, workspace-file, and workspace-script Bash/coreutils smoke
+  stages, and publish named stage summaries for the page-level smoke result.
+  The browser e2e also drives
   the terminal UI shell through DOM controls. The terminal shell e2e also
   applies a package URL source backed by a local data URL,
   verifies sanitized package metadata, and runs the selected package through

@@ -298,16 +298,19 @@ input/cache boundary plus the first dispatch boundary:
 command atom metadata, reads cached atom bytes, and delegates executable atoms
 to the browser raw WASI Preview1 runtime with read-only package-root files from
 extracted WebC volume spans. Unsupported runners and missing atom artifacts
-still fail with structured errors. Compiled module cache persistence, full
-WASIX process spawning, and Bash/coreutils execution are later browser
-runtime layers. Raw WASI execution exposes a narrow `wasix_32v1.proc_exec`
-adapter that escapes the synchronous WebAssembly import frame, then awaits the
-existing child-command bridge so the current module can be replaced by a
-cataloged packaged command. Supported Preview1 imports are also mirrored
-through `wasix_32v1` when the 32-bit import ABI matches the current browser
-handlers. `proc_spawn`, join, fork, and signal imports still return
-deterministic unsupported capability errors because blocking process handles
-need a later async-safe continuation strategy. WASIX thread, futex, eventfd,
+still fail with structured errors. Compiled module cache persistence, general
+WASIX process spawning, and Bash/coreutils execution are later browser runtime
+layers. Raw WASI execution exposes narrow `wasix_32v1.proc_exec`,
+`proc_exec2`, and `proc_exec3` adapters that escape the synchronous WebAssembly
+import frame, then await the existing child-command bridge so the current module
+can be replaced by a cataloged packaged command with cwd/stdin/stdout/stderr
+and WASIX env/PATH overlays. `proc_exit2`, `proc_parent`, and `proc_snapshot`
+also provide deterministic single-process browser behavior. Supported Preview1
+imports are mirrored through `wasix_32v1` when the 32-bit import ABI matches the
+current browser handlers. `proc_spawn`, join, fork, signal, and raise-interval
+imports still return deterministic unsupported capability errors because
+blocking process handles need a later async-safe continuation strategy. WASIX
+thread, futex, eventfd,
 epoll, stack checkpoint, and context-switching imports also instantiate with
 deterministic unsupported capability errors until the browser profile has a
 real worker-thread and async-continuation strategy. Common `wasix_32v1`
@@ -369,10 +372,11 @@ package-file fixtures:
 `proc_exit`, `proc_raise`, `random_get`, `sched_yield`, `sock_accept`,
 `sock_recv`, `sock_send`, and `sock_shutdown`.
 The same raw runner exposes a narrow `wasix_32v1` namespace that mirrors those
-supported Preview1 calls, adds `proc_exec`, `getcwd`, `chdir`, `path_open2`,
+supported Preview1 calls, adds `proc_exec`, `proc_exec2`, `proc_exec3`,
+`proc_exit2`, `proc_parent`, `proc_snapshot`, `getcwd`, `chdir`, `path_open2`,
 `fd_fdflags_get`, `fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
 `getpid`, and empty signal-disposition queries, keeps unsupported process
-imports as deterministic capability errors, classifies thread/futex/eventfd
+controls as deterministic capability errors, classifies thread/futex/eventfd
 imports as unsupported browser capability gaps, and recognizes common raw
 socket/network imports such as `sock_open`,
 `sock_connect`, `sock_recv_from`, `sock_send_to`, option helpers, multicast
@@ -471,9 +475,10 @@ stdout, stderr, stream close ordering, and exit status, so it proves a tool
 command can observe persisted browser workspace state through terminal stdio.
 Worker-backed raw WASI fixtures can also exercise the internal child-command
 RPC to resolve cataloged packaged commands through the host-side command worker.
-The current WASIX process proof is `proc_exec` only; it is not process spawn,
-fork, waitpid, Bash, git, native process spawning, or arbitrary uploaded
-JavaScript.
+The current WASIX process/catalog proof covers replacement-style exec variants,
+env/PATH overlays, exit status propagation, and deterministic single-process
+parent/snapshot answers; it is not process spawn, fork, waitpid, Bash, git,
+native process spawning, or arbitrary uploaded JavaScript.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,
 hard termination of non-cooperative Wasm, or final WebC/WASIX package

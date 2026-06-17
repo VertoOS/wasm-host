@@ -240,8 +240,10 @@ lifecycle fixture for worker-boundary tests. The deterministic
 `browser-tool-fixture` executor is the first packaged tool-command fixture: it
 receives cwd, filtered env, stdin, timeout/cancel signals, reads a host-owned
 browser workspace file, and emits JSON through stdout plus a fixed stderr line.
-It proves the command-worker tool boundary only; real Bash, git, and arbitrary
-tool packages remain separate browser adapter layers.
+The terminal transcript adapter now drives the same fixture with stdin writes,
+EOF, stdout/stderr capture, stream close ordering, and exit status. It proves
+the command-worker and terminal tool boundary only; real Bash, git, and
+arbitrary tool packages remain separate browser adapter layers.
 
 The first browser terminal/stdio adapter lives in `apps/web/src/terminal.js`.
 It is dependency-free and intentionally shaped for a later xterm.js surface: a
@@ -373,8 +375,11 @@ worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,
 filtered env, stdin, timeout, and cancellation through the normal run message,
 and lets the executor read a host-owned `/workspace` file. The fixture is
 covered by unit tests and the real-browser e2e harness after the workspace-edit
-path, so it proves a tool command can observe persisted browser workspace state.
-It is not Bash, git, WASIX process spawning, or arbitrary uploaded JavaScript.
+path. The e2e run now uses `createBrowserTerminalSession`, writes stdin through
+the terminal adapter, sends EOF, and asserts transcript stdout, stderr, stream
+close ordering, and exit status, so it proves a tool command can observe
+persisted browser workspace state through terminal stdio. It is not Bash, git,
+WASIX process spawning, or arbitrary uploaded JavaScript.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,
 hard termination of non-cooperative Wasm, or final WebC/WASIX package

@@ -24,6 +24,10 @@ const WEBC_VOLUME_READ_WASM = base64ToBytes(
   "AGFzbQEAAAABHQRgCX9/f39/fn5/fwF/YAR/f39/AX9gAX8AYAAAAooBBBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXBhdGhfb3BlbgAAFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAABFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwIBAwUDAQABBxMCBm1lbW9yeQIABl9zdGFydAAECmcBZQEBf0EFQQBBgAhBD0EAQgJCAEEAQRAQACIABEAgABADC0EAQYAQNgIAQQRBwAA2AgBBECgCAEEAQQFBCBABIgAEQCAAEAMLQRhBgBA2AgBBHEEIKAIANgIAQQFBGEEBQSAQAhoLCxYBAEGACAsPZXRjL21lc3NhZ2UudHh0",
 );
 
+const WEBC_IMPORTED_MEMORY_WASI_WASM = base64ToBytes(
+  "AGFzbQEAAAABHAVgAn9/AX9gBH9/f38Bf2ABfwBgA39/fwBgAAAC7wEHA2VudgZtZW1vcnkCAwEEFndhc2lfc25hcHNob3RfcHJldmlldzEOYXJnc19zaXplc19nZXQAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGFyZ3NfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRFlbnZpcm9uX3NpemVzX2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzELZW52aXJvbl9nZXQAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAgMEAwIDBAcKAQZfc3RhcnQACAqIAgMHACAAEAUACxEAIAAtAAAgAUcEQCACEAYLC+sBAQJ/QQBBBBAABEBBChAGC0EAKAIAQQJHBEBBCxAGC0EQQcAAEAEEQEEMEAYLQRQoAgAhACAAQeEAQQ0QByAAQQFqQewAQQ4QByAAQQJqQfAAQQ8QByAAQQNqQegAQRAQByAAQQRqQeEAQREQB0EIQQwQAgRAQRIQBgtBCCgCAEEBRwRAQRMQBgtBGEGAARADBEBBFBAGC0EYKAIAIQEgAUHIAEEVEAcgAUEBakHFAEEWEAcgAUEFakE9QRcQByABQQZqQeIAQRgQB0EgQYAENgIAQSRBEzYCAEEBQSBBAUEoEAQEQEEZEAYLCwsaAQBBgAQLE2ltcG9ydGVkLW1lbW9yeS1vawo=",
+);
+
 test("BrowserCommandWorkerRuntime loads and runs a command", async () => {
   const port = recordingPort();
   const seen = {};
@@ -1077,6 +1081,48 @@ test("BrowserCommandWorkerRuntime runs extracted WebC atoms through WASI", async
       failureStage: null,
       stderrBytes: 0,
       stdoutBytes: CODEX_VERSION_SMOKE_STDOUT.length,
+      timedOut: false,
+    },
+  });
+});
+
+test("BrowserCommandWorkerRuntime runs WebC atoms with imported memory", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-webc-import-memory",
+    package: {
+      bytes: executableWebcImportedMemoryBytes(),
+      id: "import-memory-webc",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-webc-import-memory",
+    packageId: "import-memory-webc",
+    command: "imem",
+    args: ["alpha"],
+    env: { HELLO: "browser" },
+  });
+
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-webc-import-memory")),
+    "imported-memory-ok\n",
+  );
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-webc-import-memory",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: "imported-memory-ok\n".length,
       timedOut: false,
     },
   });
@@ -2548,6 +2594,22 @@ function executableWebcBytes() {
     },
     volumes: {},
   });
+}
+
+function executableWebcImportedMemoryBytes() {
+  return webcV2Bytes(
+    webcWasiCommandManifest({
+      atom: "imem-atom",
+      command: "imem",
+      execName: "imem",
+    }),
+    {
+      atoms: {
+        "imem-atom": WEBC_IMPORTED_MEMORY_WASI_WASM,
+      },
+      volumes: {},
+    },
+  );
 }
 
 function executableWebcVolumeBytes() {

@@ -7,8 +7,21 @@ const WASM_MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
 const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_ENTRYPOINT = "_start";
 const RAW_WASI_ARTIFACT_KIND = "wasi-module";
+const ENV_IMPORT_MODULE = "env";
+const MEMORY_IMPORT_NAME = "memory";
 const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
+const WASI_THREAD_IMPORT_MODULE = "wasi";
+const WASI_THREAD_SPAWN_IMPORT = "thread-spawn";
 const WASIX_IMPORT_MODULE = "wasix_32v1";
+const WASM_IMPORT_SECTION_ID = 2;
+const WASM_IMPORT_KIND_FUNCTION = 0;
+const WASM_IMPORT_KIND_TABLE = 1;
+const WASM_IMPORT_KIND_MEMORY = 2;
+const WASM_IMPORT_KIND_GLOBAL = 3;
+const WASM_IMPORT_KIND_TAG = 4;
+const WASM_LIMITS_HAS_MAXIMUM = 1 << 0;
+const WASM_LIMITS_SHARED = 1 << 1;
+const WASM_LIMITS_MEMORY64 = 1 << 2;
 
 const ERRNO_SUCCESS = 0;
 const ERRNO_ACCESS = 2;
@@ -401,12 +414,20 @@ export async function runRawWasiModule(request, output, options = {}) {
   });
 
   try {
+    const importedMemory = createImportedMemory(bytes);
+    if (importedMemory) {
+      wasi.setMemory(importedMemory.memory);
+    }
+    const importObject = wasi.importObject();
+    if (importedMemory) {
+      attachImportedMemory(importObject, importedMemory);
+    }
     const instantiated = await globalThis.WebAssembly.instantiate(
       bytes,
-      wasi.importObject(),
+      importObject,
     );
     instance = instantiated.instance ?? instantiated;
-    const memory = exportedMemory(instance);
+    const memory = importedMemory?.memory ?? exportedMemory(instance);
     wasi.setMemory(memory);
     const entrypoint =
       packageRecord.entrypoint ?? packageRecord.metadata?.entrypoint ?? DEFAULT_ENTRYPOINT;
@@ -837,8 +858,20 @@ class WasiPreview1Runtime {
     const imports = {
       [WASI_IMPORT_MODULE]: this.imports(),
     };
+    imports[WASI_THREAD_IMPORT_MODULE] = this.wasiThreadImports();
     imports[WASIX_IMPORT_MODULE] = this.wasix.imports();
     return imports;
+  }
+
+  wasiThreadImports() {
+    return {
+      [WASI_THREAD_SPAWN_IMPORT]: (_startArg) => this.wasiThreadSpawn(),
+    };
+  }
+
+  wasiThreadSpawn() {
+    this.throwIfAborted();
+    return -ERRNO_NOTSUP;
   }
 
   async runProcessExec(request) {
@@ -4341,6 +4374,222 @@ function exportedMemory(instance) {
     );
   }
   return memory;
+}
+
+function createImportedMemory(bytes) {
+  const memoryImport = importedMemoryImport(bytes);
+  if (!memoryImport) {
+    return null;
+  }
+  if (
+    memoryImport.module !== ENV_IMPORT_MODULE ||
+    memoryImport.name !== MEMORY_IMPORT_NAME
+  ) {
+    throw new BrowserWasiModuleError(
+      "invalid_package",
+      `raw WASI module imports unsupported memory ${memoryImport.module}.${memoryImport.name}`,
+      "package_load",
+    );
+  }
+  if (memoryImport.shared && memoryImport.maximum == null) {
+    throw new BrowserWasiModuleError(
+      "invalid_package",
+      "raw WASI shared memory import must declare a maximum",
+      "package_load",
+    );
+  }
+
+  const descriptor = { initial: memoryImport.initial };
+  if (memoryImport.maximum != null) {
+    descriptor.maximum = memoryImport.maximum;
+  }
+  if (memoryImport.shared) {
+    descriptor.shared = true;
+  }
+
+  try {
+    return {
+      ...memoryImport,
+      memory: new globalThis.WebAssembly.Memory(descriptor),
+    };
+  } catch (error) {
+    throw new BrowserWasiModuleError(
+      "unsupported",
+      `raw WASI imported memory could not be created: ${
+        error?.message ?? "WebAssembly.Memory construction failed"
+      }`,
+      "package_load",
+    );
+  }
+}
+
+function attachImportedMemory(importObject, memoryImport) {
+  importObject[memoryImport.module] ??= {};
+  importObject[memoryImport.module][memoryImport.name] = memoryImport.memory;
+}
+
+function importedMemoryImport(bytes) {
+  const imports = importedMemoryImports(bytes);
+  if (imports.length === 0) {
+    return null;
+  }
+  if (imports.length > 1) {
+    throw new BrowserWasiModuleError(
+      "invalid_package",
+      "raw WASI module imports multiple memories",
+      "package_load",
+    );
+  }
+  return imports[0];
+}
+
+function importedMemoryImports(bytes) {
+  const data = toUint8Array(bytes);
+  validateWasmMagic(data);
+  const imports = [];
+  let offset = WASM_MAGIC.byteLength + 4;
+  while (offset < data.byteLength) {
+    const sectionId = data[offset];
+    offset += 1;
+    const length = readWasmVarUint32(data, offset);
+    offset = length.offset;
+    const sectionEnd = offset + length.value;
+    requireWasmRange(data, offset, length.value);
+    if (sectionId === WASM_IMPORT_SECTION_ID) {
+      parseWasmImportSection(data, offset, sectionEnd, imports);
+    }
+    offset = sectionEnd;
+  }
+  return imports;
+}
+
+function parseWasmImportSection(data, offset, sectionEnd, imports) {
+  const count = readWasmVarUint32(data, offset);
+  let cursor = count.offset;
+  for (let index = 0; index < count.value; index += 1) {
+    const moduleName = readWasmName(data, cursor, sectionEnd);
+    cursor = moduleName.offset;
+    const importName = readWasmName(data, cursor, sectionEnd);
+    cursor = importName.offset;
+    requireWasmRange(data, cursor, 1, sectionEnd);
+    const kind = data[cursor];
+    cursor += 1;
+    if (kind === WASM_IMPORT_KIND_MEMORY) {
+      const memory = readWasmMemoryType(data, cursor, sectionEnd);
+      cursor = memory.offset;
+      imports.push({
+        module: moduleName.value,
+        name: importName.value,
+        initial: memory.initial,
+        maximum: memory.maximum,
+        shared: memory.shared,
+      });
+      continue;
+    }
+    cursor = skipWasmImportDescriptor(data, cursor, sectionEnd, kind);
+  }
+}
+
+function skipWasmImportDescriptor(data, offset, sectionEnd, kind) {
+  if (kind === WASM_IMPORT_KIND_FUNCTION) {
+    return readWasmVarUint32(data, offset, sectionEnd).offset;
+  }
+  if (kind === WASM_IMPORT_KIND_TAG) {
+    const attribute = readWasmVarUint32(data, offset, sectionEnd);
+    return readWasmVarUint32(data, attribute.offset, sectionEnd).offset;
+  }
+  if (kind === WASM_IMPORT_KIND_TABLE) {
+    requireWasmRange(data, offset, 1, sectionEnd);
+    return readWasmLimits(data, offset + 1, sectionEnd).offset;
+  }
+  if (kind === WASM_IMPORT_KIND_GLOBAL) {
+    requireWasmRange(data, offset, 2, sectionEnd);
+    return offset + 2;
+  }
+  throw new BrowserWasiModuleError(
+    "invalid_package",
+    `raw WASI module imports unsupported descriptor kind ${kind}`,
+    "package_load",
+  );
+}
+
+function readWasmMemoryType(data, offset, sectionEnd) {
+  const limits = readWasmLimits(data, offset, sectionEnd);
+  if ((limits.flags & WASM_LIMITS_MEMORY64) !== 0) {
+    throw new BrowserWasiModuleError(
+      "unsupported",
+      "raw WASI memory64 imports are not supported in the browser runner",
+      "package_load",
+    );
+  }
+  return limits;
+}
+
+function readWasmLimits(data, offset, sectionEnd = data.byteLength) {
+  const flags = readWasmVarUint32(data, offset, sectionEnd);
+  const initial = readWasmVarUint32(data, flags.offset, sectionEnd);
+  let maximum = null;
+  let cursor = initial.offset;
+  if ((flags.value & WASM_LIMITS_HAS_MAXIMUM) !== 0) {
+    const maximumValue = readWasmVarUint32(data, cursor, sectionEnd);
+    maximum = maximumValue.value;
+    cursor = maximumValue.offset;
+  }
+  return {
+    flags: flags.value,
+    initial: initial.value,
+    maximum,
+    offset: cursor,
+    shared: (flags.value & WASM_LIMITS_SHARED) !== 0,
+  };
+}
+
+function readWasmName(data, offset, sectionEnd) {
+  const length = readWasmVarUint32(data, offset, sectionEnd);
+  requireWasmRange(data, length.offset, length.value, sectionEnd);
+  const end = length.offset + length.value;
+  return {
+    offset: end,
+    value: decodeText(data.subarray(length.offset, end)),
+  };
+}
+
+function readWasmVarUint32(data, offset, sectionEnd = data.byteLength) {
+  let result = 0;
+  let shift = 0;
+  let cursor = offset;
+  while (cursor < sectionEnd) {
+    const byte = data[cursor];
+    cursor += 1;
+    result |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      return { offset: cursor, value: result >>> 0 };
+    }
+    shift += 7;
+    if (shift >= 35) {
+      break;
+    }
+  }
+  throw new BrowserWasiModuleError(
+    "invalid_package",
+    "raw WASI module contains an invalid varuint32",
+    "package_load",
+  );
+}
+
+function requireWasmRange(data, offset, length, end = data.byteLength) {
+  if (
+    offset < 0 ||
+    length < 0 ||
+    offset + length > end ||
+    end > data.byteLength
+  ) {
+    throw new BrowserWasiModuleError(
+      "invalid_package",
+      "raw WASI module import section is truncated",
+      "package_load",
+    );
+  }
 }
 
 function validateWasmMagic(bytes) {

@@ -156,6 +156,14 @@ const MISSING_MEMORY_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABwoBBl9zdGFydAAACgQBAgAL",
 );
 
+const IMPORTED_MEMORY_WASI_WASM = base64ToBytes(
+  "AGFzbQEAAAABHAVgAn9/AX9gBH9/f38Bf2ABfwBgA39/fwBgAAAC7wEHA2VudgZtZW1vcnkCAwEEFndhc2lfc25hcHNob3RfcHJldmlldzEOYXJnc19zaXplc19nZXQAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGFyZ3NfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRFlbnZpcm9uX3NpemVzX2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzELZW52aXJvbl9nZXQAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAgMEAwIDBAcKAQZfc3RhcnQACAqIAgMHACAAEAUACxEAIAAtAAAgAUcEQCACEAYLC+sBAQJ/QQBBBBAABEBBChAGC0EAKAIAQQJHBEBBCxAGC0EQQcAAEAEEQEEMEAYLQRQoAgAhACAAQeEAQQ0QByAAQQFqQewAQQ4QByAAQQJqQfAAQQ8QByAAQQNqQegAQRAQByAAQQRqQeEAQREQB0EIQQwQAgRAQRIQBgtBCCgCAEEBRwRAQRMQBgtBGEGAARADBEBBFBAGC0EYKAIAIQEgAUHIAEEVEAcgAUEBakHFAEEWEAcgAUEFakE9QRcQByABQQZqQeIAQRgQB0EgQYAENgIAQSRBEzYCAEEBQSBBAUEoEAQEQEEZEAYLCwsaAQBBgAQLE2ltcG9ydGVkLW1lbW9yeS1vawo=",
+);
+
+const WASI_THREAD_SPAWN_IMPORT_WASM = base64ToBytes(
+  "AGFzbQEAAAABFQRgAX8Bf2AEf39/fwF/YAF/AGAAAAJaAwR3YXNpDHRocmVhZC1zcGF3bgAAFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwMCAgMFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQABAo6AgcAIAAQAgALMABBABAAQUZHBEBBChADC0EAQYABNgIAQQRBFzYCAEEBQQBBAUEIEAEEQEELEAMLCwseAQBBgAELF3RocmVhZC1zcGF3bi1ub3RzdXAtb2sK",
+);
+
 const UNSUPPORTED_IMPORT_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAACMgEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRd1bmtub3duX3ByZXZpZXcxX2ltcG9ydAAAAwIBAAUDAQABBxMCBm1lbW9yeQIABl9zdGFydAABCgYBBAAQAAs=",
 );
@@ -3459,6 +3467,47 @@ test("raw WASI executor reports command resolution failures", async () => {
       return true;
     },
   );
+});
+
+test("raw WASI executor supplies imported shared memory", async () => {
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: IMPORTED_MEMORY_WASI_WASM,
+    command: "codex",
+    id: "codex",
+  });
+  const output = recordingOutput();
+
+  const result = await executor.run(
+    {
+      ...baseRunRequest(packageRecord),
+      args: ["alpha"],
+      env: { HELLO: "browser" },
+    },
+    output,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(output.stdout, "imported-memory-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor supplies wasi thread-spawn import shape", async () => {
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASI_THREAD_SPAWN_IMPORT_WASM,
+    command: "codex",
+    id: "codex",
+  });
+  const output = recordingOutput();
+
+  const result = await executor.run(baseRunRequest(packageRecord), output);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(output.stdout, "thread-spawn-notsup-ok\n");
+  assert.equal(output.stderr, "");
 });
 
 test("raw WASI executor reports invalid modules and unsupported imports", async () => {

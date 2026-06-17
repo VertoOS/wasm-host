@@ -377,6 +377,11 @@ socket/network imports such as `sock_open`,
 `sock_connect`, `sock_recv_from`, `sock_send_to`, option helpers, multicast
 helpers, port helpers, and `resolve`, all of which return deterministic
 `NOTSUP` in the browser profile.
+For WebC atoms that import memory, the runner parses the Wasm import section,
+supplies `env.memory` before instantiation, and attaches that memory to the
+WASI/WASIX handlers. It also exposes the separate `wasi.thread-spawn` import
+shape used by pthread-built atoms, returning deterministic negative `NOTSUP`
+until the browser host has a real worker-thread runtime.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, can optionally back `/workspace` with an injected browser workspace

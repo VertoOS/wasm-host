@@ -64,18 +64,21 @@ memory[0] pages: initial=37 max=65536 shared <- env.memory
 
 ## Import Status Summary
 
-| Artifact | Total imports | Preview1 imports present in current runner | WASIX imports implemented by name | Hard missing import-object blockers | Imported but unsupported capability names |
+| Artifact | Total imports | Preview1 imports present in current runner | WASIX imports implemented by name | Import-object requirements resolved by #194 | Imported but unsupported capability names |
 | --- | ---: | ---: | ---: | --- | ---: |
 | `wasmer/bash@1.0.25` | 56 | 24 | 10 | `env.memory` | 21 |
 | `wasmer/coreutils@1.0.25` | 135 | 46 | 12 | `env.memory`, `wasi.thread-spawn` | 75 |
 
-For these artifacts, there are only two absent import names/shapes:
+The audit found two import-object requirements that were absent before
+[#194](https://github.com/VertoOS/wasm-host/issues/194):
 
-- `env.memory`: both atoms import shared memory. The current raw browser runner
-  builds only WASI/WASIX function namespaces and expects memory to be exported
-  after instantiation.
+- `env.memory`: both atoms import shared memory. The raw browser runner now
+  parses the Wasm import section, constructs the requested memory before
+  instantiation, and attaches it to the WASI/WASIX handlers.
 - `wasi.thread-spawn`: imported by `wasmer/coreutils@1.0.25` through a separate
-  `wasi` module namespace, not `wasix_32v1.thread_spawn_v2`.
+  `wasi` module namespace, not `wasix_32v1.thread_spawn_v2`. The import now
+  exists and returns deterministic negative `NOTSUP` until a browser
+  worker-thread runtime is designed.
 
 Everything else needed for instantiation is present by name. The remaining work
 is implementation depth inside grouped browser capability buckets.
@@ -95,12 +98,11 @@ is implementation depth inside grouped browser capability buckets.
 
 ## Current Interpretation
 
-The next PR should not add one syscall at a time. It should start with
-[#194](https://github.com/VertoOS/wasm-host/issues/194), because imported
-shared memory and `wasi.thread-spawn` are hard instantiation blockers. After
-that, the first Bash smoke likely needs the TTY and process/catalog groups
-before the broader thread/event, dynamic, network, and clock buckets can be
-classified by actual runtime calls.
+The next PR should not add one syscall at a time. After
+[#194](https://github.com/VertoOS/wasm-host/issues/194), the first Bash smoke
+likely needs the TTY and process/catalog groups before the broader
+thread/event, dynamic, network, and clock buckets can be classified by actual
+runtime calls.
 
 The audit did not find any reason to add first-class MCP, plugin, provider,
 connector, or OAuth modules under `apps/web`. Those remain adapter-package

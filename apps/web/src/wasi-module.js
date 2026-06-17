@@ -161,6 +161,8 @@ const CLOCK_RESOLUTION_NANOS = NANOS_PER_MILLI;
 const WASI_ADVICE_NOREUSE = 5;
 const RANDOM_GET_CHUNK_SIZE = 65_536;
 let workerRunCounter = 0;
+let workerChildRunCounter = 0;
+const workerChildCommandRuns = new Map();
 
 export class BrowserWasiModuleError extends Error {
   constructor(kind, message, stage = "runtime", options = {}) {
@@ -288,6 +290,7 @@ export async function runRawWasiModule(request, output, options = {}) {
   let instance = null;
   const wasi = new WasiPreview1Runtime({
     args: [request.command, ...request.args],
+    childCommands: request.childCommands,
     env: request.env,
     getInstance: () => instance,
     output,
@@ -364,6 +367,7 @@ export async function runRawWasiModuleInWorker(request, output, options = {}) {
 
   let settled = false;
   let outputChain = Promise.resolve();
+  const pendingChildRequests = new Map();
   const enqueueOutput = (write) => {
     outputChain = outputChain.then(write);
     outputChain.catch(() => {});
@@ -380,6 +384,66 @@ export async function runRawWasiModuleInWorker(request, output, options = {}) {
     };
     const rejectWith = (error) => finish(() => reject(error));
     const resolveWith = (result) => finish(() => resolve(result));
+    const postChildReply = (message) => {
+      if (!settled) {
+        postMessageToChildCommandWorker(worker, message);
+      }
+    };
+    const handleChildRun = (message) => {
+      const childId = String(message.childId ?? "");
+      if (!childId) {
+        return;
+      }
+      if (pendingChildRequests.has(childId)) {
+        postChildReply({
+          type: "wasi.child.error",
+          id,
+          childId,
+          error: workerErrorPayload(
+            new BrowserWasiModuleError(
+              "invalid_request",
+              `raw WASI worker child command is already pending: ${childId}`,
+              "runtime",
+            ),
+          ),
+        });
+        return;
+      }
+      const childPromise = Promise.resolve().then(async () => {
+        if (typeof request.childCommands?.run !== "function") {
+          throw new BrowserWasiModuleError(
+            "unsupported",
+            "raw WASI worker child command bridge is unavailable",
+            "runtime",
+            { exitCode: 126 },
+          );
+        }
+        return request.childCommands.run(
+          workerChildCommandRequest(message.request ?? {}),
+        );
+      });
+      pendingChildRequests.set(childId, childPromise);
+      childPromise.then(
+        (result) => {
+          pendingChildRequests.delete(childId);
+          postChildReply({
+            type: "wasi.child.complete",
+            id,
+            childId,
+            result: workerChildCommandResult(result),
+          });
+        },
+        (error) => {
+          pendingChildRequests.delete(childId);
+          postChildReply({
+            type: "wasi.child.error",
+            id,
+            childId,
+            error: workerErrorPayload(error),
+          });
+        },
+      );
+    };
     const onMessage = (event) => {
       const message = event?.data ?? event;
       if (!message || message.id !== id) {
@@ -397,6 +461,9 @@ export async function runRawWasiModuleInWorker(request, output, options = {}) {
           break;
         case "wasi.error":
           rejectWith(workerErrorFromPayload(message.error));
+          break;
+        case "wasi.child.run":
+          handleChildRun(message);
           break;
       }
     };
@@ -418,6 +485,7 @@ export async function runRawWasiModuleInWorker(request, output, options = {}) {
       removeWorkerListener(worker, "error", onError);
       removeWorkerListener(worker, "messageerror", onError);
       request.signal?.removeEventListener?.("abort", onAbort);
+      pendingChildRequests.clear();
       terminateExecutionWorker(worker);
     };
 
@@ -438,10 +506,18 @@ export async function runRawWasiModuleInWorker(request, output, options = {}) {
 }
 
 export async function handleRawWasiModuleWorkerMessage(message) {
+  if (
+    message?.type === "wasi.child.complete" ||
+    message?.type === "wasi.child.error"
+  ) {
+    settleRawWasiWorkerChildCommand(message);
+    return;
+  }
   if (!message || message.type !== "wasi.run") {
     return;
   }
   const { id, request } = message;
+  const childBridge = createRawWasiWorkerChildCommandBridge(id);
   const output = {
     writeStderr(chunk) {
       postMessageToWorkerHost({
@@ -459,7 +535,11 @@ export async function handleRawWasiModuleWorkerMessage(message) {
     },
   };
   try {
-    const result = await runRawWasiModule(request, output, { worker: false });
+    const result = await runRawWasiModule(
+      { ...request, childCommands: childBridge.commands },
+      output,
+      { worker: false },
+    );
     postMessageToWorkerHost({ type: "wasi.complete", id, result });
   } catch (error) {
     postMessageToWorkerHost({
@@ -467,6 +547,8 @@ export async function handleRawWasiModuleWorkerMessage(message) {
       id,
       error: workerErrorPayload(error),
     });
+  } finally {
+    childBridge.close();
   }
 }
 
@@ -615,6 +697,7 @@ function validateWorkspaceStore(store) {
 class WasiPreview1Runtime {
   constructor(options) {
     this.args = normalizeStringList(options.args ?? []);
+    this.childCommands = options.childCommands ?? null;
     this.env = normalizeEnv(options.env ?? {});
     this.getInstance = options.getInstance;
     this.memory = null;
@@ -3598,6 +3681,11 @@ function nextWorkerRunId() {
   return workerRunCounter;
 }
 
+function nextWorkerChildRunId() {
+  workerChildRunCounter += 1;
+  return workerChildRunCounter;
+}
+
 function validateExecutionWorker(worker) {
   if (
     !worker ||
@@ -3677,6 +3765,148 @@ async function workerRunRequest(request) {
   };
 }
 
+function createRawWasiWorkerChildCommandBridge(id) {
+  const pending = new Map();
+  workerChildCommandRuns.set(id, pending);
+  return {
+    commands: {
+      run(request = {}) {
+        const childId = `raw-wasi-child-${nextWorkerChildRunId()}`;
+        const childRequest = workerChildCommandRequest(request);
+        return new Promise((resolve, reject) => {
+          pending.set(childId, { reject, resolve });
+          try {
+            postMessageToWorkerHost({
+              type: "wasi.child.run",
+              id,
+              childId,
+              request: childRequest,
+            });
+          } catch (error) {
+            pending.delete(childId);
+            reject(error);
+          }
+        });
+      },
+    },
+    close(error) {
+      workerChildCommandRuns.delete(id);
+      const closeError =
+        error ??
+        new BrowserWasiModuleError(
+          "cancelled",
+          "raw WASI worker child command bridge closed",
+          "runtime",
+          { exitCode: 130 },
+        );
+      for (const { reject } of pending.values()) {
+        reject(closeError);
+      }
+      pending.clear();
+    },
+  };
+}
+
+function settleRawWasiWorkerChildCommand(message) {
+  const pendingByChildId = workerChildCommandRuns.get(message.id);
+  if (!pendingByChildId) {
+    return;
+  }
+  const childId = String(message.childId ?? "");
+  const pending = pendingByChildId.get(childId);
+  if (!pending) {
+    return;
+  }
+  pendingByChildId.delete(childId);
+  if (message.type === "wasi.child.complete") {
+    pending.resolve(workerChildCommandResult(message.result));
+    return;
+  }
+  pending.reject(workerErrorFromPayload(message.error));
+}
+
+function workerChildCommandRequest(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new BrowserWasiModuleError(
+      "invalid_request",
+      "raw WASI worker child command request must be an object",
+      "runtime",
+    );
+  }
+  const request = {
+    args: normalizeStringList(value.args ?? []),
+    command: nonEmptyString(
+      value.command,
+      "raw WASI worker child command is required",
+    ),
+  };
+  if (value.packageId === null) {
+    request.packageId = null;
+  } else if (value.packageId != null) {
+    request.packageId = nonEmptyString(
+      value.packageId,
+      "raw WASI worker child package id is required",
+    );
+  }
+  if (value.cwd != null) {
+    request.cwd = String(value.cwd);
+  }
+  if (value.env != null) {
+    request.env = cloneChildCommandEnv(value.env);
+  }
+  if (value.stdin != null) {
+    request.stdin = cloneChildCommandInput(value.stdin);
+  }
+  if (value.stdinChunks != null) {
+    request.stdinChunks = value.stdinChunks.map(cloneChildCommandInput);
+  }
+  if (value.stdout != null) {
+    request.stdout = String(value.stdout);
+  }
+  if (value.stderr != null) {
+    request.stderr = String(value.stderr);
+  }
+  if (value.timeoutMs != null) {
+    request.timeoutMs = Number(value.timeoutMs);
+  }
+  return request;
+}
+
+function cloneChildCommandEnv(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new BrowserWasiModuleError(
+      "invalid_request",
+      "raw WASI worker child command env must be an object",
+      "runtime",
+    );
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, envValue]) => [
+      String(key),
+      String(envValue),
+    ]),
+  );
+}
+
+function cloneChildCommandInput(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  return copyBytes(value);
+}
+
+function workerChildCommandResult(result = {}) {
+  return {
+    command: String(result.command ?? ""),
+    exitCode: Number(result.exitCode ?? 0),
+    packageId: String(result.packageId ?? ""),
+    stderr: result.stderr == null ? new Uint8Array() : copyBytes(result.stderr),
+    stderrBytes: Number(result.stderrBytes ?? result.stderr?.byteLength ?? 0),
+    stdout: result.stdout == null ? new Uint8Array() : copyBytes(result.stdout),
+    stdoutBytes: Number(result.stdoutBytes ?? result.stdout?.byteLength ?? 0),
+  };
+}
+
 function concatBytes(chunks, size) {
   const total =
     size ?? chunks.reduce((current, chunk) => current + chunk.byteLength, 0);
@@ -3711,6 +3941,10 @@ function postMessageToExecutionWorker(worker, message, stdinBytes) {
       ? [stdinBytes.buffer]
       : [];
   worker.postMessage(message, transfer);
+}
+
+function postMessageToChildCommandWorker(worker, message) {
+  worker.postMessage(message);
 }
 
 function workerErrorPayload(error) {

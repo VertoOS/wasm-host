@@ -1384,6 +1384,275 @@ test("raw WASI worker request carries only preloaded stdin bytes", async () => {
   assert.equal(packageRecord.bytes.byteLength, STDIN_ECHO_WASM.byteLength);
 });
 
+test("raw WASI worker child command RPC forwards complete results", async () => {
+  const output = recordingOutput();
+  const worker = childCommandWasiWorker({
+    childRequest: {
+      args: ["--flag"],
+      command: "child-tool",
+      cwd: "/workspace/child",
+      env: { PATH: "/bin" },
+      packageId: null,
+      stderr: "pipe",
+      stdin: "child stdin\n",
+      stdout: "pipe",
+      timeoutMs: 25,
+    },
+    onChildComplete(message, emit) {
+      emit({ type: "wasi.stdout", id: message.id, chunk: message.result.stdout });
+      emit({ type: "wasi.complete", id: message.id, result: { exitCode: 0 } });
+    },
+  });
+  const executor = createRawWasiModuleWorkerExecutor({
+    createWorker: () => worker,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: ARGV_ECHO_WASM,
+    command: "parent",
+    id: "parent",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      args: [],
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return {
+            command: request.command,
+            exitCode: 3,
+            packageId: "child-pkg",
+            stderr: encoder.encode("child stderr\n"),
+            stderrBytes: 13,
+            stdout: encoder.encode("child stdout\n"),
+            stdoutBytes: 13,
+          };
+        },
+      },
+      command: "parent",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.deepEqual(seenChildRequest, {
+    args: ["--flag"],
+    command: "child-tool",
+    cwd: "/workspace/child",
+    env: { PATH: "/bin" },
+    packageId: null,
+    stderr: "pipe",
+    stdin: "child stdin\n",
+    stdout: "pipe",
+    timeoutMs: 25,
+  });
+  assert.equal(output.stdout, "child stdout\n");
+  assert.equal(output.stderr, "");
+  assert.deepEqual(worker.childReplies[0].result, {
+    command: "child-tool",
+    exitCode: 3,
+    packageId: "child-pkg",
+    stderr: encoder.encode("child stderr\n"),
+    stderrBytes: 13,
+    stdout: encoder.encode("child stdout\n"),
+    stdoutBytes: 13,
+  });
+});
+
+test("raw WASI worker child command RPC reports missing bridge support", async () => {
+  const output = recordingOutput();
+  const worker = childCommandWasiWorker({
+    childRequest: { command: "child-tool", packageId: null },
+    onChildError(message, emit) {
+      emit({ type: "wasi.error", id: message.id, error: message.error });
+    },
+  });
+  const executor = createRawWasiModuleWorkerExecutor({
+    createWorker: () => worker,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: ARGV_ECHO_WASM,
+    command: "parent",
+    id: "parent",
+  });
+
+  await assert.rejects(
+    () =>
+      executor.run(
+        {
+          args: [],
+          command: "parent",
+          env: {},
+          package: packageRecord,
+          signal: new AbortController().signal,
+        },
+        output,
+      ),
+    (error) => {
+      assert.equal(error.kind, "unsupported");
+      assert.equal(
+        error.message,
+        "raw WASI worker child command bridge is unavailable",
+      );
+      assert.equal(error.exitCode, 126);
+      return true;
+    },
+  );
+});
+
+test("command worker raw WASI worker child RPC resolves catalog commands", async () => {
+  const port = recordingPort();
+  const worker = childCommandWasiWorker({
+    childRequest: {
+      command: "smoke",
+      env: { PATH: "/bin" },
+      packageId: null,
+    },
+    onChildComplete(message, emit) {
+      emit({ type: "wasi.stdout", id: message.id, chunk: message.result.stdout });
+      emit({
+        type: "wasi.complete",
+        id: message.id,
+        result: { exitCode: message.result.exitCode },
+      });
+    },
+  });
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    wasiModule: { createWorker: () => worker },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["smoke"], id: "smoke-child", type: "smoke" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "parent",
+      id: "parent",
+      wasiModule: { bytes: ARGV_ECHO_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-worker-child",
+    packageId: "parent",
+    command: "parent",
+  });
+
+  assert.equal(stdoutText(port.messages), "BROWSER_SMOKE_OK\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assert.equal(port.messages.at(-1).result.exitCode, 0);
+});
+
+test("command worker raw WASI worker child RPC propagates catalog misses", async () => {
+  const port = recordingPort();
+  const worker = childCommandWasiWorker({
+    childRequest: {
+      command: "missing-child",
+      packageId: null,
+    },
+    onChildError(message, emit) {
+      emit({ type: "wasi.error", id: message.id, error: message.error });
+    },
+  });
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    wasiModule: { createWorker: () => worker },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "parent",
+      id: "parent",
+      wasiModule: { bytes: ARGV_ECHO_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-worker-child-missing",
+    packageId: "parent",
+    command: "parent",
+  });
+
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-worker-child-missing",
+    error: {
+      kind: "command_not_found",
+      message: "browser command not found in package catalog: missing-child",
+      stage: "command_resolution",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 127,
+      failureStage: "command_resolution",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
+test("raw WASI worker child command RPC settles on parent abort", async () => {
+  const output = recordingOutput();
+  const childRequested = deferred();
+  const worker = childCommandWasiWorker({
+    childRequest: { command: "child-tool", packageId: null },
+    onChildRun() {
+      childRequested.resolve();
+    },
+    onChildComplete() {},
+    onChildError() {},
+  });
+  const executor = createRawWasiModuleWorkerExecutor({
+    createWorker: () => worker,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: ARGV_ECHO_WASM,
+    command: "parent",
+    id: "parent",
+  });
+  const controller = new AbortController();
+  const run = executor.run(
+    {
+      args: [],
+      childCommands: {
+        run() {
+          return new Promise(() => {});
+        },
+      },
+      command: "parent",
+      env: {},
+      package: packageRecord,
+      signal: controller.signal,
+    },
+    output,
+  );
+  await childRequested.promise;
+  controller.abort();
+
+  await assert.rejects(run, (error) => {
+    assert.equal(error.name, "AbortError");
+    return true;
+  });
+  assert.equal(worker.terminated, true);
+});
+
 test("raw WASI worker executor rejects live workspace stores", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleWorkerExecutor({
@@ -2919,6 +3188,60 @@ function recordingWasiWorker() {
   };
 }
 
+function childCommandWasiWorker(options = {}) {
+  const listeners = new Map();
+  const worker = {
+    childReplies: [],
+    messages: [],
+    terminated: false,
+    transferLists: [],
+    postMessage(message, transferList = []) {
+      this.messages.push(message);
+      this.transferLists.push(transferList);
+      if (message.type === "wasi.run") {
+        queueMicrotask(() => {
+          options.onChildRun?.(message);
+          emit({
+            type: "wasi.child.run",
+            childId: options.childId ?? "child-1",
+            id: message.id,
+            request: options.childRequest ?? { command: "child" },
+          });
+        });
+        return;
+      }
+      if (message.type === "wasi.child.complete") {
+        this.childReplies.push(message);
+        queueMicrotask(() => {
+          options.onChildComplete?.(message, emit);
+        });
+        return;
+      }
+      if (message.type === "wasi.child.error") {
+        this.childReplies.push(message);
+        queueMicrotask(() => {
+          options.onChildError?.(message, emit);
+        });
+      }
+    },
+    terminate() {
+      this.terminated = true;
+    },
+    addEventListener(type, listener) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type, listener) {
+      if (listeners.get(type) === listener) {
+        listeners.delete(type);
+      }
+    },
+  };
+  const emit = (message) => {
+    listeners.get("message")?.({ data: message });
+  };
+  return worker;
+}
+
 async function* asyncByteChunks(chunks) {
   for (const chunk of chunks) {
     yield typeof chunk === "string" ? encoder.encode(chunk) : chunk;
@@ -2952,6 +3275,16 @@ function withTimeout(promise, timeoutMs, message) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
 }
 
 function recordingOutput() {

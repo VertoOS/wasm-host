@@ -121,7 +121,24 @@ async function runCodexVersionSmokePage(page) {
   assert.deepEqual(status.result.toolFixture.args, [
     "/workspace/notes/edit.txt",
   ]);
+  assert.deepEqual(status.result.toolFixture.closeStreams, [
+    "stdout",
+    "stderr",
+  ]);
   assert.equal(status.result.toolFixture.cwd, "/workspace/notes");
+  assert.deepEqual(status.result.toolFixture.eventTypes, [
+    "started",
+    "stderr",
+    "write",
+    "stdout",
+    "write",
+    "stdout.close",
+    "close",
+    "stderr.close",
+    "close",
+    "complete",
+    "exit",
+  ]);
   assert.equal(status.result.toolFixture.exitCode, 0);
   assert.equal(status.result.toolFixture.mode, "e2e");
   assert.equal(status.result.toolFixture.path, "/workspace/notes/edit.txt");
@@ -129,12 +146,17 @@ async function runCodexVersionSmokePage(page) {
     status.result.toolFixture.stderr,
     "browser-tool-fixture: inspected workspace\n",
   );
+  assert.equal(status.result.toolFixture.stderrBytes, 42);
   assert.equal(status.result.toolFixture.stdin, "browser stdin\n");
   assert.equal(
     status.result.toolFixture.workspaceText,
     "Browser Codex can edit this file.\n",
   );
   assert(status.result.toolFixture.stdoutBytes > 0);
+  assert.deepEqual(status.result.toolFixture.writeStreams, [
+    "stderr",
+    "stdout",
+  ]);
   assert.equal(status.result.workerEntrypoint, "/src/command-worker-entry.js");
   return [
     `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`,

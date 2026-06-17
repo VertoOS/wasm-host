@@ -121,19 +121,26 @@ async function runBrowserToolFixture(worker, workspaceEdit) {
     load.loaded.packageType === "browser-tool-fixture",
     "Browser tool fixture package should use the built-in executor",
   );
-  const run = await dispatchAndCollect(worker, {
-    type: "command.run",
+  const transcript = createTerminalTranscript();
+  const terminal = createBrowserTerminalSession({
+    port: worker,
+    sink: transcript.sink,
+  });
+  const completion = terminal.start({
     id: "run-browser-tool-fixture",
     packageId: "browser-tool-fixture",
     command: "tool-inspect",
     args: [workspaceEdit.path],
     cwd: "/workspace/notes",
     env: { BROWSER_TOOL_MODE: "e2e" },
-    stdinChunks: ["browser ", "stdin\n"],
     timeoutMs: 5000,
   });
-  const stdout = chunksText(run.stdout);
-  const stderr = chunksText(run.stderr);
+  terminal.writeStdin("browser ");
+  terminal.writeStdin("stdin\n");
+  terminal.closeStdin();
+  const result = await completion;
+  const stdout = transcript.stdoutText();
+  const stderr = transcript.stderrText();
   const payload = JSON.parse(stdout);
 
   assert(
@@ -162,13 +169,21 @@ async function runBrowserToolFixture(worker, workspaceEdit) {
   );
   return {
     args: payload.args,
+    closeStreams: transcript.events
+      .filter((event) => event.type === "close")
+      .map((event) => event.stream),
     cwd: payload.cwd,
-    exitCode: run.complete.result.exitCode,
+    eventTypes: transcript.events.map((event) => event.type),
+    exitCode: result.exitCode,
     mode: payload.env.BROWSER_TOOL_MODE,
     path: payload.workspace.path,
     stderr,
+    stderrBytes: result.stderrBytes,
     stdin: payload.stdin,
-    stdoutBytes: run.complete.result.stdoutBytes,
+    stdoutBytes: result.stdoutBytes,
+    writeStreams: transcript.events
+      .filter((event) => event.type === "write")
+      .map((event) => event.stream),
     workspaceText: payload.workspace.text,
   };
 }

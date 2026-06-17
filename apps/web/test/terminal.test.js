@@ -6,6 +6,8 @@ import {
   createBrowserTerminalSession,
   createTerminalTranscript,
 } from "../src/terminal.js";
+import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
+import { createMemoryBrowserWorkspaceStore } from "../src/workspace.js";
 
 const encoder = new TextEncoder();
 
@@ -88,6 +90,113 @@ test("BrowserTerminalSession maps worker stdio and exit messages to a transcript
       "exit",
     ],
   );
+});
+
+test("BrowserTerminalSession captures browser tool fixture transcripts", async () => {
+  const workspaceStore = createMemoryBrowserWorkspaceStore();
+  await workspaceStore.createDirectory("/workspace/tools", { recursive: true });
+  await workspaceStore.writeFile("/workspace/tools/input.txt", "tool file\n");
+  const { runtime, terminalPort } = runtimeBackedTerminalPort({
+    httpTransports: { direct: {} },
+    workspaceStore,
+  });
+  const transcript = createTerminalTranscript();
+  const session = createBrowserTerminalSession({
+    port: terminalPort,
+    sink: transcript.sink,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-tool-fixture",
+    package: {
+      bytes: webcBytes("tool-fixture"),
+      commands: ["tool-inspect"],
+      executorType: "browser-tool-fixture",
+      id: "tool-fixture",
+    },
+  });
+  const completion = session.start({
+    id: "terminal-tool-fixture",
+    packageId: "tool-fixture",
+    command: "tool-inspect",
+    args: ["/workspace/tools/input.txt"],
+    cwd: "/workspace/tools",
+    env: {
+      BROWSER_TOOL_MODE: "terminal",
+      SECRET_SHOULD_NOT_ECHO: "nope",
+    },
+    timeoutMs: 5000,
+  });
+  session.writeStdin("terminal ");
+  session.writeStdin("stdin\n");
+  session.closeStdin();
+
+  const result = await completion;
+  const stdout = transcript.stdoutText();
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(JSON.parse(stdout), {
+    args: ["/workspace/tools/input.txt"],
+    command: "tool-inspect",
+    cwd: "/workspace/tools",
+    env: { BROWSER_TOOL_MODE: "terminal" },
+    stdin: "terminal stdin\n",
+    workspace: {
+      bytes: 10,
+      path: "/workspace/tools/input.txt",
+      text: "tool file\n",
+    },
+  });
+  assert.equal(
+    transcript.stderrText(),
+    "browser-tool-fixture: inspected workspace\n",
+  );
+  assert.deepEqual(
+    transcript.events.map((event) => event.type),
+    [
+      "started",
+      "stderr",
+      "write",
+      "stdout",
+      "write",
+      "stdout.close",
+      "close",
+      "stderr.close",
+      "close",
+      "complete",
+      "exit",
+    ],
+  );
+  assert.deepEqual(terminalPort.sent, [
+    {
+      type: "command.run",
+      id: "terminal-tool-fixture",
+      packageId: "tool-fixture",
+      command: "tool-inspect",
+      args: ["/workspace/tools/input.txt"],
+      cwd: "/workspace/tools",
+      env: {
+        BROWSER_TOOL_MODE: "terminal",
+        SECRET_SHOULD_NOT_ECHO: "nope",
+      },
+      timeoutMs: 5000,
+      stdinOpen: true,
+    },
+    {
+      type: "command.stdin",
+      id: "terminal-tool-fixture",
+      chunk: encoder.encode("terminal "),
+    },
+    {
+      type: "command.stdin",
+      id: "terminal-tool-fixture",
+      chunk: encoder.encode("stdin\n"),
+    },
+    { type: "command.stdin.end", id: "terminal-tool-fixture" },
+  ]);
+  assert.equal(stdout.includes("SECRET_SHOULD_NOT_ECHO"), false);
+  assert.equal(stdout.includes("nope"), false);
 });
 
 test("BrowserTerminalSession sends stdin, resize, cancellation, and stdin close messages", () => {
@@ -216,4 +325,45 @@ function eventPort() {
       }
     },
   };
+}
+
+function runtimeBackedTerminalPort(options = {}) {
+  const listeners = new Set();
+  let runtime;
+  const terminalPort = {
+    sent: [],
+    addEventListener(type, listener) {
+      if (type === "message") {
+        listeners.add(listener);
+      }
+    },
+    removeEventListener(type, listener) {
+      if (type === "message") {
+        listeners.delete(listener);
+      }
+    },
+    postMessage(message) {
+      this.sent.push(message);
+      void runtime.handleMessage(message);
+    },
+  };
+  runtime = createBrowserCommandWorkerRuntime({
+    ...options,
+    port: {
+      postMessage(message) {
+        for (const listener of listeners) {
+          listener({ data: message });
+        }
+      },
+    },
+  });
+  return { runtime, terminalPort };
+}
+
+function webcBytes(suffix) {
+  const payload = encoder.encode(suffix);
+  const bytes = new Uint8Array(5 + payload.byteLength);
+  bytes.set([0x00, 0x77, 0x65, 0x62, 0x63]);
+  bytes.set(payload, 5);
+  return bytes;
 }

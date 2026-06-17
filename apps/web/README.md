@@ -22,10 +22,10 @@ Current scope:
   timeout/cancellation result shaping, and pluggable HTTP bridge transport
   selection. Its built-in `smoke` executor is a lifecycle fixture only; the
   built-in `browser-tool-fixture` executor proves packaged tool command
-  dispatch with cwd/env/stdin and host-owned workspace reads; the `wasi-module`
-  executor supports the interim raw WASI preview1 `codex --version` smoke,
-  while real WebC package execution still depends on package loading and
-  runtime wiring.
+  dispatch with cwd/env/stdin, terminal transcript capture, and host-owned
+  workspace reads; the `wasi-module` executor supports the interim raw WASI
+  preview1 `codex --version` smoke, while real WebC package execution still
+  depends on package loading and runtime wiring.
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
   artifact. It validates the expected exports, calls `codex_version` and
@@ -145,8 +145,9 @@ Current scope:
   the browser tool fixture, and the Codex browser request-builder contract
   across a real worker message boundary.
 - `test/terminal.test.js` covers the terminal/stdio adapter's message ordering,
-  stdout/stderr transcript capture, stdin forwarding, terminal resize,
-  cancellation, stream close, and exit/error reporting.
+  stdout/stderr transcript capture, browser tool fixture transcript execution,
+  stdin forwarding, terminal resize, cancellation, stream close, and exit/error
+  reporting.
 - `test/terminal-ui.test.js` covers the terminal shell controller's output
   rendering, keyboard stdin, paste stdin, EOF, resize, cancellation, and
   pre-run terminal size handling with a fake DOM and fake worker.
@@ -172,10 +173,11 @@ Current scope:
   request-builder JSON contract, assert a mocked model-turn HTTP bridge
   contract with local Responses SSE deltas, assert a workspace-edit fixture
   persists through the browser workspace store, assert a packaged tool fixture
-  can read the edited file with cwd/env/stdin, and drive the terminal UI shell
-  through DOM controls. The terminal shell e2e also applies a package URL source
-  backed by a local data URL, verifies sanitized package metadata, and runs the
-  selected package through the worker smoke executor.
+  can read the edited file with cwd/env/stdin through the terminal transcript
+  adapter, and drive the terminal UI shell through DOM controls. The terminal
+  shell e2e also applies a package URL source backed by a local data URL,
+  verifies sanitized package metadata, and runs the selected package through
+  the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.

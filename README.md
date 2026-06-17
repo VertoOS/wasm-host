@@ -74,8 +74,9 @@ until the boundaries are stable enough to split.
   in the real-browser e2e harness.
 - The browser command worker can load a deterministic `browser-tool-fixture`
   package, run a packaged command with cwd/env/stdin, read a host-owned browser
-  workspace file, and verify that path through the real-browser e2e harness.
-  This is tool-execution contract coverage, not full Bash or git parity yet.
+  workspace file, and verify that path through the terminal transcript and
+  real-browser e2e harness. This is tool-execution contract coverage, not full
+  Bash or git parity yet.
 - The browser secret seam includes a deterministic fake device-flow auth broker
   for start/status/external-complete/cancel/logout tests. Completion stores the
   bearer token under a host-owned secret ref; public auth status does not expose

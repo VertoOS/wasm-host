@@ -29,6 +29,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+      - name: Browser tool protocol package
+        run: |
+          npm --prefix packages/browser-tool-protocol run check
+          npm --prefix packages/browser-tool-protocol test
       - name: Web adapter harness
         run: |
           npm --prefix apps/web run check

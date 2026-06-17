@@ -61,6 +61,9 @@ until the boundaries are stable enough to split.
 - Browser MCP/plugin work should target the protocol-neutral browser tool
   boundary first; MCP remains an adapter layer rather than a first-class
   browser runtime primitive.
+- The `packages/browser-tool-protocol` package defines that protocol-neutral
+  browser tool boundary for descriptors, calls, results, bounds, and
+  cancellation so future high-level adapters can live outside `apps/web`.
   The raw WASI executor can mount an injected store for writable `/workspace`
   fixture runs and flush mutations back as snapshots after the module exits.
 - The browser adapter package can consume the interim Codex artifact manifest

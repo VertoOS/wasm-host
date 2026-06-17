@@ -182,7 +182,13 @@ Current scope:
   host-side command worker to resolve and run cataloged packaged commands.
   Supported Preview1 imports are also mirrored through `wasix_32v1` for
   WASIX/WebC modules whose 32-bit import ABI matches the current browser
-  handlers.
+  handlers. Modules that import `env.memory` are supported by parsing the Wasm
+  import section, constructing the requested memory before instantiation, and
+  attaching that memory to the WASI/WASIX handlers; modules that export memory
+  continue to use the exported-memory path.
+  The separate `wasi.thread-spawn` namespace is also present so
+  pthread-shaped WebC atoms instantiate, but it returns deterministic negative
+  `NOTSUP` until a browser worker-thread runtime exists.
   `wasix_32v1.proc_exec` maps to that child-command bridge with cwd/env/stdin
   and inherited stdout/stderr. Process spawn, join, fork, and signal imports
   return deterministic unsupported capability errors until the runtime has an

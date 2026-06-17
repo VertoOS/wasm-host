@@ -51,6 +51,11 @@ Current scope:
   response correlation, notification delivery, malformed-frame errors, and
   close semantics so browser tests can follow the Codex browser demo's
   app-server message shape without a native WebSocket bridge.
+- `src/app-server-session.js` layers a small deterministic session controller
+  over the loopback client. It owns connect/initialize, account read, fake
+  device login cancellation, thread reuse, mocked prompt turns, pending turn
+  interrupt, close state, and a notification transcript for browser tests. It
+  is not persistent session storage or real provider-backed app-server logic.
 - `src/secrets.js` owns the current browser secret-provider seam: tests can
   supply host-owned bearer tokens by reference, while command messages and
   terminal output continue to carry only opaque secret references. It also
@@ -152,6 +157,10 @@ Current scope:
   transport and JSON-RPC client, including frame ordering, request correlation,
   notifications, malformed frames, close behavior, and the same deterministic
   app-server protocol slice through the transport surface.
+- `test/app-server-session.test.js` covers the app-server session controller's
+  connect/account/login/thread/turn workflow, thread reuse, mocked turn text,
+  pending turn interrupt, unsupported method propagation, close behavior, and
+  misuse errors before connection.
 - `test/secrets.test.js` covers the in-memory browser secret provider and fake
   device-flow broker, including external completion, classified denied/expired/
   cancelled errors, logout, and token redaction.
@@ -193,8 +202,8 @@ Current scope:
   request-builder JSON contract, assert a mocked model-turn HTTP bridge
   contract with local Responses SSE deltas, assert a workspace-edit fixture
   persists through the browser workspace store, assert the browser app-server
-  fixture through the loopback transport can initialize, report account status,
-  cancel login, start a thread, complete a mocked turn, interrupt a pending
+  fixture through the session controller can initialize, report account status,
+  cancel login, reuse a thread, complete a mocked turn, interrupt a pending
   turn, and reject unsupported native methods, assert a packaged tool fixture
   can read the edited file with cwd/env/stdin through the terminal transcript
   adapter, and drive the terminal UI shell through DOM controls. The terminal

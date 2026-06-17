@@ -61,6 +61,11 @@ Current scope:
   device login cancellation, thread reuse, mocked prompt turns, pending turn
   interrupt, close state, and a notification transcript for browser tests. It
   is not persistent session storage or real provider-backed app-server logic.
+- `src/mcp.js` implements the first deterministic browser MCP/tool transport
+  fixture. It can list and call a browser-owned tool through a loopback
+  transport, enforces bounded tool results, and rejects native-only stdio or
+  local-process server configs with structured browser capability errors. It is
+  not the full MCP SDK, plugin runtime, OAuth flow, or gateway transport.
 - `src/secrets.js` owns the current browser secret-provider seam: tests can
   supply host-owned bearer tokens by reference, while command messages and
   terminal output continue to carry only opaque secret references. It also
@@ -170,6 +175,9 @@ Current scope:
   connect/account/login/thread/turn workflow, thread reuse, mocked turn text,
   pending turn interrupt, unsupported method propagation, close behavior, and
   misuse errors before connection.
+- `test/mcp.test.js` covers the browser MCP/tool fixture's list and call
+  paths, unknown-tool errors, bounded-result enforcement, native-only server
+  config rejection, and close behavior.
 - `test/secrets.test.js` covers the in-memory browser secret provider and fake
   device-flow broker, including external completion, classified denied/expired/
   cancelled errors, logout, and token redaction.

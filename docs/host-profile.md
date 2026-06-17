@@ -240,16 +240,20 @@ boundary: exit code, stdout/stderr byte counts, failure stage, cancellation
 state, and timeout state. The worker maintains a protocol-neutral in-memory
 catalog for loaded package commands, exposes `/bin` and `/usr/bin` command
 paths, and resolves explicit `packageId: null` runs through browser PATH lookup
-without making higher-level tool adapter concepts first-class. The first
+without making higher-level tool adapter concepts first-class. Executor
+requests also receive a low-level child packaged-command helper that resolves
+another loaded command through the same package/catalog rules, carries
+cwd/env/args/stdin, can pipe or inherit stdout/stderr, and follows parent
+timeout/cancel signals. This is not arbitrary native process spawn. The first
 built-in `smoke` executor is only a lifecycle fixture for worker-boundary
 tests. The deterministic `browser-tool-fixture` executor is the first packaged
 tool-command fixture: it receives cwd, filtered env, stdin, timeout/cancel
-signals, reads a host-owned browser workspace file, and emits JSON through
-stdout plus a fixed stderr line. The terminal transcript adapter now drives the
-same fixture with stdin writes, EOF, stdout/stderr capture, stream close
-ordering, and exit status. It proves the command-worker and terminal tool
-boundary only; real Bash, git, and arbitrary tool packages remain separate
-browser adapter layers.
+signals, can invoke a cataloged child command, reads a host-owned browser
+workspace file, and emits JSON through stdout plus a fixed stderr line. The
+terminal transcript adapter now drives the same fixture with stdin writes, EOF,
+stdout/stderr capture, stream close ordering, and exit status. It proves the
+command-worker and terminal tool boundary only; real Bash, git, and arbitrary
+tool packages remain separate browser adapter layers.
 
 The first browser terminal/stdio adapter lives in `apps/web/src/terminal.js`.
 It is dependency-free and intentionally shaped for a later xterm.js surface: a
@@ -295,8 +299,10 @@ command atom metadata, reads cached atom bytes, and delegates executable atoms
 to the browser raw WASI Preview1 runtime with read-only package-root files from
 extracted WebC volume spans. Unsupported runners and missing atom artifacts
 still fail with structured errors. Compiled module cache persistence, package
-command process spawning, and Bash/coreutils execution are later browser
-runtime layers.
+WASIX process import plumbing, and Bash/coreutils execution are later browser
+runtime layers. In particular, raw WASI worker execution cannot receive the
+JavaScript child-command helper through structured clone; a worker-safe command
+bridge protocol remains future work.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory
@@ -415,15 +421,16 @@ command, WASM, HTTP, WebSocket, or gateway transports onto the shared tool
 protocol.
 
 The browser profile also has a deterministic packaged tool fixture. The command
-worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,
-filtered env, stdin, timeout, and cancellation through the normal run message,
-and lets the executor read a host-owned `/workspace` file. The fixture is
-covered by unit tests and the real-browser e2e harness after the workspace-edit
-path. The e2e run now uses `createBrowserTerminalSession`, writes stdin through
-the terminal adapter, sends EOF, and asserts transcript stdout, stderr, stream
-close ordering, and exit status, so it proves a tool command can observe
-persisted browser workspace state through terminal stdio. It is not Bash, git,
-WASIX process spawning, or arbitrary uploaded JavaScript.
+worker loads a `browser-tool-fixture` package, runs `tool-inspect` or the
+`tool-child` child-command fixture, passes cwd, filtered env, stdin, timeout,
+and cancellation through the normal run message, and lets the executor read a
+host-owned `/workspace` file or invoke another loaded packaged command by PATH.
+The fixture is covered by unit tests and the real-browser e2e harness after the
+workspace-edit path. The e2e run now uses `createBrowserTerminalSession`,
+writes stdin through the terminal adapter, sends EOF, and asserts transcript
+stdout, stderr, stream close ordering, and exit status, so it proves a tool
+command can observe persisted browser workspace state through terminal stdio.
+It is not Bash, git, native process spawning, or arbitrary uploaded JavaScript.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,
 hard termination of non-cooperative Wasm, or final WebC/WASIX package

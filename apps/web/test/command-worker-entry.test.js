@@ -63,6 +63,52 @@ test("command worker entry runs the browser smoke command across a worker bounda
   }
 });
 
+test("command worker entry invokes catalog child commands across a worker boundary", async () => {
+  const worker = createCommandWorker();
+  try {
+    const childLoad = await dispatchAndCollect(worker, {
+      type: "command.load",
+      id: "load-smoke-child",
+      package: { id: "smoke-child", type: "smoke", commands: ["smoke"] },
+    });
+    const parentLoad = await dispatchAndCollect(worker, {
+      type: "command.load",
+      id: "load-tool-child",
+      package: {
+        commands: ["tool-child"],
+        id: "tool-child",
+        type: "browser-tool-fixture",
+      },
+    });
+    const run = await dispatchAndCollect(worker, {
+      type: "command.run",
+      id: "run-tool-child",
+      packageId: "tool-child",
+      command: "tool-child",
+      args: ["smoke"],
+      env: { PATH: "/bin" },
+      stdin: "worker child stdin\n",
+    });
+
+    const summary = JSON.parse(chunksText(run.stdout));
+    assert.equal(childLoad.loaded.packageId, "smoke-child");
+    assert.equal(parentLoad.loaded.packageId, "tool-child");
+    assert.deepEqual(summary, {
+      command: "smoke",
+      exitCode: 0,
+      packageId: "smoke-child",
+      stderr: "",
+      stderrBytes: 0,
+      stdout: "BROWSER_SMOKE_OK\n",
+      stdoutBytes: 17,
+    });
+    assert.equal(chunksText(run.stderr), "");
+    assert.equal(run.complete.result.exitCode, 0);
+  } finally {
+    await worker.terminate();
+  }
+});
+
 test("command worker entry runs the Codex version smoke fixture across a worker boundary", async () => {
   const fixture = await codexVersionSmokeFixture(
     await codexVersionSmokeManifest(),

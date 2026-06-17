@@ -51,8 +51,12 @@ Current scope:
   child-command RPC, and `wasix_32v1.proc_exec`/`proc_exec2`/`proc_exec3` can
   replace the current raw WASI module with a cataloged packaged command while
   preserving cwd/stdin/stdout/stderr and applying WASIX env/PATH overlays.
-  `proc_exit2`, `proc_parent`, and `proc_snapshot` provide deterministic
-  single-process browser results. It also supplies the WASIX TTY state ABI with
+  `proc_exit2`, `proc_parent`, `proc_snapshot`, and no-child `proc_join`
+  provide deterministic browser process results. Asyncify-capable modules can
+  also use a bounded `proc_fork(copy_memory=false)` vfork subset: the child
+  resumes with pid `0`, the parent resumes after child `proc_exit2` or
+  `proc_exec*`, and completed child exit codes can be reaped through
+  `proc_join`. It also supplies the WASIX TTY state ABI with
   deterministic non-interactive defaults, plus single-thread `thread_id`,
   `thread_parallelism`, and zero-duration `thread_sleep` behavior. Opt-in raw
   WASI diagnostics can report unsupported WASIX call counts by group/name,
@@ -60,10 +64,10 @@ Current scope:
   stubs. Common `wasix_32v1` raw socket/network imports are recognized as
   deterministic unsupported browser capability gaps. Single-instance asyncify
   modules with exported stack bounds can use WASIX `stack_checkpoint` and
-  `stack_restore` as a browser continuation primitive. WASIX
-  `proc_spawn`/fork/signal/raise-interval, blocking join, futex/eventfd/context,
-  nonzero sleep, and raw socket/network semantics remain later process,
-  worker-thread, or host-bridge runtime layers.
+  `stack_restore` as a browser continuation primitive. WASIX copied-memory
+  fork, `proc_spawn`, signal/raise-interval, general blocking join,
+  futex/eventfd/context, nonzero sleep, and raw socket/network semantics remain
+  later process, worker-thread, or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, and mounts
@@ -201,11 +205,14 @@ Current scope:
   `wasix_32v1.proc_exec`/`proc_exec2`/`proc_exec3` map to that child-command
   bridge with cwd/env/stdin, PATH-aware catalog lookup, and inherited
   stdout/stderr. `proc_exit2` maps to normal WASI exit status propagation, while
-  `proc_parent` and `proc_snapshot` expose deterministic single-process browser
-  state. No-child `proc_join` returns the WASIX no-child status; process spawn,
-  fork, signal, raise-interval, and blocking join imports return deterministic
-  unsupported capability errors until the runtime has an async continuation
-  strategy for blocking process waits.
+  `proc_parent` and `proc_snapshot` expose deterministic browser process state.
+  No-child `proc_join` returns the WASIX no-child status, and completed vfork
+  children can be reaped with `JoinStatus::ExitNormal`. Asyncify-capable raw
+  WASI modules can use a bounded `proc_fork(copy_memory=false)` vfork path that
+  resumes the child first, then resumes the parent after child `proc_exit2` or
+  `proc_exec*`. Process spawn, copied-memory fork, signal, raise-interval, and
+  general blocking join imports return deterministic unsupported capability
+  errors until the runtime has a fuller process snapshot strategy.
   `wasix_32v1.getcwd`/`chdir` are backed by the browser virtual cwd across
   `/workspace`, `/tmp`, and read-only package-root paths. `path_open2`,
   `fd_fdflags_get`/`fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,

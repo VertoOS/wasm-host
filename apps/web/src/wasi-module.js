@@ -192,6 +192,10 @@ const WASIX_JOIN_STATUS_SIZE = 8;
 const WASIX_OPTION_TAG_NONE = 0;
 const WASIX_OPTION_TAG_SOME = 1;
 const WASIX_JOIN_STATUS_NOTHING = 0;
+const WASIX_JOIN_STATUS_EXIT_NORMAL = 1;
+const WASIX_PROC_JOIN_NON_BLOCKING = 1 << 0;
+const WASIX_ROOT_PID = 1;
+const WASIX_ROOT_PARENT_PID = 0;
 const WASIX_ASYNCIFY_EXPORTS = [
   "asyncify_get_state",
   "asyncify_start_rewind",
@@ -472,10 +476,21 @@ export async function runRawWasiModule(request, output, options = {}) {
         "package_load",
       );
     }
-    throwIfAborted(request.signal);
-    runWasiEntrypoint(start, wasi, request.signal);
-    throwIfAborted(request.signal);
-    return await workspaceResult(wasi.result({ exitCode: 0 }), workspace);
+    while (true) {
+      try {
+        throwIfAborted(request.signal);
+        runWasiEntrypoint(start, wasi, request.signal);
+        throwIfAborted(request.signal);
+        return await workspaceResult(wasi.result({ exitCode: 0 }), workspace);
+      } catch (error) {
+        if (error instanceof WasixProcExec && wasi.hasActiveVforkChild()) {
+          const result = await wasi.runProcessExec(error.request);
+          wasi.completeActiveVforkChild(result.exitCode);
+          continue;
+        }
+        throw error;
+      }
+    }
   } catch (error) {
     if (error instanceof WasiProcExit) {
       return await workspaceResult(
@@ -909,6 +924,21 @@ class WasiPreview1Runtime {
     this.stackContinuationCounter = 0n;
     this.pendingStackUnwind = null;
     this.pendingStackRewindValue = null;
+    this.pendingForkRewind = null;
+    this.currentProcessId = WASIX_ROOT_PID;
+    this.nextProcessId = WASIX_ROOT_PID + 1;
+    this.processes = new Map([
+      [
+        WASIX_ROOT_PID,
+        {
+          exitCode: null,
+          parentPid: WASIX_ROOT_PARENT_PID,
+          pid: WASIX_ROOT_PID,
+          state: "running",
+        },
+      ],
+    ]);
+    this.activeVfork = null;
     this.unsupportedWasixCalls = new Map();
   }
 
@@ -1015,6 +1045,69 @@ class WasiPreview1Runtime {
     return true;
   }
 
+  beginVfork(pidPtr) {
+    const parentPid = this.currentProcessId;
+    const childPid = this.nextProcessId;
+    this.nextProcessId += 1;
+    this.processes.set(childPid, {
+      exitCode: null,
+      parentPid,
+      pid: childPid,
+      state: "running",
+    });
+    this.pendingStackUnwind = {
+      childPid,
+      parentPid,
+      pidPtr,
+      type: "vfork-child",
+    };
+    this.startAsyncifyUnwind();
+    return ERRNO_SUCCESS;
+  }
+
+  finishForkRewind(pidPtr) {
+    if (!this.pendingForkRewind) {
+      return null;
+    }
+    const rewind = this.pendingForkRewind;
+    this.pendingForkRewind = null;
+    this.stopAsyncifyRewind();
+    this.currentProcessId = rewind.processId;
+    this.writeU32(pidPtr, rewind.pid);
+    return rewind.errno;
+  }
+
+  hasActiveVforkChild() {
+    return (
+      this.activeVfork != null &&
+      this.currentProcessId === this.activeVfork.childPid
+    );
+  }
+
+  beginVforkChildExit(code) {
+    if (!this.hasActiveVforkChild()) {
+      return false;
+    }
+    const exitCode = Number(code) >>> 0;
+    this.markProcessExited(this.activeVfork.childPid, exitCode);
+    this.pendingStackUnwind = {
+      childPid: this.activeVfork.childPid,
+      type: "vfork-parent",
+    };
+    this.startAsyncifyUnwind();
+    return true;
+  }
+
+  completeActiveVforkChild(code) {
+    if (!this.hasActiveVforkChild()) {
+      return false;
+    }
+    const childPid = this.activeVfork.childPid;
+    this.markProcessExited(childPid, Number(code) >>> 0);
+    this.beginVforkParentRewind(childPid);
+    return true;
+  }
+
   finishContinuationTurn() {
     if (!this.pendingStackUnwind) {
       return false;
@@ -1037,6 +1130,25 @@ class WasiPreview1Runtime {
         rewindStack,
       );
       this.beginStackRewind(snapshot, 0n);
+      return true;
+    }
+    if (action.type === "vfork-child") {
+      const record = {
+        childPid: action.childPid,
+        parentPid: action.parentPid,
+        pidPtr: action.pidPtr,
+        rewindStack: copyBytes(rewindStack),
+      };
+      this.activeVfork = {
+        childPid: action.childPid,
+        forkRecord: record,
+        parentPid: action.parentPid,
+      };
+      this.beginForkRewind(record, 0, ERRNO_SUCCESS, action.childPid);
+      return true;
+    }
+    if (action.type === "vfork-parent") {
+      this.beginVforkParentRewind(action.childPid);
       return true;
     }
     this.beginStackRewind(action.record, action.value);
@@ -1083,6 +1195,44 @@ class WasiPreview1Runtime {
     this.writeU32(bounds.dataPtr + 4, bounds.dataEnd);
     this.pendingStackRewindValue = BigInt(value);
     this.continuationCapabilities.exports.asyncify_start_rewind(bounds.dataPtr);
+  }
+
+  beginForkRewind(record, pid, errno, processId) {
+    const bounds = this.requireStackContinuationBounds();
+    const rewindStack = record.rewindStack ?? new Uint8Array();
+    const rewindEnd = bounds.dataStart + rewindStack.byteLength;
+    if (rewindEnd > bounds.dataEnd) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        "WASIX asyncify fork rewind stack exceeds the browser continuation buffer",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    this.bytes().set(rewindStack, bounds.dataStart);
+    this.writeU32(bounds.dataPtr, rewindEnd);
+    this.writeU32(bounds.dataPtr + 4, bounds.dataEnd);
+    this.pendingForkRewind = {
+      errno,
+      pid,
+      processId,
+    };
+    this.currentProcessId = processId;
+    this.continuationCapabilities.exports.asyncify_start_rewind(bounds.dataPtr);
+  }
+
+  beginVforkParentRewind(childPid) {
+    if (!this.activeVfork || this.activeVfork.childPid !== childPid) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        "WASIX vfork parent continuation is not active",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    const { forkRecord, parentPid } = this.activeVfork;
+    this.activeVfork = null;
+    this.beginForkRewind(forkRecord, childPid, ERRNO_SUCCESS, parentPid);
   }
 
   stopAsyncifyRewind() {
@@ -1169,6 +1319,43 @@ class WasiPreview1Runtime {
     const result = await this.childCommands.run(request);
     this.mergeDiagnostics(result?.diagnostics);
     return { exitCode: Number(result?.exitCode ?? 0) };
+  }
+
+  markProcessExited(pid, exitCode) {
+    const record = this.processes.get(pid);
+    if (!record) {
+      return;
+    }
+    record.exitCode = exitCode;
+    record.state = "exited";
+  }
+
+  processRecord(pid) {
+    return this.processes.get(pid >>> 0) ?? null;
+  }
+
+  findExitedChild(parentPid) {
+    for (const record of this.processes.values()) {
+      if (record.parentPid === parentPid && record.state === "exited") {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  hasChildProcess(parentPid) {
+    for (const record of this.processes.values()) {
+      if (record.parentPid === parentPid) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  reapProcess(pid) {
+    if (pid !== WASIX_ROOT_PID) {
+      this.processes.delete(pid);
+    }
   }
 
   imports() {
@@ -4119,8 +4306,7 @@ class WasixRuntime {
           pathLen,
         ),
       proc_exit2: (code) => this.procExit2(code),
-      proc_fork: (_copyMemory, _pidPtr) =>
-        this.unsupportedProcessCapability("proc_fork"),
+      proc_fork: (copyMemory, pidPtr) => this.procFork(copyMemory, pidPtr),
       proc_id: (pidPtr) => this.procId(pidPtr),
       proc_join: (pidPtr, flags, statusPtr) =>
         this.procJoin(pidPtr, flags, statusPtr),
@@ -4290,25 +4476,56 @@ class WasixRuntime {
 
   procExit2(code) {
     this.host.throwIfAborted();
+    if (this.host.beginVforkChildExit(code)) {
+      return;
+    }
     throw new WasiProcExit(code);
+  }
+
+  procFork(copyMemory, pidPtr) {
+    this.host.throwIfAborted();
+    const ptr = pidPtr >>> 0;
+    if (!this.host.canReadWrite(ptr, 4)) {
+      return ERRNO_FAULT;
+    }
+    const rewindResult = this.host.finishForkRewind(ptr);
+    if (rewindResult != null) {
+      return rewindResult;
+    }
+    if ((copyMemory >>> 0) !== 0) {
+      return this.unsupportedProcessCapability("proc_fork");
+    }
+    if (!this.host.hasStackContinuationSupport() || this.host.activeVfork) {
+      return this.unsupportedProcessCapability("proc_fork");
+    }
+    return this.host.beginVfork(ptr);
   }
 
   procId(pidPtr) {
     this.host.throwIfAborted();
-    this.host.writeU32(pidPtr, 1);
+    const ptr = pidPtr >>> 0;
+    if (!this.host.canReadWrite(ptr, 4)) {
+      return ERRNO_FAULT;
+    }
+    this.host.writeU32(ptr, this.host.currentProcessId);
     return ERRNO_SUCCESS;
   }
 
   procParent(pid, parentPidPtr) {
     this.host.throwIfAborted();
-    if ((pid >>> 0) !== 1) {
+    const ptr = parentPidPtr >>> 0;
+    if (!this.host.canReadWrite(ptr, 4)) {
+      return ERRNO_FAULT;
+    }
+    const record = this.host.processRecord(pid);
+    if (!record) {
       return ERRNO_BADF;
     }
-    this.host.writeU32(parentPidPtr, 0);
+    this.host.writeU32(ptr, record.parentPid);
     return ERRNO_SUCCESS;
   }
 
-  procJoin(pidPtr, _flags, statusPtr) {
+  procJoin(pidPtr, flags, statusPtr) {
     this.host.throwIfAborted();
     const pid = pidPtr >>> 0;
     const status = statusPtr >>> 0;
@@ -4318,13 +4535,47 @@ class WasixRuntime {
     ) {
       return ERRNO_FAULT;
     }
+    if ((flags >>> 0) & ~WASIX_PROC_JOIN_NON_BLOCKING) {
+      return ERRNO_INVAL;
+    }
     const tag = this.host.readU8(pid);
     if (tag !== WASIX_OPTION_TAG_NONE && tag !== WASIX_OPTION_TAG_SOME) {
       return ERRNO_INVAL;
     }
+    const requestedPid = this.host.readU32(pid + 4);
     writeWasixOptionPid(this.host, pid, WASIX_OPTION_TAG_NONE, 0);
     writeWasixJoinStatusNothing(this.host, status);
-    return tag === WASIX_OPTION_TAG_NONE ? ERRNO_CHILD : ERRNO_SUCCESS;
+    if (tag === WASIX_OPTION_TAG_NONE) {
+      const child = this.host.findExitedChild(this.host.currentProcessId);
+      if (child) {
+        this.writeJoinedChild(pid, status, child);
+        return ERRNO_SUCCESS;
+      }
+      if (this.host.hasChildProcess(this.host.currentProcessId)) {
+        return this.unsupportedProcessCapability("proc_join");
+      }
+      return ERRNO_CHILD;
+    }
+
+    const child = this.host.processRecord(requestedPid);
+    if (!child || child.parentPid !== this.host.currentProcessId) {
+      return ERRNO_SUCCESS;
+    }
+    writeWasixOptionPid(this.host, pid, WASIX_OPTION_TAG_SOME, child.pid);
+    if (child.state === "exited") {
+      this.writeJoinedChild(pid, status, child);
+      return ERRNO_SUCCESS;
+    }
+    if ((flags >>> 0) & WASIX_PROC_JOIN_NON_BLOCKING) {
+      return ERRNO_SUCCESS;
+    }
+    return this.unsupportedProcessCapability("proc_join");
+  }
+
+  writeJoinedChild(pidPtr, statusPtr, child) {
+    writeWasixOptionPid(this.host, pidPtr, WASIX_OPTION_TAG_SOME, child.pid);
+    writeWasixJoinStatusExitNormal(this.host, statusPtr, child.exitCode ?? 0);
+    this.host.reapProcess(child.pid);
   }
 
   procSnapshot() {
@@ -4698,6 +4949,13 @@ function writeWasixJoinStatusNothing(host, ptr) {
   host.writeU8(ptr + 1, 0);
   host.writeU16(ptr + 2, 0);
   host.writeU32(ptr + 4, 0);
+}
+
+function writeWasixJoinStatusExitNormal(host, ptr, exitCode) {
+  host.writeU8(ptr, WASIX_JOIN_STATUS_EXIT_NORMAL);
+  host.writeU8(ptr + 1, 0);
+  host.writeU16(ptr + 2, 0);
+  host.writeU32(ptr + 4, exitCode);
 }
 
 function boolByte(value) {

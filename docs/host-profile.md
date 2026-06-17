@@ -513,6 +513,17 @@ capabilities; future MCP/plugin support should translate browser-safe packaged
 command, WASM, HTTP, WebSocket, or gateway transports onto the shared tool
 protocol.
 
+The optional Wasmer JS SDK path lives in `packages/wasmer-sdk-adapter`, not in
+`apps/web`. That package evaluates `@wasmer/sdk` as an executor backend by
+mapping wasm-host package/command requests, args, env, cwd, stdin/stdout/stderr,
+exit status, and `/workspace` snapshots onto SDK-shaped primitives. The SDK
+would own WASIX syscall, subprocess, thread, registry, and `Directory` mount
+internals; wasm-host still owns the command contract, workspace persistence,
+artifact pinning, hashing, cache policy, and any browser command-worker wiring.
+The current finding is that `@wasmer/sdk@0.10.0` exposes the required API shape
+but still needs a real-browser Bash/coreutils parity proof before it can replace
+or compete with the hand-built `webc-wasix` runtime.
+
 The browser profile also has a deterministic packaged tool fixture. The command
 worker loads a `browser-tool-fixture` package, runs `tool-inspect` or the
 `tool-child` child-command fixture, passes cwd, filtered env, stdin, timeout,

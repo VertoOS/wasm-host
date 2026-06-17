@@ -19,7 +19,9 @@ crates/
   wasm-host-runner/    # native terminal runner
 docs/                  # host profile and layout
 packages/
+  browser-tool-protocol/ # protocol-neutral browser tool boundary
   fixtures/            # source and package fixtures
+  wasmer-sdk-adapter/  # optional Wasmer JS SDK executor adapter evaluation
 tests/
   bindings/            # C ABI wrapper smoke tests
   conformance/         # host behavior tests shared by adapters

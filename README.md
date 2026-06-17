@@ -68,6 +68,10 @@ until the boundaries are stable enough to split.
 - The `packages/browser-tool-protocol` package defines that protocol-neutral
   browser tool boundary for descriptors, calls, results, bounds, and
   cancellation so future high-level adapters can live outside `apps/web`.
+- The `packages/wasmer-sdk-adapter` package evaluates `@wasmer/sdk` behind an
+  isolated executor boundary outside `apps/web`, mapping package/command
+  requests, stdio, env/cwd, and workspace snapshots while leaving package
+  pinning/cache policy and command-worker wiring with wasm-host.
   The raw WASI executor can mount an injected store for writable `/workspace`
   fixture runs and flush mutations back as snapshots after the module exits.
 - The browser adapter package can consume the interim Codex artifact manifest

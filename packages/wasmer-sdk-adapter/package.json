@@ -1,0 +1,21 @@
+{
+  "name": "@vertoos/wasm-host-wasmer-sdk-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check src/index.js && node --check test/index.test.js",
+    "test": "node --test"
+  },
+  "peerDependencies": {
+    "@wasmer/sdk": "^0.10.0"
+  },
+  "peerDependenciesMeta": {
+    "@wasmer/sdk": {
+      "optional": true
+    }
+  }
+}

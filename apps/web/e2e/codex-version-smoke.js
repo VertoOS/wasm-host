@@ -12,6 +12,7 @@ import {
   codexVersionSmokeManifest,
 } from "../fixtures/codex-version-smoke-core.js";
 import { createBrowserCodexAppServerSession } from "../src/app-server-session.js";
+import { createBrowserCodexAppServerWebSocketConstructor } from "../src/app-server-websocket.js";
 import { fetchCodexArtifactBytes } from "../src/artifact-manifest.js";
 import {
   createBrowserTerminalSession,
@@ -106,10 +107,14 @@ export async function runCodexVersionSmoke() {
 }
 
 async function runBrowserAppServerFixture() {
+  const WebSocketConstructor =
+    createBrowserCodexAppServerWebSocketConstructor({
+      runtimeOptions: {
+        modelResponseText: "mock browser app-server response",
+      },
+    });
   const session = createBrowserCodexAppServerSession({
-    runtimeOptions: {
-      modelResponseText: "mock browser app-server response",
-    },
+    socket: new WebSocketConstructor("ws://browser-codex-app-server/loopback"),
   });
   try {
     const initialize = await session.connect({
@@ -183,10 +188,14 @@ async function runBrowserAppServerFixture() {
 }
 
 async function runBrowserAppServerInterruptFixture() {
+  const WebSocketConstructor =
+    createBrowserCodexAppServerWebSocketConstructor({
+      runtimeOptions: {
+        autoCompleteTurns: false,
+      },
+    });
   const session = createBrowserCodexAppServerSession({
-    runtimeOptions: {
-      autoCompleteTurns: false,
-    },
+    socket: new WebSocketConstructor("wss://browser-codex-app-server/loopback"),
   });
   try {
     await session.connect();

@@ -51,6 +51,11 @@ Current scope:
   response correlation, notification delivery, malformed-frame errors, and
   close semantics so browser tests can follow the Codex browser demo's
   app-server message shape without a native WebSocket bridge.
+- `src/app-server-websocket.js` exposes that loopback transport as an
+  injectable WebSocket-compatible constructor/factory for browser UI code. It
+  accepts the browser-owned loopback URL shape, validates protocols, isolates
+  runtime state per constructed socket by default, and is not a real network
+  WebSocket server.
 - `src/app-server-session.js` layers a small deterministic session controller
   over the loopback client. It owns connect/initialize, account read, fake
   device login cancellation, thread reuse, mocked prompt turns, pending turn
@@ -157,6 +162,10 @@ Current scope:
   transport and JSON-RPC client, including frame ordering, request correlation,
   notifications, malformed frames, close behavior, and the same deterministic
   app-server protocol slice through the transport surface.
+- `test/app-server-websocket.test.js` covers the app-server WebSocket-shaped
+  constructor/factory, including JSON-RPC traffic over constructed sockets,
+  isolated runtime counters, accepted loopback URL/protocol shapes, unsupported
+  URL/protocol errors, and open/close events.
 - `test/app-server-session.test.js` covers the app-server session controller's
   connect/account/login/thread/turn workflow, thread reuse, mocked turn text,
   pending turn interrupt, unsupported method propagation, close behavior, and
@@ -202,9 +211,10 @@ Current scope:
   request-builder JSON contract, assert a mocked model-turn HTTP bridge
   contract with local Responses SSE deltas, assert a workspace-edit fixture
   persists through the browser workspace store, assert the browser app-server
-  fixture through the session controller can initialize, report account status,
-  cancel login, reuse a thread, complete a mocked turn, interrupt a pending
-  turn, and reject unsupported native methods, assert a packaged tool fixture
+  fixture through the WebSocket-compatible constructor and session controller
+  can initialize, report account status, cancel login, reuse a thread, complete
+  a mocked turn, interrupt a pending turn, and reject unsupported native
+  methods, assert a packaged tool fixture
   can read the edited file with cwd/env/stdin through the terminal transcript
   adapter, and drive the terminal UI shell through DOM controls. The terminal
   shell e2e also applies a package URL source backed by a local data URL,

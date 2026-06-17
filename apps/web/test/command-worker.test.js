@@ -20,6 +20,9 @@ import { createMemoryBrowserWorkspaceStore } from "../src/workspace.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const WEBC_VOLUME_READ_WASM = base64ToBytes(
+  "AGFzbQEAAAABHQRgCX9/f39/fn5/fwF/YAR/f39/AX9gAX8AYAAAAooBBBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXBhdGhfb3BlbgAAFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAABFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwIBAwUDAQABBxMCBm1lbW9yeQIABl9zdGFydAAECmcBZQEBf0EFQQBBgAhBD0EAQgJCAEEAQRAQACIABEAgABADC0EAQYAQNgIAQQRBwAA2AgBBECgCAEEAQQFBCBABIgAEQCAAEAMLQRhBgBA2AgBBHEEIKAIANgIAQQFBGEEBQSAQAhoLCxYBAEGACAsPZXRjL21lc3NhZ2UudHh0",
+);
 
 test("BrowserCommandWorkerRuntime loads and runs a command", async () => {
   const port = recordingPort();
@@ -474,13 +477,64 @@ test("BrowserCommandWorkerRuntime runs extracted WebC atoms through WASI", async
   });
 });
 
+test("BrowserCommandWorkerRuntime mounts WebC volume files for atoms", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-webc-volume",
+    package: {
+      bytes: executableWebcVolumeBytes(),
+      id: "volume-webc",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-webc-volume",
+    packageId: "volume-webc",
+    command: "cat-volume",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.id === "load-webc-volume",
+  );
+  assert.equal(loaded.artifactKind, "webc-package");
+  assert.equal(loaded.packageType, "webc-package");
+  assert.deepEqual(loaded.commands, ["cat-volume"]);
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-webc-volume")),
+    "from-volume\n",
+  );
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-webc-volume",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 12,
+      timedOut: false,
+    },
+  });
+});
+
 test("WebC WASIX executor maps command metadata into raw WASI requests", async () => {
   let delegated = null;
+  const packageBytes = encoder.encode("xxfrom-volume\nzz");
   const executor = createWebcWasixExecutor({
     cache: {
       async getModuleArtifact(key) {
         assert.equal(key, "cache://codex-atom");
         return CODEX_VERSION_SMOKE_WASM;
+      },
+      async getPackageBytes(key) {
+        assert.equal(key, "cache://package");
+        return packageBytes;
       },
     },
     rawWasiExecutor: {
@@ -497,6 +551,9 @@ test("WebC WASIX executor maps command metadata into raw WASI requests", async (
     cwd: "/workspace/request",
     env: { EXTRA: "1", FROM_WEB: "override" },
     package: webcPackageForRun({
+      cacheKeys: {
+        packageBytes: "cache://package",
+      },
       commandMetadata: {
         codex: {
           atom: "codex-atom",
@@ -513,7 +570,25 @@ test("WebC WASIX executor maps command metadata into raw WASI requests", async (
             cacheKey: "cache://codex-atom",
           },
         },
+        volumes: {
+          "/rootfs": {
+            files: {
+              "/rootfs/etc/message.txt": {
+                path: "/rootfs/etc/message.txt",
+                span: { length: 12, offset: 2 },
+              },
+            },
+            name: "/rootfs",
+          },
+        },
       },
+      filesystem: [
+        {
+          hostPath: "rootfs",
+          mountPath: "/",
+          volumeName: "/rootfs",
+        },
+      ],
     }),
     signal: new AbortController().signal,
   });
@@ -529,6 +604,12 @@ test("WebC WASIX executor maps command metadata into raw WASI requests", async (
   });
   assert.equal(delegated.package.artifactKind, "wasi-module");
   assert.deepEqual(delegated.package.commands, ["codex-real"]);
+  assert.deepEqual(delegated.package.rootFiles, [
+    {
+      bytes: encoder.encode("from-volume\n"),
+      path: "etc/message.txt",
+    },
+  ]);
 });
 
 test("WebC WASIX executor reports missing cached atom bytes", async () => {
@@ -572,6 +653,76 @@ test("WebC WASIX executor reports missing cached atom bytes", async () => {
       assert.equal(error.kind, "webc_wasix_atom_cache_missing");
       assert.equal(error.stage, "package_load");
       assert.match(error.message, /cache:\/\/missing/);
+      return true;
+    },
+  );
+});
+
+test("WebC WASIX executor reports missing package bytes for volume mounts", async () => {
+  const executor = createWebcWasixExecutor({
+    cache: {
+      async getModuleArtifact() {
+        return CODEX_VERSION_SMOKE_WASM;
+      },
+      async getPackageBytes() {
+        return null;
+      },
+    },
+    rawWasiExecutor: {
+      async run() {
+        throw new Error("raw WASI executor should not run without package bytes");
+      },
+    },
+  });
+
+  await assert.rejects(
+    executor.run({
+      args: [],
+      command: "codex",
+      cwd: "/workspace",
+      env: {},
+      package: webcPackageForRun({
+        cacheKeys: {
+          packageBytes: "cache://missing-package",
+        },
+        commandMetadata: {
+          codex: {
+            atom: "codex-atom",
+            runner: "https://webc.org/runner/wasi",
+          },
+        },
+        filesystem: [
+          {
+            hostPath: "rootfs",
+            mountPath: "/",
+            volumeName: "/rootfs",
+          },
+        ],
+        webcArtifacts: {
+          atoms: {
+            "codex-atom": {
+              cacheKey: "cache://codex-atom",
+            },
+          },
+          volumes: {
+            "/rootfs": {
+              files: {
+                "/rootfs/etc/message.txt": {
+                  path: "/rootfs/etc/message.txt",
+                  span: { length: 12, offset: 2 },
+                },
+              },
+              name: "/rootfs",
+            },
+          },
+        },
+      }),
+      signal: new AbortController().signal,
+    }),
+    (error) => {
+      assert.equal(error.kind, "webc_wasix_package_bytes_missing");
+      assert.equal(error.stage, "package_load");
+      assert.match(error.message, /cache:\/\/missing-package/);
       return true;
     },
   );
@@ -1791,6 +1942,35 @@ function executableWebcBytes() {
   });
 }
 
+function executableWebcVolumeBytes() {
+  const manifest = webcWasiCommandManifest({
+    atom: "cat-volume-atom",
+    command: "cat-volume",
+    execName: "cat-volume",
+  });
+  manifest.package.fs = [
+    {
+      host_path: "rootfs",
+      mount_path: "/",
+      volume_name: "/rootfs",
+    },
+  ];
+  return webcV2Bytes(manifest, {
+    atoms: {
+      "cat-volume-atom": WEBC_VOLUME_READ_WASM,
+    },
+    volumes: {
+      "/rootfs": {
+        rootfs: {
+          etc: {
+            "message.txt": "from-volume\n",
+          },
+        },
+      },
+    },
+  });
+}
+
 function webcPackageForRun(metadata) {
   return {
     artifactKind: "webc-package",
@@ -1802,6 +1982,10 @@ function webcPackageForRun(metadata) {
     },
     type: "webc-package",
   };
+}
+
+function base64ToBytes(value) {
+  return new Uint8Array(Buffer.from(value, "base64"));
 }
 
 function deferred() {

@@ -61,7 +61,7 @@ export async function runBashCoreutilsSmoke() {
     assertEqual(stdout, "/workspace\n");
     assertMatch(stderr, /bash: fork: Not supported/);
     assertEqual(run.error.error?.kind, "runtime");
-    assertEqual(run.error.result?.exitCode, null);
+    assertEqual(run.error.result?.exitCode, 126);
     assertEqual(run.error.result?.failureStage, "runtime");
     assertEqual(diagnosticCount(diagnostics, "process", "proc_fork"), 1);
     assertEqual(diagnosticCount(diagnostics, "process", "proc_join"), 0);

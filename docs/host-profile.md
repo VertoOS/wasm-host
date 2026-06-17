@@ -309,12 +309,15 @@ no-child `proc_join` also provide deterministic single-process browser behavior.
 Supported Preview1 imports are mirrored through `wasix_32v1` when the 32-bit
 import ABI matches the current browser handlers. `proc_spawn`, fork, signal, and
 raise-interval imports still return deterministic unsupported capability errors
-because blocking process handles need a later async-safe continuation strategy. WASIX
+because blocking process handles need later process lifecycle support. WASIX
 `thread_id`, `thread_parallelism`, and zero-duration `thread_sleep` expose
-deterministic single-thread browser state; futex, eventfd, epoll, stack
-checkpoint, context-switching, thread spawn/join/signal, and nonzero sleep
-imports instantiate with deterministic unsupported capability errors until the
-browser profile has a real worker-thread and async-continuation strategy.
+deterministic single-thread browser state. `stack_checkpoint` remains a zero
+probe for non-asyncify modules, while modules that export asyncify controls plus
+`__stack_low`/`__stack_high` can checkpoint and restore within one browser
+instance. This is not fork, vfork, process, or thread support. Futex, eventfd,
+epoll, context-switching, thread spawn/join/signal, and nonzero sleep imports
+instantiate with deterministic unsupported capability errors until the browser
+profile has a real worker-thread strategy.
 `callback_signal` is a diagnostic no-op in this single-thread profile. Raw WASI
 runs can opt into `diagnostics.unsupportedWasixCalls` to return grouped
 unsupported WASIX call counts for smoke classification, including diagnostics

@@ -25,6 +25,7 @@ const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_HTTP_TRANSPORT = "direct";
 const BROWSER_TOOL_FIXTURE_TYPE = "browser-tool-fixture";
 const BROWSER_TOOL_INSPECT_COMMAND = "tool-inspect";
+const BROWSER_TOOL_CHILD_COMMAND = "tool-child";
 const BROWSER_TOOL_DEFAULT_PATH = "/workspace/tools/input.txt";
 const BROWSER_TOOL_MODE_ENV = "BROWSER_TOOL_MODE";
 const CANCELLED_EXIT_CODE = 130;
@@ -298,8 +299,10 @@ export class BrowserCommandWorkerRuntime {
         cwd: run.cwd,
       });
       const output = new CommandOutputWriter(this.port, run.id, activeRun);
+      const childCommands = this.childCommandsForRun(run, activeRun, output);
       const result = await callExecutorWithAbort(executor, {
         args: run.args,
+        childCommands,
         command,
         cwd: run.cwd,
         env: run.env,
@@ -467,6 +470,84 @@ export class BrowserCommandWorkerRuntime {
     return { command: run.command, packageRecord };
   }
 
+  childCommandsForRun(parentRun, activeRun, parentOutput) {
+    return {
+      run: (request = {}) =>
+        this.runChildCommand(request, {
+          activeRun,
+          parentOutput,
+          parentRun,
+        }),
+    };
+  }
+
+  async runChildCommand(message, context) {
+    const run = normalizeChildCommandRequest(message, context.parentRun);
+    const abort = createChildCommandAbortSignal(
+      context.activeRun.controller.signal,
+      run.timeoutMs,
+    );
+    const stdin = new CommandInputStream();
+    enqueueInitialStdin(stdin, run);
+    stdin.end();
+
+    const output = new ChildCommandOutputWriter({
+      parentOutput: context.parentOutput,
+      signal: abort.signal,
+      stderr: run.stderr,
+      stdout: run.stdout,
+    });
+
+    try {
+      const resolution = await waitForAbort(
+        this.packageForRun(run),
+        abort.signal,
+      );
+      const packageRecord = resolution.packageRecord;
+      const command = resolution.command;
+      abort.throwIfAborted();
+      const executor = this.resolveExecutor(packageRecord.type);
+      const http = this.resolveHttpTransport(run.httpTransport);
+      const childCommands = this.childCommandsForRun(
+        run,
+        context.activeRun,
+        output,
+      );
+      const result = await callExecutorWithAbort(executor, {
+        args: run.args,
+        childCommands,
+        command,
+        cwd: run.cwd,
+        env: run.env,
+        httpBridge: new BrowserHttpBridgeClient({
+          signal: abort.signal,
+          transport: http.transport,
+          transportName: http.name,
+        }),
+        httpTransport: http.transport,
+        httpTransportName: http.name,
+        httpTransports: this.httpTransports,
+        package: packageRecord,
+        signal: abort.signal,
+        stdin,
+        terminal: context.activeRun.terminal,
+        workspaceStore: this.workspaceStoreForPackage(packageRecord),
+      }, output);
+      abort.throwIfAborted();
+      return {
+        command,
+        exitCode: Number(result?.exitCode ?? 0),
+        packageId: packageRecord.id,
+        stderr: output.stderrBytes(),
+        stderrBytes: output.stderrByteLength,
+        stdout: output.stdoutBytes(),
+        stdoutBytes: output.stdoutByteLength,
+      };
+    } finally {
+      abort.cleanup();
+    }
+  }
+
   resolveExecutor(type) {
     const executor = this.executors[type];
     if (!executor) {
@@ -597,6 +678,9 @@ export function createBrowserToolFixtureExecutor(options = {}) {
           { exitCode: 127 },
         );
       }
+      if (request.command === BROWSER_TOOL_CHILD_COMMAND) {
+        return runBrowserToolChildFixture(request, output);
+      }
       if (request.command !== BROWSER_TOOL_INSPECT_COMMAND) {
         throw new BrowserCommandWorkerError(
           "command_not_found",
@@ -640,6 +724,43 @@ export function createBrowserToolFixtureExecutor(options = {}) {
       return { exitCode: 0, tool: summary };
     },
   };
+}
+
+async function runBrowserToolChildFixture(request, output) {
+  if (typeof request.childCommands?.run !== "function") {
+    throw new BrowserCommandWorkerError(
+      "unsupported_package",
+      "browser child command runner is unavailable",
+      "runtime",
+      { exitCode: 126 },
+    );
+  }
+  const command = nonEmptyString(
+    request.args[0] ?? "smoke",
+    "command_resolution",
+  );
+  const stdin = await readCommandInputText(request.stdin, request.signal);
+  const child = await request.childCommands.run({
+    args: request.args.slice(1),
+    command,
+    cwd: request.cwd,
+    env: request.env,
+    packageId: null,
+    stderr: "pipe",
+    stdin,
+    stdout: "pipe",
+  });
+  const summary = {
+    command: child.command,
+    exitCode: child.exitCode,
+    packageId: child.packageId,
+    stderr: new TextDecoder().decode(child.stderr),
+    stderrBytes: child.stderrBytes,
+    stdout: new TextDecoder().decode(child.stdout),
+    stdoutBytes: child.stdoutBytes,
+  };
+  await output.writeStdout(`${JSON.stringify(summary)}\n`);
+  return { child: summary, exitCode: child.exitCode };
 }
 
 export class BrowserHttpBridgeClient {
@@ -699,6 +820,55 @@ class CommandOutputWriter {
       id: this.id,
       chunk: bytes,
     });
+  }
+}
+
+class ChildCommandOutputWriter {
+  constructor(options = {}) {
+    this.parentOutput = options.parentOutput;
+    this.signal = options.signal;
+    this.stderr = normalizeChildOutputMode(options.stderr, "stderr");
+    this.stdout = normalizeChildOutputMode(options.stdout, "stdout");
+    this.stderrByteLength = 0;
+    this.stderrChunks = [];
+    this.stdoutByteLength = 0;
+    this.stdoutChunks = [];
+  }
+
+  writeStdout(chunk) {
+    this.write("stdout", chunk);
+  }
+
+  writeStderr(chunk) {
+    this.write("stderr", chunk);
+  }
+
+  write(stream, chunk) {
+    throwIfAborted(this.signal);
+    const bytes = toUint8Array(chunk, "command output chunks must be bytes");
+    if (stream === "stdout") {
+      this.stdoutByteLength += bytes.length;
+      if (this.stdout === "inherit") {
+        this.parentOutput.writeStdout(bytes);
+      } else {
+        this.stdoutChunks.push(bytes);
+      }
+      return;
+    }
+    this.stderrByteLength += bytes.length;
+    if (this.stderr === "inherit") {
+      this.parentOutput.writeStderr(bytes);
+    } else {
+      this.stderrChunks.push(bytes);
+    }
+  }
+
+  stdoutBytes() {
+    return concatBytes(this.stdoutChunks);
+  }
+
+  stderrBytes() {
+    return concatBytes(this.stderrChunks);
   }
 }
 
@@ -1060,6 +1230,44 @@ function normalizeRunMessage(message) {
   };
 }
 
+function normalizeChildCommandRequest(message = {}, parentRun = {}) {
+  const run = message.run ?? message;
+  if (!run || typeof run !== "object" || Array.isArray(run)) {
+    throw new BrowserCommandWorkerError(
+      "invalid_request",
+      "browser child command run must be an object",
+      "startup",
+    );
+  }
+  return {
+    args: normalizeStringList(run.args ?? []),
+    command: nonEmptyString(run.command),
+    cwd: nonEmptyString(run.cwd ?? parentRun.cwd ?? "/workspace"),
+    env: normalizeEnv(run.env ?? parentRun.env ?? {}),
+    httpTransport: run.httpTransport ?? parentRun.httpTransport,
+    initialStdin: initialStdinChunks(run),
+    packageId:
+      run.packageId === null
+        ? null
+        : nonEmptyString(run.packageId ?? DEFAULT_PACKAGE_ID),
+    stderr: normalizeChildOutputMode(run.stderr ?? "pipe", "stderr"),
+    stdout: normalizeChildOutputMode(run.stdout ?? "pipe", "stdout"),
+    timeoutMs: normalizeTimeout(run.timeoutMs),
+  };
+}
+
+function normalizeChildOutputMode(value, stream) {
+  const mode = String(value ?? "pipe").trim();
+  if (mode === "pipe" || mode === "inherit") {
+    return mode;
+  }
+  throw new BrowserCommandWorkerError(
+    "invalid_request",
+    `browser child command ${stream} mode must be pipe or inherit`,
+    "startup",
+  );
+}
+
 function normalizeInitialTerminal(value) {
   if (value == null) {
     return {};
@@ -1245,10 +1453,14 @@ async function callExecutorWithAbort(executor, request, output) {
 }
 
 async function waitForRunAbort(promise, activeRun) {
+  return waitForAbort(promise, activeRun.controller.signal);
+}
+
+async function waitForAbort(promise, signal) {
   const runPromise = Promise.resolve(promise);
   runPromise.catch(() => {});
 
-  const abort = abortRejection(activeRun.controller.signal);
+  const abort = abortRejection(signal);
   try {
     return await Promise.race([runPromise, abort.promise]);
   } finally {
@@ -1327,6 +1539,53 @@ function createHttpBridgeAbortSignal(commandSignal, timeoutMs) {
         return;
       }
       throw reason ?? new HttpBridgeError("cancelled", "HTTP request cancelled");
+    },
+  };
+}
+
+function createChildCommandAbortSignal(parentSignal, timeoutMs) {
+  const controller = new AbortController();
+  let reason = null;
+  const cleanupHandlers = [];
+  const abort = (error) => {
+    if (controller.signal.aborted) {
+      return;
+    }
+    reason = normalizeCommandError(error);
+    controller.abort(reason);
+  };
+
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      abort(parentSignal.reason ?? cancelledError());
+    } else {
+      const onAbort = () => abort(parentSignal.reason ?? cancelledError());
+      parentSignal.addEventListener("abort", onAbort, { once: true });
+      cleanupHandlers.push(() =>
+        parentSignal.removeEventListener("abort", onAbort),
+      );
+    }
+  }
+
+  if (timeoutMs != null) {
+    const timer = setTimeout(() => abort(timeoutError()), timeoutMs);
+    cleanupHandlers.push(() => clearTimeout(timer));
+  }
+
+  return {
+    get reason() {
+      return reason;
+    },
+    signal: controller.signal,
+    cleanup() {
+      for (const cleanup of cleanupHandlers.splice(0)) {
+        cleanup();
+      }
+    },
+    throwIfAborted() {
+      if (controller.signal.aborted) {
+        throw reason ?? cancelledError();
+      }
     },
   };
 }

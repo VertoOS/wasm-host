@@ -409,6 +409,333 @@ test("BrowserCommandWorkerRuntime rejects command catalog collisions", async () 
   );
 });
 
+test("BrowserCommandWorkerRuntime lets commands invoke catalog child commands", async () => {
+  const port = recordingPort();
+  const seen = [];
+  let parentSummary = null;
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    executors: {
+      child: {
+        async run(request, output) {
+          const stdin = await asyncChunksText(request.stdin);
+          seen.push({
+            args: request.args,
+            command: request.command,
+            cwd: request.cwd,
+            env: request.env,
+            packageId: request.package.id,
+            stdin,
+          });
+          await output.writeStdout(`${request.package.id}:stdout:${stdin}`);
+          await output.writeStderr(`${request.package.id}:stderr\n`);
+          return { exitCode: request.package.id === "path-child" ? 7 : 0 };
+        },
+      },
+      parent: {
+        async run(request, output) {
+          const defaultChild = await request.childCommands.run({
+            command: "default-child",
+            stdin: "default stdin\n",
+          });
+          const pathChild = await request.childCommands.run({
+            args: ["--flag"],
+            command: "path-child",
+            cwd: "/workspace/child",
+            env: {
+              ...request.env,
+              CHILD_ENV: "1",
+              PATH: "/usr/bin",
+            },
+            packageId: null,
+            stdin: "path stdin\n",
+          });
+          parentSummary = {
+            default: childResultSummary(defaultChild),
+            path: childResultSummary(pathChild),
+          };
+          await output.writeStdout(`${JSON.stringify(parentSummary)}\n`);
+          return { exitCode: pathChild.exitCode };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["default-child"], type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["path-child"], id: "path-child", type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["parent"], id: "parent-pkg", type: "parent" },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-parent-child",
+    packageId: "parent-pkg",
+    command: "parent",
+    env: { PARENT_ENV: "1" },
+  });
+
+  assert.deepEqual(seen, [
+    {
+      args: [],
+      command: "default-child",
+      cwd: "/workspace",
+      env: { PARENT_ENV: "1" },
+      packageId: "default",
+      stdin: "default stdin\n",
+    },
+    {
+      args: ["--flag"],
+      command: "path-child",
+      cwd: "/workspace/child",
+      env: { CHILD_ENV: "1", PARENT_ENV: "1", PATH: "/usr/bin" },
+      packageId: "path-child",
+      stdin: "path stdin\n",
+    },
+  ]);
+  assert.deepEqual(parentSummary, {
+    default: {
+      command: "default-child",
+      exitCode: 0,
+      packageId: "default",
+      stderr: "default:stderr\n",
+      stderrBytes: 15,
+      stdout: "default:stdout:default stdin\n",
+      stdoutBytes: 29,
+    },
+    path: {
+      command: "path-child",
+      exitCode: 7,
+      packageId: "path-child",
+      stderr: "path-child:stderr\n",
+      stderrBytes: 18,
+      stdout: "path-child:stdout:path stdin\n",
+      stdoutBytes: 29,
+    },
+  });
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-parent-child")),
+    `${JSON.stringify(parentSummary)}\n`,
+  );
+  assert.equal(chunksText(stderrChunks(port.messages, "run-parent-child")), "");
+  assert.equal(port.messages.at(-1).result.exitCode, 7);
+});
+
+test("BrowserCommandWorkerRuntime reports child command resolution failures", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    executors: {
+      parent: {
+        async run(request) {
+          await request.childCommands.run({
+            command: "missing-child",
+            packageId: null,
+          });
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["parent"], id: "parent-pkg", type: "parent" },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-missing-child",
+    packageId: "parent-pkg",
+    command: "parent",
+  });
+
+  assert.deepEqual(
+    port.messages.find(
+      (message) =>
+        message.type === "command.error" && message.id === "run-missing-child",
+    ),
+    {
+      type: "command.error",
+      id: "run-missing-child",
+      error: {
+        kind: "command_not_found",
+        message: "browser command not found in package catalog: missing-child",
+        stage: "command_resolution",
+      },
+      result: {
+        cancelled: false,
+        exitCode: 127,
+        failureStage: "command_resolution",
+        stderrBytes: 0,
+        stdoutBytes: 0,
+        timedOut: false,
+      },
+    },
+  );
+});
+
+test("BrowserCommandWorkerRuntime can inherit child command output", async () => {
+  const port = recordingPort();
+  let childResult = null;
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    executors: {
+      child: {
+        async run(_request, output) {
+          await output.writeStdout("child stdout\n");
+          await output.writeStderr("child stderr\n");
+          return { exitCode: 0 };
+        },
+      },
+      parent: {
+        async run(request, output) {
+          childResult = await request.childCommands.run({
+            command: "child",
+            packageId: null,
+            stderr: "inherit",
+            stdout: "inherit",
+          });
+          await output.writeStdout("parent stdout\n");
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["child"], id: "child-pkg", type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["parent"], id: "parent-pkg", type: "parent" },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-inherited-child",
+    packageId: "parent-pkg",
+    command: "parent",
+  });
+
+  assert.deepEqual(childResultSummary(childResult), {
+    command: "child",
+    exitCode: 0,
+    packageId: "child-pkg",
+    stderr: "",
+    stderrBytes: 13,
+    stdout: "",
+    stdoutBytes: 13,
+  });
+  assert.deepEqual(
+    port.messages
+      .filter((message) => message.id === "run-inherited-child")
+      .map((message) => message.type),
+    [
+      "command.started",
+      "command.stdout",
+      "command.stderr",
+      "command.stdout",
+      "command.stdout.close",
+      "command.stderr.close",
+      "command.complete",
+    ],
+  );
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-inherited-child")),
+    "child stdout\nparent stdout\n",
+  );
+  assert.equal(
+    chunksText(stderrChunks(port.messages, "run-inherited-child")),
+    "child stderr\n",
+  );
+  assert.deepEqual(port.messages.at(-1).result, {
+    cancelled: false,
+    exitCode: 0,
+    failureStage: null,
+    stderrBytes: 13,
+    stdoutBytes: 27,
+    timedOut: false,
+  });
+});
+
+test("BrowserCommandWorkerRuntime aborts child commands with parent timeout", async () => {
+  const port = recordingPort();
+  let childAbortKind = null;
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    executors: {
+      child: {
+        async run(request) {
+          try {
+            await rejectOnAbort(request.signal);
+          } catch (error) {
+            childAbortKind = error.kind;
+            throw error;
+          }
+          return { exitCode: 0 };
+        },
+      },
+      parent: {
+        async run(request) {
+          await request.childCommands.run({
+            command: "child-block",
+            packageId: null,
+          });
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["child-block"], id: "child-pkg", type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["parent"], id: "parent-pkg", type: "parent" },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-child-timeout",
+    packageId: "parent-pkg",
+    command: "parent",
+    timeoutMs: 20,
+  });
+  for (let attempt = 0; attempt < 20 && childAbortKind == null; attempt += 1) {
+    await tick();
+  }
+
+  assert.equal(childAbortKind, "timeout");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-child-timeout",
+    error: {
+      kind: "timeout",
+      message: "browser command exceeded wall time limit",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 124,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: true,
+    },
+  });
+});
+
 test("BrowserCommandWorkerRuntime streams stdin messages", async () => {
   const port = recordingPort();
   let stdin = null;
@@ -803,6 +1130,7 @@ test("BrowserCommandWorkerRuntime mounts WebC volume files for atoms", async () 
 
 test("WebC WASIX executor maps command metadata into raw WASI requests", async () => {
   let delegated = null;
+  const childCommands = { run: async () => ({ exitCode: 0 }) };
   const packageBytes = encoder.encode("xxfrom-volume\nzz");
   const executor = createWebcWasixExecutor({
     cache: {
@@ -825,6 +1153,7 @@ test("WebC WASIX executor maps command metadata into raw WASI requests", async (
 
   const result = await executor.run({
     args: ["--user"],
+    childCommands,
     command: "codex",
     cwd: "/workspace/request",
     env: { EXTRA: "1", FROM_WEB: "override" },
@@ -874,6 +1203,7 @@ test("WebC WASIX executor maps command metadata into raw WASI requests", async (
   assert.deepEqual(result, { exitCode: 0 });
   assert.equal(delegated.command, "codex-real");
   assert.deepEqual(delegated.args, ["--manifest", "--user"]);
+  assert.equal(delegated.childCommands, childCommands);
   assert.equal(delegated.cwd, "/workspace/webc");
   assert.deepEqual(delegated.env, {
     EXTRA: "1",
@@ -2267,6 +2597,18 @@ function catalogEntry(path, packageId, command) {
     entry.path === path &&
     entry.packageId === packageId &&
     entry.command === command;
+}
+
+function childResultSummary(result) {
+  return {
+    command: result.command,
+    exitCode: result.exitCode,
+    packageId: result.packageId,
+    stderr: decoder.decode(result.stderr),
+    stderrBytes: result.stderrBytes,
+    stdout: decoder.decode(result.stdout),
+    stdoutBytes: result.stdoutBytes,
+  };
 }
 
 function base64ToBytes(value) {

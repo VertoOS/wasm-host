@@ -38,13 +38,17 @@ Current scope:
   chunk and close events, timeout/cancellation result shaping, and pluggable
   HTTP bridge transport selection. It maintains a protocol-neutral in-memory
   command catalog for loaded packages and resolves explicit `packageId: null`
-  runs through browser PATH lookup. Its built-in `smoke` executor is a
+  runs through browser PATH lookup. Executor requests also receive a low-level
+  child packaged-command helper for invoking another loaded command by catalog
+  path without native process spawn. Its built-in `smoke` executor is a
   lifecycle fixture only; the built-in `browser-tool-fixture` executor proves
-  packaged tool command dispatch with cwd/env/stdin, terminal transcript
-  capture, and host-owned workspace reads; the `wasi-module` executor supports
-  the interim raw WASI preview1 `codex --version` smoke; and the
-  `webc-package`/`webc-wasix` executor boundary delegates WASI-runner WebC
-  atoms to that raw Preview1 runtime.
+  packaged tool command dispatch and child command invocation with cwd/env/stdin,
+  terminal transcript capture, and host-owned workspace reads; the `wasi-module`
+  executor supports the interim raw WASI preview1 `codex --version` smoke; and
+  the `webc-package`/`webc-wasix` executor boundary delegates WASI-runner WebC
+  atoms to that raw Preview1 runtime. The raw WASI worker request shape still
+  cannot carry JavaScript child-command functions across structured clone; true
+  WASIX process imports need a later worker-safe protocol.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, and mounts

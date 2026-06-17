@@ -214,7 +214,8 @@ concerns over lower-level browser host protocols.
 
 The browser runtime now implements the audited `tty_get`/`tty_set` ABI for the
 non-interactive profile. `tty_get` writes the 24-byte WASIX TTY state with
-80x25 character dimensions, 800x600 pixel dimensions, stdio TTY flags cleared,
-echo disabled, and line buffering disabled. `tty_set` accepts valid state
-pointers as a no-op so Bash save/restore probes can proceed without claiming
-readline-grade interactive terminal support.
+browser-provided terminal columns/rows when available, deterministic 800x600
+pixel dimensions, stdio TTY flags cleared, echo disabled, and line buffering
+disabled. `tty_set` accepts valid state pointers as a no-op so Bash
+save/restore probes can proceed without claiming readline-grade interactive
+terminal support.

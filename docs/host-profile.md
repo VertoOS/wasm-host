@@ -358,10 +358,13 @@ returns an empty signal-disposition set, and implements `fd_dup`, `fd_dup2`,
 `fd_pipe`, and `pipe` with descriptor-local rights, shared file offsets,
 duplicated stdio handles, duplicated preopen directories, deterministic
 in-memory pipe buffers, `AGAIN` for empty open pipes, `PIPE` after the last
-reader closes, and non-interactive `tty_get`/`tty_set` WASIX state. Clock
-mutation, dynamic linking, closure/callback, port, interactive TTY, and
-advanced process imports instantiate with deterministic `NOTSUP` until those
-capabilities have concrete browser runtime designs.
+reader closes, and non-interactive `tty_get`/`tty_set` WASIX state. `tty_get`
+now reflects browser command terminal columns/rows when supplied to the raw
+WASI request or worker payload, while keeping deterministic pixel defaults and
+disabled TTY mode flags. Clock mutation, dynamic linking, closure/callback,
+port, interactive TTY, and advanced process imports instantiate with
+deterministic `NOTSUP` until those capabilities have concrete browser runtime
+designs.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory

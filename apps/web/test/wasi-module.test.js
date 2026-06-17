@@ -176,6 +176,10 @@ const WASIX_NETWORK_IMPORTS_WASM = base64ToBytes(
   "AGFzbQEAAAABHwVgBn9/f39/fwF/YAR/f39/AX9gAX8AYAJ/fwBgAAACgQYaFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACCndhc2l4XzMydjEOcG9ydF9hZGRyX2xpc3QAAAp3YXNpeF8zMnYxD3BvcnRfcm91dGVfbGlzdAAACndhc2l4XzMydjEHcmVzb2x2ZQAACndhc2l4XzMydjEOc29ja19hY2NlcHRfdjIAAAp3YXNpeF8zMnYxD3NvY2tfYWRkcl9sb2NhbAAACndhc2l4XzMydjEOc29ja19hZGRyX3BlZXIAAAp3YXNpeF8zMnYxCXNvY2tfYmluZAAACndhc2l4XzMydjEMc29ja19jb25uZWN0AAAKd2FzaXhfMzJ2MRFzb2NrX2dldF9vcHRfZmxhZwAACndhc2l4XzMydjERc29ja19nZXRfb3B0X3NpemUAAAp3YXNpeF8zMnYxEXNvY2tfZ2V0X29wdF90aW1lAAAKd2FzaXhfMzJ2MRZzb2NrX2pvaW5fbXVsdGljYXN0X3Y0AAAKd2FzaXhfMzJ2MRZzb2NrX2pvaW5fbXVsdGljYXN0X3Y2AAAKd2FzaXhfMzJ2MRdzb2NrX2xlYXZlX211bHRpY2FzdF92NAAACndhc2l4XzMydjEXc29ja19sZWF2ZV9tdWx0aWNhc3RfdjYAAAp3YXNpeF8zMnYxC3NvY2tfbGlzdGVuAAAKd2FzaXhfMzJ2MQlzb2NrX29wZW4AAAp3YXNpeF8zMnYxDnNvY2tfcmVjdl9mcm9tAAAKd2FzaXhfMzJ2MQ5zb2NrX3NlbmRfZmlsZQAACndhc2l4XzMydjEMc29ja19zZW5kX3RvAAAKd2FzaXhfMzJ2MRFzb2NrX3NldF9vcHRfZmxhZwAACndhc2l4XzMydjERc29ja19zZXRfb3B0X3NpemUAAAp3YXNpeF8zMnYxEXNvY2tfc2V0X29wdF90aW1lAAAKd2FzaXhfMzJ2MQtzb2NrX3N0YXR1cwAAAwMCAwQFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAGwrnAwIOACAAQTpHBEAgARABCwvVAwBBAEEAQQBBAEEAQQAQAkEKEBpBAEEAQQBBAEEAQQAQA0ELEBpBAEEAQQBBAEEAQQAQBEEMEBpBAEEAQQBBAEEAQQAQBUENEBpBAEEAQQBBAEEAQQAQBkEOEBpBAEEAQQBBAEEAQQAQB0EPEBpBAEEAQQBBAEEAQQAQCEEQEBpBAEEAQQBBAEEAQQAQCUEREBpBAEEAQQBBAEEAQQAQCkESEBpBAEEAQQBBAEEAQQAQC0ETEBpBAEEAQQBBAEEAQQAQDEEUEBpBAEEAQQBBAEEAQQAQDUEVEBpBAEEAQQBBAEEAQQAQDkEWEBpBAEEAQQBBAEEAQQAQD0EXEBpBAEEAQQBBAEEAQQAQEEEYEBpBAEEAQQBBAEEAQQAQEUEZEBpBAEEAQQBBAEEAQQAQEkEaEBpBAEEAQQBBAEEAQQAQE0EbEBpBAEEAQQBBAEEAQQAQFEEcEBpBAEEAQQBBAEEAQQAQFUEdEBpBAEEAQQBBAEEAQQAQFkEeEBpBAEEAQQBBAEEAQQAQF0EfEBpBAEEAQQBBAEEAQQAQGEEgEBpBAEEAQQBBAEEAQQAQGUEhEBpBAEGACDYCAEEEQRk2AgBBAUEAQQFBCBAARQRABUHjABABCwsLIAEAQYAICxl3YXNpeC1uZXR3b3JrLWltcG9ydHMtb2sK",
 );
 
+const WASIX_PREVIEW1_IMPORTS_WASM = base64ToBytes(
+  "AGFzbQEAAAABLghgAn9/AX9gAn9/AX9gBX9/f39/AX9gBH9/f38Bf2AAAX9gAX8AYAJ/fwBgAAAC7wEJCndhc2l4XzMydjEOYXJnc19zaXplc19nZXQAAAp3YXNpeF8zMnYxEWVudmlyb25fc2l6ZXNfZ2V0AAAKd2FzaXhfMzJ2MQ1jbG9ja19yZXNfZ2V0AAAKd2FzaXhfMzJ2MQpyYW5kb21fZ2V0AAAKd2FzaXhfMzJ2MQ1mZF9mZHN0YXRfZ2V0AAEKd2FzaXhfMzJ2MRFwYXRoX2ZpbGVzdGF0X2dldAACCndhc2l4XzMydjELc2NoZWRfeWllbGQABAp3YXNpeF8zMnYxCGZkX3dyaXRlAAMKd2FzaXhfMzJ2MQlwcm9jX2V4aXQABQMDAgYHBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAoKfQILACAABEAgARAICwtvAEEAQQQQAEEKEAlBCEEMEAFBCxAJQQBByAAQAkEMEAlBwAFBEBADQQ0QCUEBQRAQBEEOEAlBA0EAQYAIQQtBgAEQBUEPEAkQBkEQEAlBgAJBkAg2AgBBhAJBGjYCAEEBQYACQQFBiAIQB0EREAkLCzICAEGACAsLZml4dHVyZS50eHQAQZAICxp3YXNpeC1wcmV2aWV3MS1pbXBvcnRzLW9rCg==",
+);
+
 test("loadRawWasiModulePackage validates explicit raw WASI module bytes", async () => {
   const expectedSha256 = await sha256Hex(ARGV_ECHO_WASM);
   const record = await loadRawWasiModulePackage({
@@ -1907,6 +1911,76 @@ test("raw WASI executor keeps unsupported WASIX network imports explicit", async
   assert.deepEqual(result, { exitCode: 0 });
   assert.equal(output.stdout, "wasix-network-imports-ok\n");
   assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor mirrors supported Preview1 imports through WASIX", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PREVIEW1_IMPORTS_WASM,
+    command: "preview1-mirror",
+    files: { "fixture.txt": "fixture\n" },
+    id: "preview1-mirror",
+  });
+
+  const result = await executor.run(
+    {
+      ...baseRunRequest(packageRecord),
+      args: ["--from-wasix"],
+      command: "preview1-mirror",
+      env: { MIRRORED: "1" },
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "wasix-preview1-imports-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("command worker runs WASIX modules that import mirrored Preview1 calls", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-wasix-preview1",
+    package: {
+      artifactKind: "wasi-module",
+      command: "preview1-mirror",
+      id: "preview1-mirror",
+      wasiModule: {
+        bytes: WASIX_PREVIEW1_IMPORTS_WASM,
+        files: { "fixture.txt": "fixture\n" },
+      },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-wasix-preview1",
+    packageId: "preview1-mirror",
+    command: "preview1-mirror",
+    env: { MIRRORED: "1" },
+  });
+
+  assert.equal(stdoutText(port.messages), "wasix-preview1-imports-ok\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-wasix-preview1",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 26,
+      timedOut: false,
+    },
+  });
 });
 
 test("command worker times out WASIX proc_exec child commands", async () => {

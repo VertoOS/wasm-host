@@ -316,6 +316,13 @@ they instantiate and return deterministic `NOTSUP` instead of becoming
 first-class raw socket support. Browser-safe networking belongs on explicit
 HTTP, WebSocket, gateway, or tool-adapter packages above this low-level import
 surface.
+The same low-level namespace now handles `getcwd`/`chdir` against the browser
+virtual cwd, mirrors `path_open2` through the current fd/path model with
+extended fd flag bookkeeping, reports `getpid` as the single browser process,
+and returns an empty signal-disposition set. `fd_dup`, `fd_dup2`, `fd_pipe`,
+`pipe`, TTY state, clock mutation, dynamic linking, closure/callback, port, and
+advanced process imports instantiate with deterministic `NOTSUP` until those
+capabilities have concrete browser runtime designs.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory
@@ -358,13 +365,14 @@ package-file fixtures:
 `proc_exit`, `proc_raise`, `random_get`, `sched_yield`, `sock_accept`,
 `sock_recv`, `sock_send`, and `sock_shutdown`.
 The same raw runner exposes a narrow `wasix_32v1` namespace that mirrors those
-supported Preview1 calls, adds `proc_exec`, keeps process imports as
-deterministic unsupported capability errors, classifies thread/futex/eventfd
-imports as unsupported browser capability gaps, and recognizes common raw
-socket/network imports such as `sock_open`, `sock_connect`, `sock_recv_from`,
-`sock_send_to`, option helpers, multicast helpers, `port_addr_list`,
-`port_route_list`, and `resolve`, all of which return deterministic `NOTSUP` in
-the browser profile.
+supported Preview1 calls, adds `proc_exec`, `getcwd`, `chdir`, `path_open2`,
+`fd_fdflags_get`, `fd_fdflags_set`, `getpid`, and empty signal-disposition
+queries, keeps unsupported process imports as deterministic capability errors,
+classifies thread/futex/eventfd imports as unsupported browser capability gaps,
+and recognizes common raw socket/network imports such as `sock_open`,
+`sock_connect`, `sock_recv_from`, `sock_send_to`, option helpers, multicast
+helpers, port helpers, and `resolve`, all of which return deterministic
+`NOTSUP` in the browser profile.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, can optionally back `/workspace` with an injected browser workspace

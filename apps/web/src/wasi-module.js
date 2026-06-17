@@ -22,6 +22,7 @@ const ERRNO_NOTDIR = 54;
 const ERRNO_NOTEMPTY = 55;
 const ERRNO_NOTSUP = 58;
 const ERRNO_OVERFLOW = 61;
+const ERRNO_RANGE = 68;
 const ERRNO_NOTCAPABLE = 76;
 const STDIN_FD = 0;
 const STDOUT_FD = 1;
@@ -60,6 +61,8 @@ const WASI_OFLAGS_EXCL = 1 << 2;
 const WASI_OFLAGS_TRUNC = 1 << 3;
 const WASI_LOOKUP_SYMLINK_FOLLOW = 1 << 0;
 const WASI_FDFLAGS_APPEND = 1 << 0;
+const WASIX_FDFLAGSEXT_CLOEXEC = 1 << 0;
+const WASIX_FDFLAGSEXT_MASK = WASIX_FDFLAGSEXT_CLOEXEC;
 const WASI_WHENCE_SET = 0;
 const WASI_WHENCE_CUR = 1;
 const WASI_WHENCE_END = 2;
@@ -162,8 +165,19 @@ const CLOCK_RESOLUTION_NANOS = NANOS_PER_MILLI;
 const WASI_ADVICE_NOREUSE = 5;
 const RANDOM_GET_CHUNK_SIZE = 65_536;
 const WASIX_UNSUPPORTED_NETWORK_IMPORTS = [
+  "port_addr_add",
+  "port_addr_clear",
   "port_addr_list",
+  "port_addr_remove",
+  "port_bridge",
+  "port_dhcp_acquire",
+  "port_gateway_set",
+  "port_mac",
+  "port_route_add",
+  "port_route_clear",
   "port_route_list",
+  "port_route_remove",
+  "port_unbridge",
   "resolve",
   "sock_accept_v2",
   "sock_addr_local",
@@ -179,6 +193,7 @@ const WASIX_UNSUPPORTED_NETWORK_IMPORTS = [
   "sock_leave_multicast_v6",
   "sock_listen",
   "sock_open",
+  "sock_pair",
   "sock_recv_from",
   "sock_send_file",
   "sock_send_to",
@@ -213,6 +228,35 @@ const WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS = [
   "thread_spawn_v2",
 ];
 const WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS = ["thread_exit"];
+const WASIX_UNSUPPORTED_FD_PIPE_IMPORTS = [
+  "fd_dup",
+  "fd_dup2",
+  "fd_pipe",
+  "pipe",
+];
+const WASIX_UNSUPPORTED_TTY_IMPORTS = ["tty_get", "tty_set"];
+const WASIX_UNSUPPORTED_CLOCK_IMPORTS = ["clock_time_set"];
+const WASIX_UNSUPPORTED_DYNAMIC_IMPORTS = [
+  "call_dynamic",
+  "callback_signal",
+  "closure_allocate",
+  "closure_free",
+  "closure_prepare",
+  "dl_invalid_handle",
+  "dlopen",
+  "dlsym",
+  "reflect_signature",
+];
+const WASIX_UNSUPPORTED_PROCESS_IMPORTS = [
+  "process_spawn",
+  "proc_exec2",
+  "proc_exec3",
+  "proc_exit2",
+  "proc_fork_env",
+  "proc_raise_interval",
+  "proc_snapshot",
+  "proc_spawn2",
+];
 let workerRunCounter = 0;
 let workerChildRunCounter = 0;
 const workerChildCommandRuns = new Map();
@@ -760,7 +804,7 @@ class WasiPreview1Runtime {
     this.envObject = normalizeEnvObject(options.env ?? {});
     this.args = normalizeStringList(options.args ?? []);
     this.childCommands = options.childCommands ?? null;
-    this.cwd = String(options.cwd ?? WORKSPACE_PREOPEN_PATH);
+    this.cwd = normalizeRuntimeCwd(options.cwd);
     this.env = envEntries(this.envObject);
     this.getInstance = options.getInstance;
     this.memory = null;
@@ -773,6 +817,7 @@ class WasiPreview1Runtime {
     this.packageRootDirs = this.packageRoot.dirs;
     this.packageRootFd = this.packageRoot.preopen ? FIRST_FILE_FD : null;
     this.workspaceDirs = this.workspace.dirs;
+    this.fdFlagsExt = new Map();
     this.openFiles = new Map();
     this.scratchDirs = new Set([""]);
     this.scratchFiles = new Map();
@@ -1305,6 +1350,32 @@ class WasiPreview1Runtime {
     return this.fdStat(fd) ? ERRNO_SUCCESS : ERRNO_BADF;
   }
 
+  fdFdflagsGet(fd, flagsPtr) {
+    this.throwIfAborted();
+    if (!this.fdStat(fd)) {
+      return ERRNO_BADF;
+    }
+    this.writeU32(flagsPtr, this.fdFlagsExt.get(fd) ?? 0);
+    return ERRNO_SUCCESS;
+  }
+
+  fdFdflagsSet(fd, flags) {
+    this.throwIfAborted();
+    const nextFlags = flags >>> 0;
+    if ((nextFlags & ~WASIX_FDFLAGSEXT_MASK) !== 0) {
+      return ERRNO_INVAL;
+    }
+    if (!this.fdStat(fd)) {
+      return ERRNO_BADF;
+    }
+    if (nextFlags === 0) {
+      this.fdFlagsExt.delete(fd);
+    } else {
+      this.fdFlagsExt.set(fd, nextFlags);
+    }
+    return ERRNO_SUCCESS;
+  }
+
   fdFdstatSetRights(fd, rightsBase, rightsInheriting) {
     this.throwIfAborted();
     const stat = this.fdStat(fd);
@@ -1334,6 +1405,7 @@ class WasiPreview1Runtime {
   fdClose(fd) {
     this.throwIfAborted();
     if (this.openFiles.delete(fd)) {
+      this.fdFlagsExt.delete(fd);
       return ERRNO_SUCCESS;
     }
     return ERRNO_BADF;
@@ -1354,6 +1426,12 @@ class WasiPreview1Runtime {
 
     this.openFiles.delete(fd);
     this.openFiles.set(to, file);
+    const fdFlagsExt = this.fdFlagsExt.get(fd);
+    this.fdFlagsExt.delete(fd);
+    this.fdFlagsExt.delete(to);
+    if (fdFlagsExt != null) {
+      this.fdFlagsExt.set(to, fdFlagsExt);
+    }
     if (to >= this.nextFileFd) {
       this.nextFileFd = to + 1;
     }
@@ -1626,6 +1704,81 @@ class WasiPreview1Runtime {
     return ERRNO_NOTSUP;
   }
 
+  getcwd(pathPtr, pathLenPtr) {
+    this.throwIfAborted();
+    const memoryLength = this.bytes().byteLength;
+    if (checkedMemoryRange(pathLenPtr >>> 0, 4, memoryLength) == null) {
+      return ERRNO_FAULT;
+    }
+
+    const maxPathLength = this.readU32(pathLenPtr);
+    const cwdBytes = encodeText(this.cwd);
+    this.writeU32(pathLenPtr, cwdBytes.byteLength);
+    if (cwdBytes.byteLength > maxPathLength) {
+      return ERRNO_RANGE;
+    }
+    if ((pathPtr >>> 0) === 0 || maxPathLength === 0) {
+      return ERRNO_INVAL;
+    }
+    if (checkedMemoryRange(pathPtr >>> 0, maxPathLength, memoryLength) == null) {
+      return ERRNO_FAULT;
+    }
+
+    this.bytes().set(cwdBytes, pathPtr);
+    return ERRNO_SUCCESS;
+  }
+
+  chdir(pathPtr, pathLen) {
+    this.throwIfAborted();
+    const path = resolveWasiVirtualPath(
+      this.cwd,
+      this.readString(pathPtr, pathLen),
+    );
+    if (path.errno != null) {
+      return path.errno;
+    }
+
+    const kind = this.cwdPathKind(path.value);
+    if (kind == null) {
+      return ERRNO_NOENT;
+    }
+    if (kind !== "directory") {
+      return ERRNO_NOTDIR;
+    }
+
+    this.cwd = path.value;
+    return ERRNO_SUCCESS;
+  }
+
+  cwdPathKind(path) {
+    if (path === PACKAGE_ROOT_PREOPEN_PATH) {
+      return "directory";
+    }
+
+    const workspacePath = mountedRelativePath(path, WORKSPACE_PREOPEN_PATH);
+    if (workspacePath != null) {
+      return workspacePath === "" ? "directory" : this.workspacePathKind(workspacePath);
+    }
+
+    const scratchPath = mountedRelativePath(path, TMP_PREOPEN_PATH);
+    if (scratchPath != null) {
+      return scratchPath === "" ? "directory" : this.scratchPathKind(scratchPath);
+    }
+
+    const packageRootPath = path.startsWith("/")
+      ? path.slice(1)
+      : path;
+    const stat = statPath(
+      this.packageRootFiles,
+      this.packageRootDirs,
+      packageRootPath,
+    );
+    if (stat.errno != null) {
+      return null;
+    }
+    return stat.filetype === WASI_FILETYPE_DIRECTORY ? "directory" : "file";
+  }
+
   pathReadlink(fd, pathPtr, pathLen, _bufPtr, _bufLen, _bufUsedPtr) {
     this.throwIfAborted();
     const stat = this.pathStatForFd(fd, this.readString(pathPtr, pathLen));
@@ -1776,6 +1929,38 @@ class WasiPreview1Runtime {
     });
     this.writeU32(openedFdPtr, openedFd);
     return ERRNO_SUCCESS;
+  }
+
+  pathOpen2(
+    fd,
+    dirflags,
+    pathPtr,
+    pathLen,
+    oflags,
+    rightsBase,
+    rightsInheriting,
+    fdflags,
+    fdFlagsExt,
+    openedFdPtr,
+  ) {
+    if ((fdFlagsExt & ~WASIX_FDFLAGSEXT_MASK) !== 0) {
+      return ERRNO_INVAL;
+    }
+    const errno = this.pathOpen(
+      fd,
+      dirflags,
+      pathPtr,
+      pathLen,
+      oflags,
+      rightsBase,
+      rightsInheriting,
+      fdflags,
+      openedFdPtr,
+    );
+    if (errno === ERRNO_SUCCESS && fdFlagsExt !== 0) {
+      this.fdFlagsExt.set(this.readU32(openedFdPtr), fdFlagsExt);
+    }
+    return errno;
   }
 
   openPackageRootPath(
@@ -3202,6 +3387,39 @@ class WasixRuntime {
   imports() {
     const imports = {
       ...this.host.imports(),
+      chdir: (pathPtr, pathLen) => this.host.chdir(pathPtr, pathLen),
+      fd_fdflags_get: (fd, flagsPtr) =>
+        this.host.fdFdflagsGet(fd, flagsPtr),
+      fd_fdflags_set: (fd, flags) => this.host.fdFdflagsSet(fd, flags),
+      getcwd: (pathPtr, pathLenPtr) => this.host.getcwd(pathPtr, pathLenPtr),
+      getpid: (pidPtr) => this.procId(pidPtr),
+      path_open2: (
+        fd,
+        dirflags,
+        pathPtr,
+        pathLen,
+        oflags,
+        rightsBase,
+        rightsInheriting,
+        fdflags,
+        fdFlagsExt,
+        openedFdPtr,
+      ) =>
+        this.host.pathOpen2(
+          fd,
+          dirflags,
+          pathPtr,
+          pathLen,
+          oflags,
+          rightsBase,
+          rightsInheriting,
+          fdflags,
+          fdFlagsExt,
+          openedFdPtr,
+        ),
+      proc_signals_get: (_signalsPtr) => this.procSignalsGet(),
+      proc_signals_sizes_get: (signalCountPtr) =>
+        this.procSignalsSizesGet(signalCountPtr),
       proc_exec: (namePtr, nameLen, argsPtr, argsLen) =>
         this.procExec(namePtr, nameLen, argsPtr, argsLen),
       proc_fork: (_copyMemory, _pidPtr) => ERRNO_NOTSUP,
@@ -3220,6 +3438,21 @@ class WasixRuntime {
     }
     for (const name of WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS) {
       imports[name] = () => this.unsupportedThreadExitCapability();
+    }
+    for (const name of WASIX_UNSUPPORTED_FD_PIPE_IMPORTS) {
+      imports[name] = () => this.unsupportedUtilityCapability();
+    }
+    for (const name of WASIX_UNSUPPORTED_TTY_IMPORTS) {
+      imports[name] = () => this.unsupportedUtilityCapability();
+    }
+    for (const name of WASIX_UNSUPPORTED_CLOCK_IMPORTS) {
+      imports[name] = () => this.unsupportedUtilityCapability();
+    }
+    for (const name of WASIX_UNSUPPORTED_DYNAMIC_IMPORTS) {
+      imports[name] = () => this.unsupportedUtilityCapability();
+    }
+    for (const name of WASIX_UNSUPPORTED_PROCESS_IMPORTS) {
+      imports[name] = () => this.unsupportedUtilityCapability();
     }
 
     return imports;
@@ -3256,12 +3489,28 @@ class WasixRuntime {
     return ERRNO_SUCCESS;
   }
 
+  procSignalsSizesGet(signalCountPtr) {
+    this.host.throwIfAborted();
+    this.host.writeU32(signalCountPtr, 0);
+    return ERRNO_SUCCESS;
+  }
+
+  procSignalsGet() {
+    this.host.throwIfAborted();
+    return ERRNO_SUCCESS;
+  }
+
   unsupportedNetworkCapability() {
     this.host.throwIfAborted();
     return ERRNO_NOTSUP;
   }
 
   unsupportedThreadEventCapability() {
+    this.host.throwIfAborted();
+    return ERRNO_NOTSUP;
+  }
+
+  unsupportedUtilityCapability() {
     this.host.throwIfAborted();
     return ERRNO_NOTSUP;
   }
@@ -3769,6 +4018,63 @@ function normalizeWasiLookupPath(value) {
     return "";
   }
   return normalizeWasiPath(path);
+}
+
+function normalizeRuntimeCwd(value) {
+  const path = resolveWasiVirtualPath(
+    WORKSPACE_PREOPEN_PATH,
+    value ?? WORKSPACE_PREOPEN_PATH,
+  );
+  return path.value ?? WORKSPACE_PREOPEN_PATH;
+}
+
+function resolveWasiVirtualPath(cwd, value) {
+  const path = String(value ?? "");
+  if (path.includes("\0")) {
+    return { errno: ERRNO_INVAL };
+  }
+  if (!path) {
+    return { errno: ERRNO_NOENT };
+  }
+
+  const segments = path.startsWith("/")
+    ? []
+    : absolutePathSegments(cwd || WORKSPACE_PREOPEN_PATH);
+  for (const segment of path.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (segments.length === 0) {
+        return { errno: ERRNO_NOTCAPABLE };
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return {
+    value:
+      segments.length === 0
+        ? PACKAGE_ROOT_PREOPEN_PATH
+        : `${PACKAGE_ROOT_PREOPEN_PATH}${segments.join("/")}`,
+  };
+}
+
+function absolutePathSegments(value) {
+  const path = String(value ?? "");
+  if (!path.startsWith("/")) {
+    return absolutePathSegments(WORKSPACE_PREOPEN_PATH);
+  }
+  return path.split("/").filter(Boolean);
+}
+
+function mountedRelativePath(path, mountPath) {
+  if (path === mountPath) {
+    return "";
+  }
+  const prefix = `${mountPath}/`;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : null;
 }
 
 function normalizeRelativeWasiPath(path) {

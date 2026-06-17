@@ -188,6 +188,14 @@ const WASIX_THREAD_EXIT_WASM = base64ToBytes(
   "AGFzbQEAAAABCAJgAX8AYAAAAhoBCndhc2l4XzMydjELdGhyZWFkX2V4aXQAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoIAQYAQQAQAAs=",
 );
 
+const WASIX_CWD_IMPORTS_WASM = base64ToBytes(
+  "AGFzbQEAAAABIwZgAn9/AX9gBH9/f38Bf2ABfwBgA39/fwBgBH9/f38AYAAAAm0ECndhc2l4XzMydjEGZ2V0Y3dkAAAKd2FzaXhfMzJ2MQVjaGRpcgAAFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwcGAgMEAwUFBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAkK8wIGBwAgABADAAsOACAAIAFHBEAgAhAECwsyAQF/AkADQCAEIAJPDQEgACAEai0AACABIARqLQAARwRAIAMQBAsgBEEBaiEEDAALCws0AEG4F0HAADYCAEGAEEG4FxAAQQAgAhAFQbgXKAIAIAFHBEAgAhAEC0GAECAAIAEgAhAGCyYAQaAfQYgnNgIAQaQfQRU2AgBBAUGgH0EBQaofEAJBAEHQABAFC8oBAEG4F0EDNgIAQYAQQbgXEABBxABBChAFQbgXKAIAQQpHBEBBCxAEC0GACEEKQQwQB0GQCEEQEAFBAEEUEAVBkAhBEEEVEAdBrghBAhABQQBBFhAFQYAIQQpBFxAHQbgIQQQQAUEAQRgQBUG4CEEEQRkQB0HCCEEBEAFBAEEaEAVBwghBAUEbEAdBzAhBBBABQQBBHBAFQcwIQQRBHRAHQdYIQRAQAUE2QR4QBUHqCEEIEAFBLEEfEAVB9AhBBRABQcwAQSAQBRAICwuUAQoAQYAICwovd29ya3NwYWNlAEGQCAsQL3dvcmtzcGFjZS9jaGlsZABBrggLAi4uAEG4CAsEL3RtcABBwggLAS8AQcwICwQvZXRjAEHWCAsQL2V0Yy9tZXNzYWdlLnR4dABB6ggLCC9taXNzaW5nAEH0CAsFLi4vLi4AQYgnCxV3YXNpeC1jd2QtaW1wb3J0cy1vawo=",
+);
+
+const WASIX_UTILITY_IMPORTS_WASM = base64ToBytes(
+  "AGFzbQEAAAABOQlgAn9/AX9gBH9/f38Bf2ABfwF/YAJ/fgF/YAp/f39/f35+f39/AX9gAAF/YAF/AGADf39/AGAAAALTAxIKd2FzaXhfMzJ2MQ5mZF9mZGZsYWdzX2dldAAACndhc2l4XzMydjEOZmRfZmRmbGFnc19zZXQAAAp3YXNpeF8zMnYxBmZkX2R1cAAACndhc2l4XzMydjEHZmRfZHVwMgABCndhc2l4XzMydjEHZmRfcGlwZQAACndhc2l4XzMydjEEcGlwZQAACndhc2l4XzMydjEHdHR5X2dldAACCndhc2l4XzMydjEHdHR5X3NldAACCndhc2l4XzMydjEOY2xvY2tfdGltZV9zZXQAAxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAEKd2FzaXhfMzJ2MQZnZXRwaWQAAgp3YXNpeF8zMnYxFnByb2Nfc2lnbmFsc19zaXplc19nZXQAAgp3YXNpeF8zMnYxEHByb2Nfc2lnbmFsc19nZXQAAgp3YXNpeF8zMnYxCnBhdGhfb3BlbjIABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX2Nsb3NlAAIKd2FzaXhfMzJ2MQpwcm9jX2V4ZWMyAAUKd2FzaXhfMzJ2MQlzb2NrX3BhaXIABRZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAAGAwYFBgcHCAgFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAFgqwAwUHACAAEBEACw4AIAAgAUcEQCACEBILCxEAIAAoAgAgAUcEQCACEBILCyYAQaAfQYgnNgIAQaQfQRk2AgBBAUGgH0EBQaofEAlBAEHaABATC90CAEEBQYAQEABBAEEKEBNBgBBBAEELEBRBAUEBEAFBAEEMEBNBAUGAEBAAQQBBDRATQYAQQQFBDhAUQQFBABABQQBBDxATQQFBgBAQAEEAQRAQE0GAEEEAQREQFEEBQQIQAUEcQRIQE0HnB0GAEBAAQQhBExATQQFBhBAQAkE6QRQQE0EBQQVBAEGEEBADQTpBFRATQYQQQYgQEARBOkEWEBNBhBBBiBAQBUE6QRcQE0G0EBAGQTpBGBATQbQQEAdBOkEZEBNBAEIAEAhBOkEaEBNBmBEQCkEAQRsQE0GYEUEBQRwQFEGcERALQQBBHRATQZwRQQBBHhAUQaAREAxBAEEfEBNBA0EAQagUQQtBAEICQgBBAEEBQfwREA1BAEEgEBNB/BEoAgBBgBIQAEEAQSEQE0GAEkEBQSIQFEH8ESgCABAOQQBBIxATEA9BOkEkEBMQEEE6QSUQExAVCwsxAgBBqBQLC2ZpeHR1cmUudHh0AEGIJwsZd2FzaXgtdXRpbGl0eS1pbXBvcnRzLW9rCg==",
+);
+
 test("loadRawWasiModulePackage validates explicit raw WASI module bytes", async () => {
   const expectedSha256 = await sha256Hex(ARGV_ECHO_WASM);
   const record = await loadRawWasiModulePackage({
@@ -2008,6 +2016,49 @@ test("raw WASI executor keeps WASIX thread and event imports explicit", async ()
 
   assert.deepEqual(result, { exitCode: 0 });
   assert.equal(output.stdout, "wasix-thread-event-imports-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor supports WASIX cwd imports", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_CWD_IMPORTS_WASM,
+    command: "cwd-smoke",
+    files: { "child/file.txt": "child\n" },
+    id: "cwd-smoke",
+    rootFiles: { "etc/message.txt": "root\n" },
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "cwd-smoke" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "wasix-cwd-imports-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor covers WASIX utility imports explicitly", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_UTILITY_IMPORTS_WASM,
+    command: "utility-smoke",
+    files: { "fixture.txt": "fixture\n" },
+    id: "utility-smoke",
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "utility-smoke" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "wasix-utility-imports-ok\n");
   assert.equal(output.stderr, "");
 });
 

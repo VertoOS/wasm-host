@@ -4,7 +4,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const APP_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SCAN_DIRS = ["src", "test", "e2e"];
+const SCAN_DIRS = ["src", "test", "e2e", "fixtures"];
 
 const BLOCKED_FIRST_CLASS_TERMS = [
   {

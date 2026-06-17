@@ -204,6 +204,18 @@ const WASIX_PROC_EXIT2_WASM = base64ToBytes(
   "AGFzbQEAAAABCAJgAX8AYAAAAhkBCndhc2l4XzMydjEKcHJvY19leGl0MgAAAwIBAQUDAQABBxMCBm1lbW9yeQIABl9zdGFydAABCgkBBwBBKhAAAAs=",
 );
 
+const WASIX_PROC_FORK_VFORK_EXIT_WASM = base64ToBytes(
+  "AGFzbQEAAAABJAdgAn9/AX9gA39/fwF/YAF/AGABfwF/YAAAYAABf2ADf39/AAKYAQYKd2FzaXhfMzJ2MQlwcm9jX2ZvcmsAAAp3YXNpeF8zMnYxCXByb2Nfam9pbgABCndhc2l4XzMydjEKcHJvY19leGl0MgACCndhc2l4XzMydjEHcHJvY19pZAADCndhc2l4XzMydjELcHJvY19wYXJlbnQAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwkIAgQCBAUCBgQFAwEAAQYdBX8BQQALfwFBAAt/AUGAEAt/AEGACAt/AEGAEAsHtQEKBm1lbW9yeQIAD19fc3RhY2tfcG9pbnRlcgMCC19fc3RhY2tfbG93AwMMX19zdGFja19oaWdoAwQVYXN5bmNpZnlfc3RhcnRfdW53aW5kAAYUYXN5bmNpZnlfc3RvcF91bndpbmQABxVhc3luY2lmeV9zdGFydF9yZXdpbmQACBRhc3luY2lmeV9zdG9wX3Jld2luZAAJEmFzeW5jaWZ5X2dldF9zdGF0ZQAKBl9zdGFydAANCsYCCAoAIAAkAUEBJAALBgBBACQACwoAIAAkAUECJAALBgBBACQACwQAIwALBwAgABAFAAsOACAAIAFHBEAgAhALCwuDAgEBf0EAQRAQACEAEAoEQA8LIABBAEEgEAxBECgCAEUEQEHAABADIQAgAEEAQSEQDEHAACgCAEECQSIQDEECQcQAEAQhACAAQQBBIxAMQcQAKAIAQQFBJBAMQRcQAhAKBEAPC0ElEAsLQRAoAgBBAkEmEAxBwAAQAyEAIABBAEEnEAxBwAAoAgBBAUEoEAxBAkHEABAEIQAgAEEAQSkQDEHEACgCAEEBQSoQDEEgQQA2AgBBIEEBOgAAQSRBAjYCAEEgQQBBMBABIQAgAEEAQSsQDEEgLQAAQQFBLBAMQSQoAgBBAkEtEAxBMC0AAEEBQS4QDEE0KAIAQRdBLxAMQQAQBQs=",
+);
+
+const WASIX_PROC_FORK_VFORK_EXEC_WASM = base64ToBytes(
+  "AGFzbQEAAAABMQhgAn9/AX9gCX9/f39/f39/fwF/YAN/f38Bf2ABfwF/YAF/AGAAAGAAAX9gA39/fwACfwUKd2FzaXhfMzJ2MQlwcm9jX2ZvcmsAAAp3YXNpeF8zMnYxCnByb2NfZXhlYzMAAQp3YXNpeF8zMnYxCXByb2Nfam9pbgACCndhc2l4XzMydjEHcHJvY19pZAADFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAQDCQgEBQQFBgQHBQUDAQABBh0FfwFBAAt/AUEAC38BQYAQC38AQYAIC38AQYAQCwe1AQoGbWVtb3J5AgAPX19zdGFja19wb2ludGVyAwILX19zdGFja19sb3cDAwxfX3N0YWNrX2hpZ2gDBBVhc3luY2lmeV9zdGFydF91bndpbmQABRRhc3luY2lmeV9zdG9wX3Vud2luZAAGFWFzeW5jaWZ5X3N0YXJ0X3Jld2luZAAHFGFzeW5jaWZ5X3N0b3BfcmV3aW5kAAgSYXN5bmNpZnlfZ2V0X3N0YXRlAAkGX3N0YXJ0AAwKjgIICgAgACQBQQEkAAsGAEEAJAALCgAgACQBQQIkAAsGAEEAJAALBAAjAAsHACAAEAQACw4AIAAgAUcEQCACEAoLC8sBAQF/QQBBEBAAIQAQCQRADwsgAEEAQTIQC0EQKAIARQRAQcAAEAMhACAAQQBBMxALQcAAKAIAQQJBNBALQYABQQVBkAFBCEGgAUEMQQFBsAFBBBABIQAgAEEAQTUQC0E2EAoLQRAoAgBBAkE3EAtBwAAQAyEAIABBAEE4EAtBwAAoAgBBAUE5EAtBIEEANgIAQSBBAToAAEEkQQI2AgBBIEEAQTAQAiEAIABBAEE6EAtBMC0AAEEBQTsQC0E0KAIAQSFBPBALQQAQBAsLNgQAQYABCwVjaGlsZABBkAELCC0tdmZvcmsKAEGgAQsMRlJPTV9GT1JLPTEKAEGwAQsEL2Jpbg==",
+);
+
+const WASIX_PROC_FORK_UNSUPPORTED_WASM = base64ToBytes(
+  "AGFzbQEAAAABDgNgAn9/AX9gAX8AYAAAAjsCCndhc2l4XzMydjEJcHJvY19mb3JrAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAQMDAgECBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAMKPAIHACAAEAEACzIBAX9BAEEQEAAhACAAQTpHBEBBxgAQAgtBAUEQEAAhACAAQTpHBEBBxwAQAgtBABABCw==",
+);
+
 const WASIX_NETWORK_IMPORTS_WASM = base64ToBytes(
   "AGFzbQEAAAABHwVgBn9/f39/fwF/YAR/f39/AX9gAX8AYAJ/fwBgAAACgQYaFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACCndhc2l4XzMydjEOcG9ydF9hZGRyX2xpc3QAAAp3YXNpeF8zMnYxD3BvcnRfcm91dGVfbGlzdAAACndhc2l4XzMydjEHcmVzb2x2ZQAACndhc2l4XzMydjEOc29ja19hY2NlcHRfdjIAAAp3YXNpeF8zMnYxD3NvY2tfYWRkcl9sb2NhbAAACndhc2l4XzMydjEOc29ja19hZGRyX3BlZXIAAAp3YXNpeF8zMnYxCXNvY2tfYmluZAAACndhc2l4XzMydjEMc29ja19jb25uZWN0AAAKd2FzaXhfMzJ2MRFzb2NrX2dldF9vcHRfZmxhZwAACndhc2l4XzMydjERc29ja19nZXRfb3B0X3NpemUAAAp3YXNpeF8zMnYxEXNvY2tfZ2V0X29wdF90aW1lAAAKd2FzaXhfMzJ2MRZzb2NrX2pvaW5fbXVsdGljYXN0X3Y0AAAKd2FzaXhfMzJ2MRZzb2NrX2pvaW5fbXVsdGljYXN0X3Y2AAAKd2FzaXhfMzJ2MRdzb2NrX2xlYXZlX211bHRpY2FzdF92NAAACndhc2l4XzMydjEXc29ja19sZWF2ZV9tdWx0aWNhc3RfdjYAAAp3YXNpeF8zMnYxC3NvY2tfbGlzdGVuAAAKd2FzaXhfMzJ2MQlzb2NrX29wZW4AAAp3YXNpeF8zMnYxDnNvY2tfcmVjdl9mcm9tAAAKd2FzaXhfMzJ2MQ5zb2NrX3NlbmRfZmlsZQAACndhc2l4XzMydjEMc29ja19zZW5kX3RvAAAKd2FzaXhfMzJ2MRFzb2NrX3NldF9vcHRfZmxhZwAACndhc2l4XzMydjERc29ja19zZXRfb3B0X3NpemUAAAp3YXNpeF8zMnYxEXNvY2tfc2V0X29wdF90aW1lAAAKd2FzaXhfMzJ2MQtzb2NrX3N0YXR1cwAAAwMCAwQFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAGwrnAwIOACAAQTpHBEAgARABCwvVAwBBAEEAQQBBAEEAQQAQAkEKEBpBAEEAQQBBAEEAQQAQA0ELEBpBAEEAQQBBAEEAQQAQBEEMEBpBAEEAQQBBAEEAQQAQBUENEBpBAEEAQQBBAEEAQQAQBkEOEBpBAEEAQQBBAEEAQQAQB0EPEBpBAEEAQQBBAEEAQQAQCEEQEBpBAEEAQQBBAEEAQQAQCUEREBpBAEEAQQBBAEEAQQAQCkESEBpBAEEAQQBBAEEAQQAQC0ETEBpBAEEAQQBBAEEAQQAQDEEUEBpBAEEAQQBBAEEAQQAQDUEVEBpBAEEAQQBBAEEAQQAQDkEWEBpBAEEAQQBBAEEAQQAQD0EXEBpBAEEAQQBBAEEAQQAQEEEYEBpBAEEAQQBBAEEAQQAQEUEZEBpBAEEAQQBBAEEAQQAQEkEaEBpBAEEAQQBBAEEAQQAQE0EbEBpBAEEAQQBBAEEAQQAQFEEcEBpBAEEAQQBBAEEAQQAQFUEdEBpBAEEAQQBBAEEAQQAQFkEeEBpBAEEAQQBBAEEAQQAQF0EfEBpBAEEAQQBBAEEAQQAQGEEgEBpBAEEAQQBBAEEAQQAQGUEhEBpBAEGACDYCAEEEQRk2AgBBAUEAQQFBCBAARQRABUHjABABCwsLIAEAQYAICxl3YXNpeC1uZXR3b3JrLWltcG9ydHMtb2sK",
 );
@@ -2189,6 +2201,82 @@ test("command worker resolves WASIX proc_exec3 children through PATH", async () 
   });
 });
 
+test("command worker resumes WASIX vfork parents after proc_exec3 children", async () => {
+  const port = recordingPort();
+  const seen = [];
+  const runtime = createBrowserCommandWorkerRuntime({
+    executors: {
+      child: {
+        async run(request, output) {
+          seen.push({
+            args: request.args,
+            command: request.command,
+            cwd: request.cwd,
+            env: request.env,
+            packageId: request.package.id,
+            stdin: await asyncChunksText(request.stdin),
+          });
+          await output.writeStdout("vfork child stdout\n");
+          await output.writeStderr("vfork child stderr\n");
+          return { exitCode: 33 };
+        },
+      },
+      "wasi-module": createRawWasiModuleExecutor({
+        createWorker: createNodeWasiWorker,
+      }),
+    },
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["child"], id: "vfork-child", type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "vfork-parent",
+      id: "vfork-parent",
+      wasiModule: { bytes: WASIX_PROC_FORK_VFORK_EXEC_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-wasix-vfork-exec3",
+    packageId: "vfork-parent",
+    command: "vfork-parent",
+    env: { FROM_PARENT: "1", PATH: "/nowhere" },
+    stdin: "worker vfork stdin\n",
+  });
+
+  assert.deepEqual(seen, [
+    {
+      args: ["--vfork"],
+      command: "child",
+      cwd: "/workspace",
+      env: { FROM_FORK: "1", FROM_PARENT: "1", PATH: "/bin" },
+      packageId: "vfork-child",
+      stdin: "worker vfork stdin\n",
+    },
+  ]);
+  assert.equal(stdoutText(port.messages), "vfork child stdout\n");
+  assert.equal(stderrText(port.messages), "vfork child stderr\n");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-wasix-vfork-exec3",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 19,
+      stdoutBytes: 19,
+      timedOut: false,
+    },
+  });
+});
+
 test("command worker reports WASIX proc_exec catalog misses", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
@@ -2277,6 +2365,103 @@ test("raw WASI executor propagates WASIX proc_exit2 status", async () => {
   );
 
   assert.deepEqual(result, { exitCode: 42 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor joins asyncify WASIX vfork proc_exit2 children", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_FORK_VFORK_EXIT_WASM,
+    command: "vfork-exit-parent",
+    id: "vfork-exit-parent",
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "vfork-exit-parent" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor resumes WASIX vfork parents after proc_exec3", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_FORK_VFORK_EXEC_WASM,
+    command: "vfork-exec-parent",
+    id: "vfork-exec-parent",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      ...baseRunRequest(packageRecord),
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return { exitCode: 33 };
+        },
+      },
+      command: "vfork-exec-parent",
+      cwd: "/workspace/parent",
+      env: { FROM_PARENT: "1", PATH: "/nowhere" },
+      stdin: encoder.encode("vfork stdin\n"),
+    },
+    output,
+  );
+
+  assert.deepEqual(
+    { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
+    {
+      args: ["--vfork"],
+      command: "child",
+      cwd: "/workspace/parent",
+      env: { FROM_FORK: "1", FROM_PARENT: "1", PATH: "/bin" },
+      packageId: null,
+      stderr: "inherit",
+      stdin: "vfork stdin\n",
+      stdout: "inherit",
+    },
+  );
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor keeps unsupported WASIX fork modes explicit", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_FORK_UNSUPPORTED_WASM,
+    command: "fork-unsupported",
+    id: "fork-unsupported",
+  });
+
+  const result = await executor.run(
+    {
+      ...baseRunRequest(packageRecord),
+      command: "fork-unsupported",
+      diagnostics: { unsupportedWasixCalls: true },
+    },
+    output,
+  );
+
+  assert.deepEqual(result, {
+    diagnostics: {
+      unsupportedWasixCalls: [
+        { count: 2, group: "process", name: "proc_fork" },
+      ],
+    },
+    exitCode: 0,
+  });
   assert.equal(output.stdout, "");
   assert.equal(output.stderr, "");
 });

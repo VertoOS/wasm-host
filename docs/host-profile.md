@@ -305,16 +305,23 @@ layers. Raw WASI execution exposes narrow `wasix_32v1.proc_exec`,
 import frame, then await the existing child-command bridge so the current module
 can be replaced by a cataloged packaged command with cwd/stdin/stdout/stderr
 and WASIX env/PATH overlays. `proc_exit2`, `proc_parent`, `proc_snapshot`, and
-no-child `proc_join` also provide deterministic single-process browser behavior.
-Supported Preview1 imports are mirrored through `wasix_32v1` when the 32-bit
-import ABI matches the current browser handlers. `proc_spawn`, fork, signal, and
-raise-interval imports still return deterministic unsupported capability errors
-because blocking process handles need later process lifecycle support. WASIX
+no-child `proc_join` also provide deterministic browser process behavior.
+Asyncify-capable raw WASI modules can use a bounded
+`proc_fork(copy_memory=false)` vfork subset where the child resumes with pid
+`0`, exits through `proc_exit2` or the existing `proc_exec*` child-command
+bridge, and then lets the parent resume with the child pid and reap
+`JoinStatus::ExitNormal` through `proc_join`. Supported Preview1 imports are
+mirrored through `wasix_32v1` when the 32-bit import ABI matches the current
+browser handlers. `proc_spawn`, copied-memory fork, signal, and raise-interval
+imports still return deterministic unsupported capability errors because
+general process snapshots and blocking process handles need later lifecycle
+support. WASIX
 `thread_id`, `thread_parallelism`, and zero-duration `thread_sleep` expose
 deterministic single-thread browser state. `stack_checkpoint` remains a zero
 probe for non-asyncify modules, while modules that export asyncify controls plus
 `__stack_low`/`__stack_high` can checkpoint and restore within one browser
-instance. This is not fork, vfork, process, or thread support. Futex, eventfd,
+instance. This is not copied-memory fork, general process, or thread support.
+Futex, eventfd,
 epoll, context-switching, thread spawn/join/signal, and nonzero sleep imports
 instantiate with deterministic unsupported capability errors until the browser
 profile has a real worker-thread strategy.
@@ -380,13 +387,15 @@ package-file fixtures:
 `sock_recv`, `sock_send`, and `sock_shutdown`.
 The same raw runner exposes a narrow `wasix_32v1` namespace that mirrors those
 supported Preview1 calls, adds `proc_exec`, `proc_exec2`, `proc_exec3`,
-`proc_exit2`, `proc_parent`, `proc_snapshot`, `getcwd`, `chdir`, `path_open2`,
-`fd_fdflags_get`, `fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
-`getpid`, `thread_id`, `thread_parallelism`, zero-duration `thread_sleep`, and
-empty signal-disposition queries, keeps unsupported process controls as
-deterministic capability errors, classifies futex/eventfd/thread-control
-imports as unsupported browser capability gaps, treats `callback_signal` as a
-diagnostic no-op, and recognizes common raw socket/network imports such as
+`proc_exit2`, `proc_parent`, `proc_snapshot`, no-child and completed-child
+`proc_join`, a bounded asyncify `proc_fork(copy_memory=false)` vfork subset,
+`getcwd`, `chdir`, `path_open2`, `fd_fdflags_get`, `fd_fdflags_set`, `fd_dup`,
+`fd_dup2`, `fd_pipe`, `pipe`, `getpid`, `thread_id`, `thread_parallelism`,
+zero-duration `thread_sleep`, and empty signal-disposition queries, keeps
+copied-memory fork, spawn, signal, and broad process controls as deterministic
+capability errors, classifies futex/eventfd/thread-control imports as
+unsupported browser capability gaps, treats `callback_signal` as a diagnostic
+no-op, and recognizes common raw socket/network imports such as
 `sock_open`, `sock_connect`, `sock_recv_from`, `sock_send_to`, inherited
 Preview1-style `sock_accept`/`sock_recv`/`sock_send`/`sock_shutdown`, option
 helpers, multicast helpers, port helpers, and `resolve`, all of which return
@@ -485,9 +494,10 @@ command can observe persisted browser workspace state through terminal stdio.
 Worker-backed raw WASI fixtures can also exercise the internal child-command
 RPC to resolve cataloged packaged commands through the host-side command worker.
 The current WASIX process/catalog proof covers replacement-style exec variants,
-env/PATH overlays, exit status propagation, and deterministic single-process
-parent/snapshot answers; it is not process spawn, fork, waitpid, Bash, git,
-native process spawning, or arbitrary uploaded JavaScript.
+env/PATH overlays, exit status propagation, deterministic parent/snapshot
+answers, and asyncify vfork child completion; it is not process spawn,
+copied-memory fork, general waitpid, Bash, git, native process spawning, or
+arbitrary uploaded JavaScript.
 The current thread/event classification exposes single-thread id/parallelism
 and zero-duration sleep, while opt-in unsupported-call diagnostics report the
 remaining thread/event, dynamic, network, clock, and process-control gaps,

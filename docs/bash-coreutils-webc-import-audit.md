@@ -40,9 +40,11 @@ Current result:
 - `stack_checkpoint` is handled as a browser-safe zero probe for non-asyncify
   modules, and a narrow single-instance asyncify checkpoint/restore path exists
   for modules that export asyncify controls plus browser-readable stack bounds.
-- The target remains blocked before `ls` completes because external Bash
-  commands still need browser-safe fork plus process-level stack/store rewind
-  behavior: `proc_fork` and the Bash `stack_restore` call site.
+- The target remains blocked before `ls` completes. Raw asyncify fixtures can
+  now use a bounded `proc_fork(copy_memory=false)` vfork lifecycle, but the
+  Bash package still reaches unsupported fork/restore behavior for external
+  commands: the reported blocker set remains `proc_fork` plus the Bash
+  `stack_restore` call site.
 - The browser smoke is therefore marked blocked on
   [#204](https://github.com/VertoOS/wasm-host/issues/204), with diagnostics
   proving the remaining blocker set.
@@ -143,9 +145,15 @@ minimal `stack_checkpoint` implementation for the Bash entry path. The
 [#206](https://github.com/VertoOS/wasm-host/issues/206) continuation slice adds
 single-instance asyncify checkpoint/restore support for continuation-capable
 modules and stable runtime errors for missing snapshots or missing continuation
-exports. This is not full Bash process-control support: Bash external commands
-remain blocked on [#204](https://github.com/VertoOS/wasm-host/issues/204) until
-the browser host can implement truthful fork, child lifecycle, and process-level
+exports. [#209](https://github.com/VertoOS/wasm-host/issues/209) adds the first
+truthful raw-fixture process lifecycle subset: asyncify
+`proc_fork(copy_memory=false)` resumes the vfork child first, lets it complete
+through `proc_exit2` or the existing `proc_exec*` child-command bridge, resumes
+the parent with the child pid, and reaps completed child status through
+`proc_join`. This is not full Bash process-control support: Bash external
+commands remain blocked on
+[#204](https://github.com/VertoOS/wasm-host/issues/204) until the browser host
+can implement the unsupported fork mode Bash reaches and process-level
 stack/store rewind semantics.
 
 The audit did not find any reason to add first-class MCP, plugin, provider,

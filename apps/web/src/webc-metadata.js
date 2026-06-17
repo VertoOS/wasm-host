@@ -6,8 +6,14 @@ const WEBC_V2 = "002";
 const WEBC_V3 = "003";
 const WEBC_TAG_MANIFEST = 1;
 const WEBC_TAG_INDEX = 2;
+const WEBC_TAG_ATOMS = 3;
+const WEBC_TAG_VOLUME = 4;
 const WEBC_V3_SECTION_HASH_BYTES = 32;
+const WEBC_TAG_DIRECTORY = 30;
+const WEBC_TAG_FILE = 31;
 const U64_BYTES = 8;
+const SHA256_BYTES = 32;
+const WEBC_V3_TIMESTAMPS_BYTES = 24;
 const MAX_CBOR_DEPTH = 128;
 
 export const SUPPORTED_WEBC_METADATA_VERSIONS = new Set([WEBC_V2, WEBC_V3]);
@@ -40,31 +46,63 @@ export function extractWebcPackageMetadata(bytes) {
   if (!SUPPORTED_WEBC_METADATA_VERSIONS.has(version)) {
     throw new WebcMetadataError(`unsupported WebC version ${version}`);
   }
-  const manifest = decodeCbor(readWebcManifestSection(data, version));
-  return normalizeWebcManifest(manifest, { version });
+  const sections = readWebcSections(data, version);
+  if (!sections.manifest) {
+    throw new WebcMetadataError("missing WebC manifest section");
+  }
+  const manifest = decodeCbor(sections.manifest.payload);
+  const metadata = normalizeWebcManifest(manifest, { version });
+  const artifacts = extractWebcArtifacts(sections, metadata, { version });
+  return {
+    ...metadata,
+    webcArtifacts: artifacts,
+  };
 }
 
-function readWebcManifestSection(data, version) {
+function readWebcSections(data, version) {
+  const sections = {
+    atoms: null,
+    manifest: null,
+    volumes: {},
+  };
   let offset = WEBC_HEADER_LENGTH;
   while (offset < data.byteLength) {
+    const sectionOffset = offset;
     const tag = readByte(data, offset);
     offset += 1;
 
+    let hash = null;
     if (version === WEBC_V3 && tag !== WEBC_TAG_INDEX) {
       requireAvailable(data, offset, WEBC_V3_SECTION_HASH_BYTES);
+      hash = data.subarray(offset, offset + WEBC_V3_SECTION_HASH_BYTES);
       offset += WEBC_V3_SECTION_HASH_BYTES;
     }
 
     const length = readUint64Le(data, offset);
     offset += U64_BYTES;
     requireAvailable(data, offset, length);
+    const payloadOffset = offset;
+    const payload = data.subarray(offset, offset + length);
+    const section = {
+      hash,
+      length,
+      payload,
+      payloadOffset,
+      sectionOffset,
+      tag,
+    };
 
     if (tag === WEBC_TAG_MANIFEST) {
-      return data.subarray(offset, offset + length);
+      sections.manifest = section;
+    } else if (tag === WEBC_TAG_ATOMS) {
+      sections.atoms = parseAtomsSection(section, { version });
+    } else if (tag === WEBC_TAG_VOLUME) {
+      const volume = parseVolumeSection(section, { version });
+      sections.volumes[volume.name] = volume;
     }
     offset += length;
   }
-  throw new WebcMetadataError("missing WebC manifest section");
+  return sections;
 }
 
 function normalizeWebcManifest(manifest, options) {
@@ -171,6 +209,202 @@ function normalizeFilesystemMappings(value) {
         nonEmptyString(null, "WebC filesystem mapping volume_name is required"),
     };
   });
+}
+
+function extractWebcArtifacts(sections, metadata, options) {
+  const artifacts = {
+    atoms: sections.atoms ?? emptyAtomArtifacts(),
+    volumes: sections.volumes,
+  };
+  validateReferencedAtoms(metadata, artifacts.atoms);
+  validateReferencedVolumes(metadata, artifacts.volumes);
+  return artifacts;
+}
+
+function parseAtomsSection(section, options) {
+  const volume = parseVolumePayload(section, {
+    name: "atoms",
+    pathPrefix: "",
+    version: options.version,
+  });
+  return {
+    files: volume.files,
+    hash: sectionHashHex(section),
+    payloadSpan: span(section.payloadOffset, section.length),
+  };
+}
+
+function parseVolumeSection(section, options) {
+  const payload = section.payload;
+  let offset = 0;
+  const nameLength = readUint64Le(payload, offset);
+  offset += U64_BYTES;
+  requireAvailable(payload, offset, nameLength);
+  const name = textDecoder.decode(payload.subarray(offset, offset + nameLength));
+  offset += nameLength;
+  return parseVolumePayload(
+    {
+      ...section,
+      payload: payload.subarray(offset),
+      payloadOffset: section.payloadOffset + offset,
+      length: section.length - offset,
+    },
+    {
+      name,
+      pathPrefix: "/",
+      version: options.version,
+    },
+  );
+}
+
+function parseVolumePayload(section, options) {
+  const payload = section.payload;
+  let offset = 0;
+  const headerLength = readUint64Le(payload, offset);
+  offset += U64_BYTES;
+  requireAvailable(payload, offset, headerLength);
+  const header = payload.subarray(offset, offset + headerLength);
+  offset += headerLength;
+  const dataLength = readUint64Le(payload, offset);
+  offset += U64_BYTES;
+  requireAvailable(payload, offset, dataLength);
+  const data = payload.subarray(offset, offset + dataLength);
+  const dataOffset = section.payloadOffset + offset;
+  const files = parseVolumeHeader(header, data, {
+    dataOffset,
+    pathPrefix: options.pathPrefix,
+    version: options.version,
+  });
+  return {
+    dataSpan: span(dataOffset, dataLength),
+    files,
+    hash: sectionHashHex(section),
+    headerSpan: span(section.payloadOffset + U64_BYTES, headerLength),
+    name: options.name,
+    payloadSpan: span(section.payloadOffset, section.length),
+  };
+}
+
+function parseVolumeHeader(header, data, options) {
+  const files = {};
+  parseHeaderEntry(header, 0, options.pathPrefix, files, {
+    data,
+    dataOffset: options.dataOffset,
+    seenOffsets: new Set(),
+    version: options.version,
+  });
+  return files;
+}
+
+function parseHeaderEntry(header, offset, path, files, options) {
+  if (options.seenOffsets.has(offset)) {
+    throw new WebcMetadataError("WebC volume header contains a reference loop");
+  }
+  options.seenOffsets.add(offset);
+  requireAvailable(header, offset, 1);
+  const tag = header[offset];
+  let cursor = offset + 1;
+  if (tag === WEBC_TAG_DIRECTORY) {
+    const length = readUint64Le(header, cursor);
+    cursor += U64_BYTES;
+    const entriesEnd = cursor + length;
+    requireAvailable(header, cursor, length);
+    if (options.version === WEBC_V3) {
+      cursor += WEBC_V3_TIMESTAMPS_BYTES + SHA256_BYTES;
+      requireAvailable(header, cursor, 0);
+    }
+    while (cursor < entriesEnd) {
+      const childOffset = readUint64Le(header, cursor);
+      cursor += U64_BYTES;
+      if (options.version === WEBC_V3) {
+        cursor += SHA256_BYTES;
+      }
+      const nameLength = readUint64Le(header, cursor);
+      cursor += U64_BYTES;
+      requireAvailable(header, cursor, nameLength);
+      const name = textDecoder.decode(header.subarray(cursor, cursor + nameLength));
+      cursor += nameLength;
+      parseHeaderEntry(header, childOffset, childPath(path, name), files, options);
+    }
+    if (cursor !== entriesEnd) {
+      throw new WebcMetadataError("invalid WebC volume directory length");
+    }
+    return;
+  }
+  if (tag === WEBC_TAG_FILE) {
+    const startOffset = readUint64Le(header, cursor);
+    cursor += U64_BYTES;
+    const endOffset = readUint64Le(header, cursor);
+    cursor += U64_BYTES;
+    requireAvailable(header, cursor, SHA256_BYTES);
+    const checksum = bytesToHex(header.subarray(cursor, cursor + SHA256_BYTES));
+    cursor += SHA256_BYTES;
+    if (options.version === WEBC_V3) {
+      cursor += WEBC_V3_TIMESTAMPS_BYTES;
+      requireAvailable(header, cursor, 0);
+    }
+    if (startOffset > endOffset || endOffset > options.data.byteLength) {
+      throw new WebcMetadataError(`invalid WebC volume file span for ${path}`);
+    }
+    const byteLength = endOffset - startOffset;
+    files[path] = {
+      byteLength,
+      bytes: options.data.subarray(startOffset, endOffset),
+      checksumSha256: checksum,
+      span: span(options.dataOffset + startOffset, byteLength),
+    };
+    return;
+  }
+  throw new WebcMetadataError(`unsupported WebC volume header tag ${tag}`);
+}
+
+function validateReferencedAtoms(metadata, atoms) {
+  for (const [commandName, command] of Object.entries(metadata.commandMetadata)) {
+    if (command.atom && !atoms.files[command.atom]) {
+      throw new WebcMetadataError(
+        `WebC command ${commandName} references missing atom ${command.atom}`,
+      );
+    }
+  }
+}
+
+function validateReferencedVolumes(metadata, volumes) {
+  for (const mapping of metadata.filesystem) {
+    if (mapping.from) {
+      continue;
+    }
+    if (!volumes[mapping.volumeName]) {
+      throw new WebcMetadataError(
+        `WebC filesystem mapping references missing volume ${mapping.volumeName}`,
+      );
+    }
+  }
+}
+
+function emptyAtomArtifacts() {
+  return {
+    files: {},
+    hash: null,
+    payloadSpan: null,
+  };
+}
+
+function childPath(parent, name) {
+  if (parent === "") {
+    return name;
+  }
+  if (parent === "/") {
+    return `/${name}`;
+  }
+  return `${parent}/${name}`;
+}
+
+function span(offset, length) {
+  return { length, offset };
+}
+
+function sectionHashHex(section) {
+  return section.hash ? bytesToHex(section.hash) : null;
 }
 
 function decodeCbor(bytes) {
@@ -409,6 +643,10 @@ function startsWithBytes(bytes, prefix) {
     return false;
   }
   return prefix.every((byte, index) => bytes[index] === byte);
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function toUint8Array(value) {

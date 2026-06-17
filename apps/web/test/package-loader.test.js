@@ -142,6 +142,32 @@ test("BrowserPackageLoader discovers command metadata from WebC manifests", asyn
     mainArgs: ["-l"],
     runner: "https://webc.org/runner/wasi",
   });
+  assert.deepEqual(Object.keys(record.metadata.webcArtifacts.atoms), [
+    "bash-atom",
+    "coreutils",
+  ]);
+  assert.deepEqual(record.metadata.webcArtifacts.atoms["bash-atom"], {
+    byteLength: 8,
+    cacheKey: `${record.cacheKeys.moduleArtifactsPrefix}atoms/bash-atom`,
+    checksumSha256: "0".repeat(64),
+    name: "bash-atom",
+    span: record.metadata.webcArtifacts.atoms["bash-atom"].span,
+  });
+  assert.deepEqual(
+    await cache.getModuleArtifact(
+      record.metadata.webcArtifacts.atoms["bash-atom"].cacheKey,
+    ),
+    new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x62, 0x61, 0x73, 0x68]),
+  );
+  assert.deepEqual(
+    Object.keys(record.metadata.webcArtifacts.volumes["/rootfs"].files),
+    ["/rootfs/bin/bash", "/rootfs/bin/ls", "/rootfs/etc/profile"],
+  );
+  assert.equal(
+    record.metadata.webcArtifacts.volumes["/rootfs"].files["/rootfs/bin/bash"]
+      .byteLength,
+    12,
+  );
   assert.deepEqual(await cache.getPackage("wasmer/bash"), {
     artifactKind: "webc-package",
     byteLength: record.byteLength,
@@ -214,6 +240,45 @@ test("BrowserPackageLoader rejects WebC bytes without discoverable commands", as
       assert.equal(
         error.message,
         "browser WebC metadata could not be parsed: WebC manifest commands must be a map",
+      );
+      return true;
+    },
+  );
+});
+
+test("BrowserPackageLoader rejects WebC metadata that references missing atoms or volumes", async () => {
+  const loader = createBrowserPackageLoader();
+
+  await assert.rejects(
+    loader.loadBytes({
+      bytes: webcV2Bytes(webcCommandManifest(), {
+        atoms: {
+          coreutils: new Uint8Array([1, 2, 3]),
+        },
+      }),
+      command: "bash",
+    }),
+    (error) => {
+      assert.equal(error.kind, "invalid_package");
+      assert.equal(
+        error.message,
+        "browser WebC metadata could not be parsed: WebC command bash references missing atom bash-atom",
+      );
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    loader.loadBytes({
+      bytes: webcV2Bytes(webcCommandManifest(), {
+        volumes: {},
+      }),
+    }),
+    (error) => {
+      assert.equal(error.kind, "invalid_package");
+      assert.equal(
+        error.message,
+        "browser WebC metadata could not be parsed: WebC filesystem mapping references missing volume /rootfs",
       );
       return true;
     },

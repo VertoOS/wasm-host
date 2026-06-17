@@ -58,6 +58,8 @@ const BASH_WORKSPACE_SCRIPT_CREATE_COMMAND = [
     "'printf \"SCRIPT_PWD:\"'",
     "'pwd'",
     "'printf \"from-script\\\\n\" > issue-219-script/output.txt'",
+    "'printf \"SCRIPT_PWD_SUBST:%s\\\\n\" \"$(pwd)\"'",
+    "'printf \"SCRIPT_CAT_SUBST:%s\\\\n\" \"$(cat issue-219-script/output.txt)\"'",
     "'cat issue-219-script/output.txt'",
     "'ls issue-219-script'",
   ].join(" ") + " > issue-219-script/run.sh",
@@ -312,6 +314,8 @@ async function runBashCoreutilsSmokePage(page) {
     [
       "SCRIPT_ARG:browser-arg",
       "SCRIPT_PWD:/workspace",
+      "SCRIPT_PWD_SUBST:/workspace",
+      "SCRIPT_CAT_SUBST:from-script",
       "from-script",
       "output.txt",
       "run.sh",

@@ -579,6 +579,7 @@ async function runCopiedForkChild({
     terminal: parentWasi.terminal,
     workspace,
   });
+  childWasi.inheritOpenFilesFrom(parentWasi);
   childWasi.processes.set(fork.childPid, {
     exitCode: null,
     parentPid: fork.parentPid,
@@ -621,6 +622,8 @@ async function runCopiedForkChild({
       return childWasi.result(result);
     }
     throw error;
+  } finally {
+    childWasi.closeAllOpenFiles();
   }
 }
 
@@ -1537,9 +1540,81 @@ class WasiPreview1Runtime {
         this.workspace,
         result.workspaceSnapshot,
       );
+      this.rebindOpenWorkspaceFiles();
     }
+    await this.writeProcessExecCapturedOutput(
+      STDOUT_FD,
+      request.stdout,
+      result?.stdout,
+    );
+    await this.writeProcessExecCapturedOutput(
+      STDERR_FD,
+      request.stderr,
+      result?.stderr,
+    );
     this.mergeDiagnostics(result?.diagnostics);
     return { exitCode: Number(result?.exitCode ?? 0) };
+  }
+
+  async writeProcessExecCapturedOutput(fd, mode, value) {
+    if (mode !== "pipe" || value == null) {
+      return;
+    }
+    const bytes = toUint8Array(value);
+    if (bytes.byteLength === 0) {
+      return;
+    }
+    await this.writeBytesToFd(fd, bytes, "WASIX proc_exec captured output");
+  }
+
+  processExecOutputMode(fd) {
+    const file = this.openFiles.get(fd);
+    return file && !isOpenStdio(file) ? "pipe" : "inherit";
+  }
+
+  inheritOpenFilesFrom(parent) {
+    this.closeAllOpenFiles();
+    this.openFiles = parent.duplicateOpenFilesForFork();
+    this.fdFlagsExt = new Map(parent.fdFlagsExt);
+    this.nextFileFd = parent.nextFileFd;
+  }
+
+  duplicateOpenFilesForFork() {
+    const files = new Map();
+    for (const [fd, file] of this.openFiles.entries()) {
+      const duplicate = duplicateOpenFileDescriptor(file);
+      this.retainOpenFile(duplicate);
+      files.set(fd, duplicate);
+    }
+    return files;
+  }
+
+  closeAllOpenFiles() {
+    for (const file of this.openFiles.values()) {
+      this.closeOpenFile(file);
+    }
+    this.openFiles.clear();
+    this.fdFlagsExt.clear();
+  }
+
+  rebindOpenWorkspaceFiles() {
+    if (!this.workspace.writable) {
+      return;
+    }
+    for (const file of this.openFiles.values()) {
+      if (file?.mount !== "workspace" || !file.record || !file.path) {
+        continue;
+      }
+      let record = this.files.get(file.path);
+      if (!record && file.writable) {
+        record = { bytes: new Uint8Array(), path: file.path };
+        this.files.set(file.path, record);
+        this.markWorkspaceDirty();
+      }
+      if (record) {
+        file.record = record;
+      }
+    }
   }
 
   markProcessExited(pid, exitCode) {
@@ -1841,6 +1916,79 @@ class WasiPreview1Runtime {
       }
     }
     return ERRNO_SUCCESS;
+  }
+
+  async writeBytesToFd(fd, bytes, context) {
+    const file = this.openFiles.get(fd);
+    if (isOpenPipe(file)) {
+      this.writeBytesToPipe(file, bytes, context);
+      return;
+    }
+    if (isOpenStdio(file)) {
+      await this.writeBytesToStdio(file.stdioFd, bytes);
+      return;
+    }
+    if (file) {
+      if (!canWriteFile(file)) {
+        throw new BrowserWasiModuleError(
+          "runtime",
+          `${context} target fd is not writable`,
+          "runtime",
+          { exitCode: 126 },
+        );
+      }
+      this.writeOpenFile(file, [bytes]);
+      return;
+    }
+    if (fd === STDOUT_FD || fd === STDERR_FD) {
+      await this.writeBytesToStdio(fd, bytes);
+      return;
+    }
+    throw new BrowserWasiModuleError(
+      "runtime",
+      `${context} target fd is unavailable`,
+      "runtime",
+      { exitCode: 126 },
+    );
+  }
+
+  writeBytesToPipe(file, bytes, context) {
+    if (file.direction !== "write") {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        `${context} target pipe is not writable`,
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    if (file.pipe.readers <= 0) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        `${context} target pipe has no readers`,
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    if (file.pipe.bytes.byteLength + bytes.byteLength > PIPE_BUFFER_LIMIT) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        `${context} exceeded browser pipe buffer`,
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    const next = new Uint8Array(file.pipe.bytes.byteLength + bytes.byteLength);
+    next.set(file.pipe.bytes);
+    next.set(bytes, file.pipe.bytes.byteLength);
+    file.pipe.bytes = next;
+  }
+
+  async writeBytesToStdio(fd, bytes) {
+    if (fd === STDOUT_FD) {
+      await this.output.writeStdout(bytes);
+      return;
+    }
+    await this.output.writeStderr(bytes);
   }
 
   fdWriteStdio(file, iovsPtr, iovsLen, nwrittenPtr) {
@@ -2259,6 +2407,7 @@ class WasiPreview1Runtime {
     if (
       replacingStdio &&
       file.mount !== "workspace" &&
+      !isOpenPipe(file) &&
       !isOpenStdio(file)
     ) {
       return ERRNO_NOTCAPABLE;
@@ -2289,10 +2438,10 @@ class WasiPreview1Runtime {
     return this.duplicateFd(fd, FIRST_FILE_FD, 0, retFdPtr);
   }
 
-  fdDup2(fd, minResultFd, cloexec, retFdPtr) {
+  fdDup2(fd, targetFd, cloexec, retFdPtr) {
     const fdFlagsExt =
       Number(cloexec) === 1 ? WASIX_FDFLAGSEXT_CLOEXEC : 0;
-    return this.duplicateFd(fd, minResultFd, fdFlagsExt, retFdPtr);
+    return this.duplicateFdTo(fd, targetFd, fdFlagsExt, retFdPtr);
   }
 
   duplicateFd(fd, minResultFd, fdFlagsExt, retFdPtr) {
@@ -2313,6 +2462,56 @@ class WasiPreview1Runtime {
       this.fdFlagsExt.set(newFd, fdFlagsExt);
     }
     this.writeU32(retFdPtr, newFd);
+    return ERRNO_SUCCESS;
+  }
+
+  duplicateFdTo(fd, targetFd, fdFlagsExt, retFdPtr) {
+    this.throwIfAborted();
+    if (!this.canWriteU32(retFdPtr)) {
+      return ERRNO_FAULT;
+    }
+    const to = Number(targetFd) >>> 0;
+    if (!this.fdStat(fd)) {
+      this.writeU32(retFdPtr, 0);
+      return ERRNO_BADF;
+    }
+    if (!isDynamicFileFdNumber(to) && !isStdioFd(to)) {
+      this.writeU32(retFdPtr, 0);
+      return ERRNO_NOTCAPABLE;
+    }
+    if (fd === to) {
+      this.writeU32(retFdPtr, to);
+      return ERRNO_SUCCESS;
+    }
+    const file = this.duplicateOpenFileForFd(fd);
+    if (!file) {
+      this.writeU32(retFdPtr, 0);
+      return ERRNO_BADF;
+    }
+    if (
+      isStdioFd(to) &&
+      file.mount !== "workspace" &&
+      !isOpenPipe(file) &&
+      !isOpenStdio(file)
+    ) {
+      this.writeU32(retFdPtr, 0);
+      return ERRNO_NOTCAPABLE;
+    }
+    const replaced = this.openFiles.get(to);
+    if (replaced) {
+      this.closeOpenFile(replaced);
+    }
+    this.retainOpenFile(file);
+    this.openFiles.set(to, file);
+    if (fdFlagsExt === 0) {
+      this.fdFlagsExt.delete(to);
+    } else {
+      this.fdFlagsExt.set(to, fdFlagsExt);
+    }
+    if (isDynamicFileFdNumber(to) && to >= this.nextFileFd) {
+      this.nextFileFd = to + 1;
+    }
+    this.writeU32(retFdPtr, to);
     return ERRNO_SUCCESS;
   }
 
@@ -4969,8 +5168,8 @@ class WasixRuntime {
         { exitCode: 126 },
       );
     }
-    const stderr = "inherit";
-    const stdout = "inherit";
+    const stderr = this.host.processExecOutputMode(STDERR_FD);
+    const stdout = this.host.processExecOutputMode(STDOUT_FD);
     const args = wasixLineList(this.readString(argsPtr, argsLen));
     const request = {
       args,

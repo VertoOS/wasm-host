@@ -41,6 +41,7 @@ export class BrowserCommandWorkerError extends Error {
     this.exitCode = options.exitCode ?? null;
     this.cancelled = options.cancelled === true;
     this.timedOut = options.timedOut === true;
+    this.diagnostics = commandResultDiagnostics(options.diagnostics);
   }
 }
 
@@ -305,6 +306,7 @@ export class BrowserCommandWorkerRuntime {
         childCommands,
         command,
         cwd: run.cwd,
+        diagnostics: run.diagnostics,
         env: run.env,
         httpBridge: new BrowserHttpBridgeClient({
           signal: activeRun.controller.signal,
@@ -518,6 +520,7 @@ export class BrowserCommandWorkerRuntime {
         childCommands,
         command,
         cwd: run.cwd,
+        diagnostics: run.diagnostics,
         env: run.env,
         httpBridge: new BrowserHttpBridgeClient({
           signal: abort.signal,
@@ -534,7 +537,7 @@ export class BrowserCommandWorkerRuntime {
         workspaceStore: this.workspaceStoreForPackage(packageRecord),
       }, output);
       abort.throwIfAborted();
-      return {
+      const childResult = {
         command,
         exitCode: Number(result?.exitCode ?? 0),
         packageId: packageRecord.id,
@@ -543,6 +546,11 @@ export class BrowserCommandWorkerRuntime {
         stdout: output.stdoutBytes(),
         stdoutBytes: output.stdoutByteLength,
       };
+      const diagnostics = commandResultDiagnostics(result?.diagnostics);
+      if (diagnostics) {
+        childResult.diagnostics = diagnostics;
+      }
+      return childResult;
     } finally {
       abort.cleanup();
     }
@@ -1216,6 +1224,7 @@ function normalizeRunMessage(message) {
     args: normalizeStringList(run.args ?? []),
     command: nonEmptyString(run.command),
     cwd: nonEmptyString(run.cwd ?? "/workspace"),
+    diagnostics: normalizeRunDiagnostics(run.diagnostics ?? message.diagnostics),
     env: normalizeEnv(run.env ?? {}),
     httpTransport: run.httpTransport ?? message.httpTransport,
     id,
@@ -1228,6 +1237,20 @@ function normalizeRunMessage(message) {
     terminal: normalizeInitialTerminal(run.terminal ?? message.terminal),
     timeoutMs: normalizeTimeout(run.timeoutMs ?? message.timeoutMs),
   };
+}
+
+function normalizeRunDiagnostics(value) {
+  if (value == null) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new BrowserCommandWorkerError(
+      "invalid_request",
+      "browser command diagnostics must be an object",
+      "startup",
+    );
+  }
+  return { unsupportedWasixCalls: value.unsupportedWasixCalls === true };
 }
 
 function normalizeChildCommandRequest(message = {}, parentRun = {}) {
@@ -1243,6 +1266,7 @@ function normalizeChildCommandRequest(message = {}, parentRun = {}) {
     args: normalizeStringList(run.args ?? []),
     command: nonEmptyString(run.command),
     cwd: nonEmptyString(run.cwd ?? parentRun.cwd ?? "/workspace"),
+    diagnostics: normalizeRunDiagnostics(run.diagnostics ?? parentRun.diagnostics),
     env: normalizeEnv(run.env ?? parentRun.env ?? {}),
     httpTransport: run.httpTransport ?? parentRun.httpTransport,
     initialStdin: initialStdinChunks(run),
@@ -1591,7 +1615,7 @@ function createChildCommandAbortSignal(parentSignal, timeoutMs) {
 }
 
 function completeResult(activeRun, result = {}) {
-  return {
+  const complete = {
     cancelled: false,
     exitCode: Number(result.exitCode ?? 0),
     failureStage: null,
@@ -1599,10 +1623,15 @@ function completeResult(activeRun, result = {}) {
     stdoutBytes: activeRun.stdoutBytes,
     timedOut: false,
   };
+  const diagnostics = commandResultDiagnostics(result.diagnostics);
+  if (diagnostics) {
+    complete.diagnostics = diagnostics;
+  }
+  return complete;
 }
 
 function errorResult(activeRun, error) {
-  return {
+  const result = {
     cancelled: error.cancelled === true,
     exitCode: error.exitCode,
     failureStage: error.stage ?? "runtime",
@@ -1610,14 +1639,50 @@ function errorResult(activeRun, error) {
     stdoutBytes: activeRun?.stdoutBytes ?? 0,
     timedOut: error.timedOut === true,
   };
+  const diagnostics = commandResultDiagnostics(error.diagnostics);
+  if (diagnostics) {
+    result.diagnostics = diagnostics;
+  }
+  return result;
+}
+
+function commandResultDiagnostics(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  if (!Array.isArray(value.unsupportedWasixCalls)) {
+    return null;
+  }
+  return {
+    unsupportedWasixCalls: value.unsupportedWasixCalls
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        count: Number(entry.count ?? 0),
+        group: String(entry.group ?? ""),
+        name: String(entry.name ?? ""),
+      }))
+      .filter((entry) => entry.count > 0 && entry.group && entry.name)
+      .sort(compareCommandUnsupportedCallDiagnostics),
+  };
+}
+
+function compareCommandUnsupportedCallDiagnostics(left, right) {
+  return (
+    left.group.localeCompare(right.group) || left.name.localeCompare(right.name)
+  );
 }
 
 function commandErrorPayload(error) {
-  return {
+  const payload = {
     kind: error.kind,
     message: error.message,
     stage: error.stage ?? "runtime",
   };
+  const diagnostics = commandResultDiagnostics(error.diagnostics);
+  if (diagnostics) {
+    payload.diagnostics = diagnostics;
+  }
+  return payload;
 }
 
 function normalizeRunError(activeRun, error) {
@@ -1641,6 +1706,7 @@ function normalizeCommandError(error, stage = "runtime") {
       error.stage ?? stage,
       {
         cancelled: error.cancelled,
+        diagnostics: error.diagnostics,
         exitCode: error.exitCode,
         timedOut: error.timedOut,
       },

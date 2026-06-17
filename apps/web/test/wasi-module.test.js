@@ -213,7 +213,7 @@ const WASIX_PREVIEW1_IMPORTS_WASM = base64ToBytes(
 );
 
 const WASIX_THREAD_EVENT_IMPORTS_WASM = base64ToBytes(
-  "AGFzbQEAAAABWA9gA35/fwF/YAR/f39/AX9gA35/fwF/YAJ/fwF/YAF+AX9gAn5/AX9gAn9+AX9gAn9/AX9gAX8Bf2AAAX9gA39/fwF/YAR/f39/AX9gAX8AYAJ/fwBgAAACuwUaCndhc2l4XzMydjEOY29udGV4dF9jcmVhdGUACAp3YXNpeF8zMnYxD2NvbnRleHRfZGVzdHJveQAICndhc2l4XzMydjEOY29udGV4dF9zd2l0Y2gACAp3YXNpeF8zMnYxDGVwb2xsX2NyZWF0ZQAICndhc2l4XzMydjEJZXBvbGxfY3RsAAoKd2FzaXhfMzJ2MQplcG9sbF93YWl0AAoKd2FzaXhfMzJ2MQhmZF9ldmVudAAACndhc2l4XzMydjEKZnV0ZXhfd2FpdAABCndhc2l4XzMydjEKZnV0ZXhfd2FrZQAHCndhc2l4XzMydjEOZnV0ZXhfd2FrZV9hbGwABwp3YXNpeF8zMnYxEHN0YWNrX2NoZWNrcG9pbnQACAp3YXNpeF8zMnYxDXN0YWNrX3Jlc3RvcmUACAp3YXNpeF8zMnYxCXRocmVhZF9pZAAICndhc2l4XzMydjELdGhyZWFkX2pvaW4ACAp3YXNpeF8zMnYxE3RocmVhZF9sb2NhbF9jcmVhdGUABQp3YXNpeF8zMnYxFHRocmVhZF9sb2NhbF9kZXN0cm95AAgKd2FzaXhfMzJ2MRB0aHJlYWRfbG9jYWxfZ2V0AAcKd2FzaXhfMzJ2MRB0aHJlYWRfbG9jYWxfc2V0AAYKd2FzaXhfMzJ2MRJ0aHJlYWRfcGFyYWxsZWxpc20ACAp3YXNpeF8zMnYxDXRocmVhZF9zaWduYWwABwp3YXNpeF8zMnYxDHRocmVhZF9zbGVlcAAECndhc2l4XzMydjEMdGhyZWFkX3NwYXduAAIKd2FzaXhfMzJ2MQ90aHJlYWRfc3Bhd25fdjIAAwp3YXNpeF8zMnYxC3RocmVhZF9leGl0AAwKd2FzaXhfMzJ2MQhmZF93cml0ZQALCndhc2l4XzMydjEJcHJvY19leGl0AAwDBAMNDQ4FAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAHAqZAgMLACAABEAgARAZCwsOACAAQTpHBEAgARAZCwv7AQBBABAAQQoQG0EAEAFBCxAbQQAQAkEMEBtBABADQQ0QG0EAQQBBABAEQQ4QG0EAQQBBABAFQQ8QG0IAQQBBABAGQRAQG0EAQQBBAEEAEAdBERAbQQBBABAIQRIQG0EAQQAQCUETEBtBABAKQRQQG0EAEAtBFRAbQQAQDEEWEBtBABANQRcQG0IAQQAQDkEYEBtBABAPQRkQG0EAQQAQEEEaEBtBAEIAEBFBGxAbQQAQEkEcEBtBAEEAEBNBHRAbQgAQFEEeEBtCAEEAQQAQFUEfEBtBAEEAEBZBIBAbQQBBgAg2AgBBBEEeNgIAQQFBAEEBQQgQGEEhEBoLCyUBAEGACAsed2FzaXgtdGhyZWFkLWV2ZW50LWltcG9ydHMtb2sK",
+  "AGFzbQEAAAABJAdgAAF/YAF/AX9gAX4Bf2AEf39/fwF/YAF/AGADf39/AGAAAAKiBRkKd2FzaXhfMzJ2MQ5jb250ZXh0X2NyZWF0ZQAACndhc2l4XzMydjEPY29udGV4dF9kZXN0cm95AAAKd2FzaXhfMzJ2MQ5jb250ZXh0X3N3aXRjaAAACndhc2l4XzMydjEMZXBvbGxfY3JlYXRlAAAKd2FzaXhfMzJ2MQllcG9sbF9jdGwAAAp3YXNpeF8zMnYxCmVwb2xsX3dhaXQAAAp3YXNpeF8zMnYxCGZkX2V2ZW50AAAKd2FzaXhfMzJ2MQpmdXRleF93YWl0AAAKd2FzaXhfMzJ2MQpmdXRleF93YWtlAAAKd2FzaXhfMzJ2MQ5mdXRleF93YWtlX2FsbAAACndhc2l4XzMydjEQc3RhY2tfY2hlY2twb2ludAAACndhc2l4XzMydjENc3RhY2tfcmVzdG9yZQAACndhc2l4XzMydjEJdGhyZWFkX2lkAAEKd2FzaXhfMzJ2MQt0aHJlYWRfam9pbgAACndhc2l4XzMydjETdGhyZWFkX2xvY2FsX2NyZWF0ZQAACndhc2l4XzMydjEUdGhyZWFkX2xvY2FsX2Rlc3Ryb3kAAAp3YXNpeF8zMnYxEHRocmVhZF9sb2NhbF9nZXQAAAp3YXNpeF8zMnYxEHRocmVhZF9sb2NhbF9zZXQAAAp3YXNpeF8zMnYxEnRocmVhZF9wYXJhbGxlbGlzbQABCndhc2l4XzMydjENdGhyZWFkX3NpZ25hbAAACndhc2l4XzMydjEMdGhyZWFkX3NsZWVwAAIKd2FzaXhfMzJ2MQx0aHJlYWRfc3Bhd24AAAp3YXNpeF8zMnYxD3RocmVhZF9zcGF3bl92MgAACndhc2l4XzMydjEIZmRfd3JpdGUAAwp3YXNpeF8zMnYxCXByb2NfZXhpdAAEAwMCBQYFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAGgqpAgIOACAAIAFHBEAgAhAYCwuXAgAQAEE6QQoQGRABQTpBCxAZEAJBOkEMEBkQA0E6QQ0QGRAEQTpBDhAZEAVBOkEPEBkQBkE6QRAQGRAHQTpBERAZEAhBOkESEBkQCUE6QRMQGRAKQTpBFBAZEAtBOkEVEBlBwABBFzYCAEHAABAMQQBBFhAZQcAAKAIAQQFBFxAZEA1BOkEYEBkQDkE6QRkQGRAPQTpBGhAZEBBBOkEbEBkQEUE6QRwQGUHEAEEdNgIAQcQAEBJBAEEeEBlBxAAoAgBBAUEfEBkQE0E6QSAQGUIAEBRBAEEhEBlCARAUQTpBIhAZEBVBOkEjEBkQFkE6QSQQGUGAAkGACDYCAEGEAkEeNgIAQQFBgAJBAUGQAhAXQQBBJRAZCwslAQBBgAgLHndhc2l4LXRocmVhZC1ldmVudC1pbXBvcnRzLW9rCg==",
 );
 
 const WASIX_THREAD_EXIT_WASM = base64ToBytes(
@@ -226,6 +226,10 @@ const WASIX_CWD_IMPORTS_WASM = base64ToBytes(
 
 const WASIX_UTILITY_IMPORTS_WASM = base64ToBytes(
   "AGFzbQEAAAABMwhgAn9/AX9gAX8Bf2AKf39/f39+fn9/fwF/YAABf2AEf39/fwF/YAF/AGADf39/AGAAAALBAgsKd2FzaXhfMzJ2MQ5mZF9mZGZsYWdzX2dldAAACndhc2l4XzMydjEOZmRfZmRmbGFnc19zZXQAAAp3YXNpeF8zMnYxBmdldHBpZAABCndhc2l4XzMydjEWcHJvY19zaWduYWxzX3NpemVzX2dldAABCndhc2l4XzMydjEQcHJvY19zaWduYWxzX2dldAABCndhc2l4XzMydjEKcGF0aF9vcGVuMgACCndhc2l4XzMydjEOY2xvY2tfdGltZV9zZXQAAwp3YXNpeF8zMnYxCXNvY2tfcGFpcgADFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfY2xvc2UAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAQWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQABQMGBQUGBgcHBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AA8KlwIFBwAgABAKAAsOACAAIAFHBEAgAhALCwsNACAAKAIAIAEgAhAMCyUAQYABQYAENgIAQYQBQRk2AgBBAUGAAUEBQRgQCUEAQdoAEAwLyQEBAX9BAUEAEABBAEEKEAxBAEEAQQsQDUEBQQEQAUEAQQwQDEEBQQAQAEEAQQ0QDEEAQQFBDhANQQFBABABQQBBDxAMQQQQAkEAQRAQDEEEQQFBERANQQgQA0EAQRIQDEEIQQBBExANQQAQBEEAQRQQDEEDQQBBgAJBC0EAQqaAgAFCAEEAQQFBDBAFQQBBFRAMQQwoAgAhACAAQRAQAEEAQRYQDEEQQQFBFxANIAAQCEEAQRgQDBAGQTpBGRAMEAdBOkEaEAwQDgsLMQIAQYACCwtmaXh0dXJlLnR4dABBgAQLGXdhc2l4LXV0aWxpdHktaW1wb3J0cy1vawo=",
+);
+
+const WASIX_UNSUPPORTED_DIAGNOSTICS_WASM = base64ToBytes(
+  "AGFzbQEAAAABMAlgAn9+AX9gAn9/AGABfwF/YAABf2ACf38Bf2AEf39/fwF/YAF/AGADf39/AGAAAALPAQgKd2FzaXhfMzJ2MQ5jbG9ja190aW1lX3NldAAACndhc2l4XzMydjEPY2FsbGJhY2tfc2lnbmFsAAEKd2FzaXhfMzJ2MRBjbG9zdXJlX2FsbG9jYXRlAAIKd2FzaXhfMzJ2MQlzb2NrX29wZW4AAwp3YXNpeF8zMnYxDXNvY2tfc2h1dGRvd24ABAp3YXNpeF8zMnYxCmZ1dGV4X3dha2UABAp3YXNpeF8zMnYxCGZkX3dyaXRlAAUKd2FzaXhfMzJ2MQlwcm9jX2V4aXQABgMDAgcIBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAkKfwIOACAAIAFHBEAgAhAHCwtuAEEAQgAQAEE6QQoQCEGQCEEIEAFBABACQTpBCxAIEANBOkEMEAhBAUEBEARBOkENEAhBAEEAEAVBOkEOEAhBAEEAEAVBOkEPEAhBgAJBgAg2AgBBhAJBCDYCAEEBQYACQQFBkAIQBkEAQRAQCAsLHQIAQYAICwhkaWFnLW9rCgBBkAgLCGNhbGxiYWNr",
 );
 
 const WASIX_TTY_IMPORTS_WASM = base64ToBytes(
@@ -1781,6 +1785,58 @@ test("raw WASI executor exposes WASIX proc_exec through child commands", async (
   assert.deepEqual(result, { exitCode: 7 });
 });
 
+test("raw WASI executor merges WASIX proc_exec child diagnostics", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC_WASM,
+    command: "parent",
+    id: "parent",
+  });
+  let seenChildDiagnostics = null;
+
+  const result = await executor.run(
+    {
+      args: [],
+      childCommands: {
+        async run(request) {
+          seenChildDiagnostics = request.diagnostics;
+          return {
+            diagnostics: {
+              unsupportedWasixCalls: [
+                { count: 2, group: "network", name: "sock_open" },
+                { count: 1, group: "thread-event", name: "futex_wake" },
+              ],
+            },
+            exitCode: 0,
+          };
+        },
+      },
+      command: "parent",
+      cwd: "/workspace/parent",
+      diagnostics: { unsupportedWasixCalls: true },
+      env: { PATH: "/bin" },
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.deepEqual(seenChildDiagnostics, { unsupportedWasixCalls: true });
+  assert.deepEqual(result, {
+    diagnostics: {
+      unsupportedWasixCalls: [
+        { count: 2, group: "network", name: "sock_open" },
+        { count: 1, group: "thread-event", name: "futex_wake" },
+      ],
+    },
+    exitCode: 0,
+  });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
 test("raw WASI executor maps WASIX proc_exec2 env overlays to child commands", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleExecutor({ worker: false });
@@ -2406,6 +2462,93 @@ test("raw WASI executor covers WASIX utility imports explicitly", async () => {
   assert.equal(output.stderr, "");
 });
 
+test("raw WASI executor records opt-in unsupported WASIX diagnostics", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_UNSUPPORTED_DIAGNOSTICS_WASM,
+    command: "diagnostic-smoke",
+    id: "diagnostic-smoke",
+  });
+
+  const result = await executor.run(
+    {
+      ...baseRunRequest(packageRecord),
+      command: "diagnostic-smoke",
+      diagnostics: { unsupportedWasixCalls: true },
+    },
+    output,
+  );
+
+  assert.deepEqual(result, {
+    diagnostics: {
+      unsupportedWasixCalls: [
+        { count: 1, group: "clock", name: "clock_time_set" },
+        { count: 1, group: "dynamic", name: "callback_signal" },
+        { count: 1, group: "dynamic", name: "closure_allocate" },
+        { count: 1, group: "network", name: "sock_open" },
+        { count: 1, group: "network", name: "sock_shutdown" },
+        { count: 2, group: "thread-event", name: "futex_wake" },
+      ],
+    },
+    exitCode: 0,
+  });
+  assert.equal(output.stdout, "diag-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("command worker forwards raw WASI unsupported diagnostics", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    wasiModule: { createWorker: createNodeWasiWorker },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "diagnostic-smoke",
+      id: "diagnostic-smoke",
+      wasiModule: { bytes: WASIX_UNSUPPORTED_DIAGNOSTICS_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-diagnostic-smoke",
+    packageId: "diagnostic-smoke",
+    command: "diagnostic-smoke",
+    diagnostics: { unsupportedWasixCalls: true },
+  });
+
+  assert.equal(stdoutText(port.messages), "diag-ok\n");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-diagnostic-smoke",
+    result: {
+      cancelled: false,
+      diagnostics: {
+        unsupportedWasixCalls: [
+          { count: 1, group: "clock", name: "clock_time_set" },
+          { count: 1, group: "dynamic", name: "callback_signal" },
+          { count: 1, group: "dynamic", name: "closure_allocate" },
+          { count: 1, group: "network", name: "sock_open" },
+          { count: 1, group: "network", name: "sock_shutdown" },
+          { count: 2, group: "thread-event", name: "futex_wake" },
+        ],
+      },
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: 8,
+      timedOut: false,
+    },
+  });
+});
+
 test("raw WASI executor supports WASIX fd duplication and pipes", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleExecutor({ worker: false });
@@ -2455,6 +2598,96 @@ test("raw WASI executor reports unsupported WASIX thread_exit calls", async () =
   );
   assert.equal(output.stdout, "");
   assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor preserves unsupported WASIX diagnostics on thrown calls", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_THREAD_EXIT_WASM,
+    command: "thread-exit-smoke",
+    id: "thread-exit-smoke",
+  });
+
+  await assert.rejects(
+    () =>
+      executor.run(
+        {
+          ...baseRunRequest(packageRecord),
+          command: "thread-exit-smoke",
+          diagnostics: { unsupportedWasixCalls: true },
+        },
+        output,
+      ),
+    (error) => {
+      assert.equal(error.kind, "unsupported");
+      assert.deepEqual(error.diagnostics, {
+        unsupportedWasixCalls: [
+          { count: 1, group: "thread-event", name: "thread_exit" },
+        ],
+      });
+      return true;
+    },
+  );
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("command worker reports raw WASI error diagnostics", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    wasiModule: { createWorker: createNodeWasiWorker },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "thread-exit-smoke",
+      id: "thread-exit-smoke",
+      wasiModule: { bytes: WASIX_THREAD_EXIT_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-thread-exit-smoke",
+    packageId: "thread-exit-smoke",
+    command: "thread-exit-smoke",
+    diagnostics: { unsupportedWasixCalls: true },
+  });
+
+  assert.equal(stdoutText(port.messages), "");
+  assert.equal(stderrText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-thread-exit-smoke",
+    error: {
+      diagnostics: {
+        unsupportedWasixCalls: [
+          { count: 1, group: "thread-event", name: "thread_exit" },
+        ],
+      },
+      kind: "unsupported",
+      message: "WASIX thread_exit requires browser thread runtime support",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      diagnostics: {
+        unsupportedWasixCalls: [
+          { count: 1, group: "thread-event", name: "thread_exit" },
+        ],
+      },
+      exitCode: 126,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
 });
 
 test("command worker times out WASIX proc_exec child commands", async () => {

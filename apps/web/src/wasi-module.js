@@ -236,15 +236,12 @@ const WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS = [
   "futex_wake_all",
   "stack_checkpoint",
   "stack_restore",
-  "thread_id",
   "thread_join",
   "thread_local_create",
   "thread_local_destroy",
   "thread_local_get",
   "thread_local_set",
-  "thread_parallelism",
   "thread_signal",
-  "thread_sleep",
   "thread_spawn",
   "thread_spawn_v2",
 ];
@@ -252,7 +249,6 @@ const WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS = ["thread_exit"];
 const WASIX_UNSUPPORTED_CLOCK_IMPORTS = ["clock_time_set"];
 const WASIX_UNSUPPORTED_DYNAMIC_IMPORTS = [
   "call_dynamic",
-  "callback_signal",
   "closure_allocate",
   "closure_free",
   "closure_prepare",
@@ -301,6 +297,7 @@ export class BrowserWasiModuleError extends Error {
     this.exitCode = options.exitCode ?? null;
     this.cancelled = options.cancelled === true;
     this.timedOut = options.timedOut === true;
+    this.diagnostics = normalizeRawWasiResultDiagnostics(options.diagnostics);
   }
 }
 
@@ -422,6 +419,7 @@ export async function runRawWasiModule(request, output, options = {}) {
     args: [request.command, ...request.args],
     childCommands: request.childCommands,
     cwd: request.cwd,
+    diagnostics: request.diagnostics ?? options.diagnostics,
     env: request.env,
     getInstance: () => instance,
     output,
@@ -459,22 +457,27 @@ export async function runRawWasiModule(request, output, options = {}) {
     throwIfAborted(request.signal);
     start();
     throwIfAborted(request.signal);
-    return await workspaceResult({ exitCode: 0 }, workspace);
+    return await workspaceResult(wasi.result({ exitCode: 0 }), workspace);
   } catch (error) {
     if (error instanceof WasiProcExit) {
-      return await workspaceResult({ exitCode: error.exitCode }, workspace);
+      return await workspaceResult(
+        wasi.result({ exitCode: error.exitCode }),
+        workspace,
+      );
     }
     if (error instanceof WasixProcExec) {
       const result = await wasi.runProcessExec(error.request);
-      return await workspaceResult(result, workspace);
+      return await workspaceResult(wasi.result(result), workspace);
     }
     if (error instanceof BrowserWasiModuleError) {
+      error.diagnostics ??= wasi.resultDiagnostics();
       throw error;
     }
     throw new BrowserWasiModuleError(
       "runtime",
       error?.message ?? "raw WASI module execution failed",
       "runtime",
+      { diagnostics: wasi.resultDiagnostics() },
     );
   }
 }
@@ -844,6 +847,7 @@ class WasiPreview1Runtime {
     this.args = normalizeStringList(options.args ?? []);
     this.childCommands = options.childCommands ?? null;
     this.cwd = normalizeRuntimeCwd(options.cwd);
+    this.diagnostics = normalizeRawWasiDiagnostics(options.diagnostics);
     this.env = envEntries(this.envObject);
     this.getInstance = options.getInstance;
     this.memory = null;
@@ -865,6 +869,55 @@ class WasiPreview1Runtime {
     this.signal = options.signal;
     this.stdin = toUint8Array(options.stdin ?? new Uint8Array());
     this.stdinOffset = 0;
+    this.unsupportedWasixCalls = new Map();
+  }
+
+  result(result) {
+    const diagnostics = this.resultDiagnostics();
+    if (!diagnostics) {
+      return result;
+    }
+    return { ...result, diagnostics };
+  }
+
+  resultDiagnostics() {
+    if (!this.diagnostics.unsupportedWasixCalls) {
+      return null;
+    }
+    return {
+      unsupportedWasixCalls: Array.from(this.unsupportedWasixCalls.values()).sort(
+        compareWasixUnsupportedCallDiagnostics,
+      ),
+    };
+  }
+
+  recordUnsupportedWasixCall(group, name) {
+    if (!this.diagnostics.unsupportedWasixCalls) {
+      return;
+    }
+    const key = `${group}:${name}`;
+    const existing = this.unsupportedWasixCalls.get(key);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+    this.unsupportedWasixCalls.set(key, { count: 1, group, name });
+  }
+
+  mergeDiagnostics(diagnostics) {
+    const normalized = normalizeRawWasiResultDiagnostics(diagnostics);
+    if (!normalized?.unsupportedWasixCalls) {
+      return;
+    }
+    for (const entry of normalized.unsupportedWasixCalls) {
+      const key = `${entry.group}:${entry.name}`;
+      const existing = this.unsupportedWasixCalls.get(key);
+      if (existing) {
+        existing.count += entry.count;
+      } else {
+        this.unsupportedWasixCalls.set(key, { ...entry });
+      }
+    }
   }
 
   setMemory(memory) {
@@ -901,6 +954,7 @@ class WasiPreview1Runtime {
       );
     }
     const result = await this.childCommands.run(request);
+    this.mergeDiagnostics(result?.diagnostics);
     return { exitCode: Number(result?.exitCode ?? 0) };
   }
 
@@ -3852,36 +3906,60 @@ class WasixRuntime {
           pathLen,
         ),
       proc_exit2: (code) => this.procExit2(code),
-      proc_fork: (_copyMemory, _pidPtr) => ERRNO_NOTSUP,
+      proc_fork: (_copyMemory, _pidPtr) =>
+        this.unsupportedProcessCapability("proc_fork"),
       proc_id: (pidPtr) => this.procId(pidPtr),
-      proc_join: (_pidPtr, _flags, _statusPtr) => ERRNO_NOTSUP,
+      proc_join: (_pidPtr, _flags, _statusPtr) =>
+        this.unsupportedProcessCapability("proc_join"),
       proc_parent: (pid, parentPidPtr) => this.procParent(pid, parentPidPtr),
-      proc_signal: (_pid, _signal) => ERRNO_NOTSUP,
-      proc_spawn: () => ERRNO_NOTSUP,
+      proc_signal: (_pid, _signal) =>
+        this.unsupportedProcessCapability("proc_signal"),
+      proc_spawn: () => this.unsupportedProcessCapability("proc_spawn"),
       proc_snapshot: () => this.procSnapshot(),
       pipe: (readFdPtr, writeFdPtr) =>
         this.host.fdPipe(readFdPtr, writeFdPtr),
+      callback_signal: (_namePtr, _nameLen) => this.callbackSignal(),
+      sock_accept: (fd, flags, acceptedFdPtr) =>
+        this.networkSocketStub("sock_accept", () =>
+          this.host.sockAccept(fd, flags, acceptedFdPtr),
+        ),
+      sock_recv: (fd, iovsPtr, iovsLen, flags, nreadPtr, roFlagsPtr) =>
+        this.networkSocketStub("sock_recv", () =>
+          this.host.sockRecv(fd, iovsPtr, iovsLen, flags, nreadPtr, roFlagsPtr),
+        ),
+      sock_send: (fd, iovsPtr, iovsLen, flags, nwrittenPtr) =>
+        this.networkSocketStub("sock_send", () =>
+          this.host.sockSend(fd, iovsPtr, iovsLen, flags, nwrittenPtr),
+        ),
+      sock_shutdown: (fd, how) =>
+        this.networkSocketStub("sock_shutdown", () =>
+          this.host.sockShutdown(fd, how),
+        ),
+      thread_id: (threadIdPtr) => this.threadId(threadIdPtr),
+      thread_parallelism: (parallelismPtr) =>
+        this.threadParallelism(parallelismPtr),
+      thread_sleep: (duration) => this.threadSleep(duration),
       tty_get: (ttyStatePtr) => this.ttyGet(ttyStatePtr),
       tty_set: (ttyStatePtr) => this.ttySet(ttyStatePtr),
     };
 
     for (const name of WASIX_UNSUPPORTED_NETWORK_IMPORTS) {
-      imports[name] = () => this.unsupportedNetworkCapability();
+      imports[name] = () => this.unsupportedNetworkCapability(name);
     }
     for (const name of WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS) {
-      imports[name] = () => this.unsupportedThreadEventCapability();
+      imports[name] = () => this.unsupportedThreadEventCapability(name);
     }
     for (const name of WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS) {
-      imports[name] = () => this.unsupportedThreadExitCapability();
+      imports[name] = () => this.unsupportedThreadExitCapability(name);
     }
     for (const name of WASIX_UNSUPPORTED_CLOCK_IMPORTS) {
-      imports[name] = () => this.unsupportedUtilityCapability();
+      imports[name] = () => this.unsupportedUtilityCapability("clock", name);
     }
     for (const name of WASIX_UNSUPPORTED_DYNAMIC_IMPORTS) {
-      imports[name] = () => this.unsupportedUtilityCapability();
+      imports[name] = () => this.unsupportedUtilityCapability("dynamic", name);
     }
     for (const name of WASIX_UNSUPPORTED_PROCESS_IMPORTS) {
-      imports[name] = () => this.unsupportedUtilityCapability();
+      imports[name] = () => this.unsupportedProcessCapability(name);
     }
 
     return imports;
@@ -3962,7 +4040,7 @@ class WasixRuntime {
     }
     const stderr = "inherit";
     const stdout = "inherit";
-    throw new WasixProcExec({
+    const request = {
       args: wasixLineList(this.readString(argsPtr, argsLen)),
       command,
       cwd: this.host.cwd,
@@ -3971,7 +4049,11 @@ class WasixRuntime {
       stderr,
       stdin: this.host.remainingStdinBytes(),
       stdout,
-    });
+    };
+    if (this.host.diagnostics.unsupportedWasixCalls) {
+      request.diagnostics = this.host.diagnostics;
+    }
+    throw new WasixProcExec(request);
   }
 
   wasixEnv(envPtr, envLen) {
@@ -4025,23 +4107,70 @@ class WasixRuntime {
     return ERRNO_SUCCESS;
   }
 
-  unsupportedNetworkCapability() {
+  threadId(threadIdPtr) {
     this.host.throwIfAborted();
+    const ptr = threadIdPtr >>> 0;
+    if (!this.host.canReadWrite(ptr, 4)) {
+      return ERRNO_FAULT;
+    }
+    this.host.writeU32(ptr, 1);
+    return ERRNO_SUCCESS;
+  }
+
+  threadParallelism(parallelismPtr) {
+    this.host.throwIfAborted();
+    const ptr = parallelismPtr >>> 0;
+    if (!this.host.canReadWrite(ptr, 4)) {
+      return ERRNO_FAULT;
+    }
+    this.host.writeU32(ptr, 1);
+    return ERRNO_SUCCESS;
+  }
+
+  threadSleep(duration) {
+    this.host.throwIfAborted();
+    const nanos = duration == null ? 0n : BigInt(duration);
+    if (nanos === 0n) {
+      return ERRNO_SUCCESS;
+    }
+    return this.unsupportedThreadEventCapability("thread_sleep");
+  }
+
+  unsupportedNetworkCapability(name) {
+    return this.unsupportedWasixCapability("network", name);
+  }
+
+  networkSocketStub(name, delegate) {
+    this.host.recordUnsupportedWasixCall("network", name);
+    return delegate();
+  }
+
+  callbackSignal() {
+    this.host.throwIfAborted();
+    this.host.recordUnsupportedWasixCall("dynamic", "callback_signal");
+  }
+
+  unsupportedThreadEventCapability(name) {
+    return this.unsupportedWasixCapability("thread-event", name);
+  }
+
+  unsupportedProcessCapability(name) {
+    return this.unsupportedWasixCapability("process", name);
+  }
+
+  unsupportedUtilityCapability(group, name) {
+    return this.unsupportedWasixCapability(group, name);
+  }
+
+  unsupportedWasixCapability(group, name) {
+    this.host.throwIfAborted();
+    this.host.recordUnsupportedWasixCall(group, name);
     return ERRNO_NOTSUP;
   }
 
-  unsupportedThreadEventCapability() {
+  unsupportedThreadExitCapability(name) {
     this.host.throwIfAborted();
-    return ERRNO_NOTSUP;
-  }
-
-  unsupportedUtilityCapability() {
-    this.host.throwIfAborted();
-    return ERRNO_NOTSUP;
-  }
-
-  unsupportedThreadExitCapability() {
-    this.host.throwIfAborted();
+    this.host.recordUnsupportedWasixCall("thread-event", name);
     throw new BrowserWasiModuleError(
       "unsupported",
       "WASIX thread_exit requires browser thread runtime support",
@@ -4061,6 +4190,39 @@ function wasixLineList(value) {
     return [];
   }
   return text.split(/[\r\n]/).filter((item) => item.length > 0);
+}
+
+function normalizeRawWasiDiagnostics(value) {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return { unsupportedWasixCalls: false };
+  }
+  return { unsupportedWasixCalls: value.unsupportedWasixCalls === true };
+}
+
+function normalizeRawWasiResultDiagnostics(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  if (!Array.isArray(value.unsupportedWasixCalls)) {
+    return null;
+  }
+  return {
+    unsupportedWasixCalls: value.unsupportedWasixCalls
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        count: Number(entry.count ?? 0),
+        group: String(entry.group ?? ""),
+        name: String(entry.name ?? ""),
+      }))
+      .filter((entry) => entry.count > 0 && entry.group && entry.name)
+      .sort(compareWasixUnsupportedCallDiagnostics),
+  };
+}
+
+function compareWasixUnsupportedCallDiagnostics(left, right) {
+  return (
+    left.group.localeCompare(right.group) || left.name.localeCompare(right.name)
+  );
 }
 
 function isSupportedClock(clockId) {
@@ -5072,6 +5234,7 @@ async function workerRunRequest(request) {
     args: normalizeStringList(request.args ?? []),
     command: nonEmptyString(request.command),
     cwd: String(request.cwd ?? "/workspace"),
+    diagnostics: normalizeRawWasiDiagnostics(request.diagnostics),
     env: { ...(request.env ?? {}) },
     package: request.package,
     stdinBytes,
@@ -5171,6 +5334,9 @@ function workerChildCommandRequest(value = {}) {
   if (value.env != null) {
     request.env = cloneChildCommandEnv(value.env);
   }
+  if (value.diagnostics != null) {
+    request.diagnostics = normalizeRawWasiDiagnostics(value.diagnostics);
+  }
   if (value.stdin != null) {
     request.stdin = cloneChildCommandInput(value.stdin);
   }
@@ -5213,7 +5379,7 @@ function cloneChildCommandInput(value) {
 }
 
 function workerChildCommandResult(result = {}) {
-  return {
+  const childResult = {
     command: String(result.command ?? ""),
     exitCode: Number(result.exitCode ?? 0),
     packageId: String(result.packageId ?? ""),
@@ -5222,6 +5388,11 @@ function workerChildCommandResult(result = {}) {
     stdout: result.stdout == null ? new Uint8Array() : copyBytes(result.stdout),
     stdoutBytes: Number(result.stdoutBytes ?? result.stdout?.byteLength ?? 0),
   };
+  const diagnostics = normalizeRawWasiResultDiagnostics(result.diagnostics);
+  if (diagnostics) {
+    childResult.diagnostics = diagnostics;
+  }
+  return childResult;
 }
 
 function concatBytes(chunks, size) {
@@ -5268,6 +5439,7 @@ function workerErrorPayload(error) {
   if (error instanceof BrowserWasiModuleError || typeof error?.kind === "string") {
     return {
       cancelled: error.cancelled === true,
+      diagnostics: normalizeRawWasiResultDiagnostics(error.diagnostics),
       exitCode: error.exitCode ?? null,
       kind: error.kind,
       message: error.message ?? "raw WASI module execution failed",
@@ -5277,6 +5449,7 @@ function workerErrorPayload(error) {
   }
   return {
     cancelled: false,
+    diagnostics: null,
     exitCode: null,
     kind: "runtime",
     message: error?.message ?? "raw WASI module execution failed",
@@ -5292,6 +5465,7 @@ function workerErrorFromPayload(error = {}) {
     error.stage ?? "runtime",
     {
       cancelled: error.cancelled,
+      diagnostics: error.diagnostics,
       exitCode: error.exitCode,
       timedOut: error.timedOut,
     },

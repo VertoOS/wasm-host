@@ -1,6 +1,6 @@
 const decoder = new TextDecoder();
 const TARGET_SHELL_SCRIPT = "pwd; ls /workspace; echo BASH_BROWSER_OK";
-const BLOCKER_ISSUE = 204;
+const BLOCKER_ISSUE = 212;
 
 const BASH_ARTIFACT = {
   name: "wasmer/bash",
@@ -49,31 +49,29 @@ export async function runBashCoreutilsSmoke() {
         env: { PATH: "/bin:/usr/bin" },
         timeoutMs: 30000,
       },
-      { resolveError: true },
     );
-    assert(run.error, "target command should expose the current blocker");
+    assert(run.complete, "target command should complete with the current blocker");
 
     const stdout = chunksText(run.stdout);
     const stderr = chunksText(run.stderr);
     const diagnostics =
-      run.error.error?.diagnostics?.unsupportedWasixCalls ?? [];
+      run.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
 
-    assertEqual(stdout, "/workspace\n");
-    assertMatch(stderr, /bash: fork: Not supported/);
-    assertEqual(run.error.error?.kind, "runtime");
-    assertEqual(run.error.result?.exitCode, 126);
-    assertEqual(run.error.result?.failureStage, "runtime");
-    assertEqual(diagnosticCount(diagnostics, "process", "proc_fork"), 1);
+    assertEqual(stdout, "/workspace\nBASH_BROWSER_OK\n");
+    assertMatch(stderr, /bash: line 1: ls: command not found/);
+    assertEqual(run.complete.result?.exitCode, 0);
+    assertEqual(run.complete.result?.failureStage, null);
+    assertEqual(diagnosticCount(diagnostics, "process", "proc_fork"), 0);
     assertEqual(diagnosticCount(diagnostics, "process", "proc_join"), 0);
     assertEqual(
       diagnosticCount(diagnostics, "thread-event", "stack_restore"),
-      1,
+      0,
     );
     assertEqual(
       diagnosticCount(diagnostics, "thread-event", "stack_checkpoint"),
       0,
     );
-    assert(!stdout.includes("BASH_BROWSER_OK"), "blocked run must not pass");
+    assert(stdout.includes("BASH_BROWSER_OK"), "Bash should reach the marker");
 
     return {
       artifacts: {
@@ -87,7 +85,7 @@ export async function runBashCoreutilsSmoke() {
         bash: bashLoad.commands,
         coreutils: coreutilsLoad.commands,
       },
-      result: run.error.result,
+      result: run.complete.result,
       stderr,
       stdout,
       targetCommand: ["bash", "-lc", TARGET_SHELL_SCRIPT],

@@ -212,6 +212,14 @@ const WASIX_PROC_FORK_VFORK_EXEC_WASM = base64ToBytes(
   "AGFzbQEAAAABMQhgAn9/AX9gCX9/f39/f39/fwF/YAN/f38Bf2ABfwF/YAF/AGAAAGAAAX9gA39/fwACfwUKd2FzaXhfMzJ2MQlwcm9jX2ZvcmsAAAp3YXNpeF8zMnYxCnByb2NfZXhlYzMAAQp3YXNpeF8zMnYxCXByb2Nfam9pbgACCndhc2l4XzMydjEHcHJvY19pZAADFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAQDCQgEBQQFBgQHBQUDAQABBh0FfwFBAAt/AUEAC38BQYAQC38AQYAIC38AQYAQCwe1AQoGbWVtb3J5AgAPX19zdGFja19wb2ludGVyAwILX19zdGFja19sb3cDAwxfX3N0YWNrX2hpZ2gDBBVhc3luY2lmeV9zdGFydF91bndpbmQABRRhc3luY2lmeV9zdG9wX3Vud2luZAAGFWFzeW5jaWZ5X3N0YXJ0X3Jld2luZAAHFGFzeW5jaWZ5X3N0b3BfcmV3aW5kAAgSYXN5bmNpZnlfZ2V0X3N0YXRlAAkGX3N0YXJ0AAwKjgIICgAgACQBQQEkAAsGAEEAJAALCgAgACQBQQIkAAsGAEEAJAALBAAjAAsHACAAEAQACw4AIAAgAUcEQCACEAoLC8sBAQF/QQBBEBAAIQAQCQRADwsgAEEAQTIQC0EQKAIARQRAQcAAEAMhACAAQQBBMxALQcAAKAIAQQJBNBALQYABQQVBkAFBCEGgAUEMQQFBsAFBBBABIQAgAEEAQTUQC0E2EAoLQRAoAgBBAkE3EAtBwAAQAyEAIABBAEE4EAtBwAAoAgBBAUE5EAtBIEEANgIAQSBBAToAAEEkQQI2AgBBIEEAQTAQAiEAIABBAEE6EAtBMC0AAEEBQTsQC0E0KAIAQSFBPBALQQAQBAsLNgQAQYABCwVjaGlsZABBkAELCC0tdmZvcmsKAEGgAQsMRlJPTV9GT1JLPTEKAEGwAQsEL2Jpbg==",
 );
 
+const WASIX_PROC_FORK_COPY_EXEC_WASM = base64ToBytes(
+  "AGFzbQEAAAABMQhgAn9/AX9gCX9/f39/f39/fwF/YAN/f38Bf2ABfwF/YAF/AGAAAGAAAX9gA39/fwACfwUKd2FzaXhfMzJ2MQlwcm9jX2ZvcmsAAAp3YXNpeF8zMnYxCnByb2NfZXhlYzMAAQp3YXNpeF8zMnYxCXByb2Nfam9pbgACCndhc2l4XzMydjEHcHJvY19pZAADFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAQDCQgEBQQFBgQHBQUDAQABBh0FfwFBAAt/AUEAC38BQYAQC38AQYAIC38AQYAQCwe1AQoGbWVtb3J5AgAPX19zdGFja19wb2ludGVyAwILX19zdGFja19sb3cDAwxfX3N0YWNrX2hpZ2gDBBVhc3luY2lmeV9zdGFydF91bndpbmQABRRhc3luY2lmeV9zdG9wX3Vud2luZAAGFWFzeW5jaWZ5X3N0YXJ0X3Jld2luZAAHFGFzeW5jaWZ5X3N0b3BfcmV3aW5kAAgSYXN5bmNpZnlfZ2V0X3N0YXRlAAkGX3N0YXJ0AAwKrwIICgAgACQBQQEkAAsGAEEAJAALCgAgACQBQQIkAAsGAEEAJAALBAAjAAsHACAAEAQACw4AIAAgAUcEQCACEAoLC+wBAQF/QQFBEBAAIQAQCQRADwsgAEEAQdAAEAtBECgCAEUEQEHAABADIQAgAEEAQdEAEAtBwAAoAgBBAkHSABALQdAAQeMANgIAQYABQQVBkAFBB0GgAUEMQQFBsAFBBBABIQAgAEEAQdMAEAtB1AAQCgtBECgCAEECQdUAEAtB0AAoAgBBB0HWABALQcAAEAMhACAAQQBB1wAQC0HAACgCAEEBQdgAEAtBIEEANgIAQSBBAToAAEEkQQI2AgBBIEEAQTAQAiEAIABBAEHZABALQTAtAABBAUHaABALQTQoAgBBIUHbABALQQAQBAsLPwUAQdAACwQHAAAAAEGAAQsFY2hpbGQAQZABCwctLWNvcHkKAEGgAQsMRlJPTV9GT1JLPTEKAEGwAQsEL2Jpbg==",
+);
+
+const WASIX_PROC_FORK_COPY_NO_BOUNDS_WASM = base64ToBytes(
+  "AGFzbQEAAAABLAdgAn9/AX9gCX9/f39/f39/fwF/YAN/f38Bf2ABfwBgAABgAAF/YAN/f38AAmoECndhc2l4XzMydjEJcHJvY19mb3JrAAAKd2FzaXhfMzJ2MQpwcm9jX2V4ZWMzAAEKd2FzaXhfMzJ2MQlwcm9jX2pvaW4AAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAADAwkIAwQDBAUDBgQFBAEAgAEGEQN/AUEAC38BQQALfwFBgBALB5gBCAZtZW1vcnkCAA9fX3N0YWNrX3BvaW50ZXIDAhVhc3luY2lmeV9zdGFydF91bndpbmQABBRhc3luY2lmeV9zdG9wX3Vud2luZAAFFWFzeW5jaWZ5X3N0YXJ0X3Jld2luZAAGFGFzeW5jaWZ5X3N0b3BfcmV3aW5kAAcSYXN5bmNpZnlfZ2V0X3N0YXRlAAgGX3N0YXJ0AAsK3wEICgAgACQBQQEkAAsGAEEAJAALCgAgACQBQQIkAAsGAEEAJAALBAAjAAsHACAAEAMACw4AIAAgAUcEQCACEAkLC5wBAQF/QQFBEBAAIQAQCARADwsgAEEAQeQAEApBECgCAEUEQEGAAUEFQZABQQdBoAFBDEEBQbABQQQQASEAIABBAEHlABAKQeYAEAkLQRAoAgBBAkHnABAKQSBBADYCAEEgQQE6AABBJEECNgIAQSBBAEEwEAIhACAAQQBB6AAQCkEwLQAAQQFB6QAQCkE0KAIAQSFB6gAQCkEAEAMLCzUEAEGAAQsFY2hpbGQAQZABCwctLWNvcHkKAEGgAQsMRlJPTV9GT1JLPTEKAEGwAQsEL2Jpbg==",
+);
+
 const WASIX_PROC_FORK_UNSUPPORTED_WASM = base64ToBytes(
   "AGFzbQEAAAABDgNgAn9/AX9gAX8AYAAAAjsCCndhc2l4XzMydjEJcHJvY19mb3JrAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAQMDAgECBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAMKPAIHACAAEAEACzIBAX9BAEEQEAAhACAAQTpHBEBBxgAQAgtBAUEQEAAhACAAQTpHBEBBxwAQAgtBABABCw==",
 );
@@ -2277,6 +2285,82 @@ test("command worker resumes WASIX vfork parents after proc_exec3 children", asy
   });
 });
 
+test("command worker resumes WASIX copied-fork parents after proc_exec3 children", async () => {
+  const port = recordingPort();
+  const seen = [];
+  const runtime = createBrowserCommandWorkerRuntime({
+    executors: {
+      child: {
+        async run(request, output) {
+          seen.push({
+            args: request.args,
+            command: request.command,
+            cwd: request.cwd,
+            env: request.env,
+            packageId: request.package.id,
+            stdin: await asyncChunksText(request.stdin),
+          });
+          await output.writeStdout("copy child stdout\n");
+          await output.writeStderr("copy child stderr\n");
+          return { exitCode: 33 };
+        },
+      },
+      "wasi-module": createRawWasiModuleExecutor({
+        createWorker: createNodeWasiWorker,
+      }),
+    },
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["child"], id: "copy-child", type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "copy-parent",
+      id: "copy-parent",
+      wasiModule: { bytes: WASIX_PROC_FORK_COPY_EXEC_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-wasix-copy-fork-exec3",
+    packageId: "copy-parent",
+    command: "copy-parent",
+    env: { FROM_PARENT: "1", PATH: "/nowhere" },
+    stdin: "worker copy fork stdin\n",
+  });
+
+  assert.deepEqual(seen, [
+    {
+      args: ["--copy"],
+      command: "child",
+      cwd: "/workspace",
+      env: { FROM_FORK: "1", FROM_PARENT: "1", PATH: "/bin" },
+      packageId: "copy-child",
+      stdin: "worker copy fork stdin\n",
+    },
+  ]);
+  assert.equal(stdoutText(port.messages), "copy child stdout\n");
+  assert.equal(stderrText(port.messages), "copy child stderr\n");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-wasix-copy-fork-exec3",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 18,
+      stdoutBytes: 18,
+      timedOut: false,
+    },
+  });
+});
+
 test("command worker reports WASIX proc_exec catalog misses", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
@@ -2427,6 +2511,98 @@ test("raw WASI executor resumes WASIX vfork parents after proc_exec3", async () 
       packageId: null,
       stderr: "inherit",
       stdin: "vfork stdin\n",
+      stdout: "inherit",
+    },
+  );
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor isolates copied-memory fork child exec", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_FORK_COPY_EXEC_WASM,
+    command: "copy-fork-parent",
+    id: "copy-fork-parent",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      ...baseRunRequest(packageRecord),
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return { exitCode: 33 };
+        },
+      },
+      command: "copy-fork-parent",
+      cwd: "/workspace/parent",
+      env: { FROM_PARENT: "1", PATH: "/nowhere" },
+      stdin: encoder.encode("copy fork stdin\n"),
+    },
+    output,
+  );
+
+  assert.deepEqual(
+    { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
+    {
+      args: ["--copy"],
+      command: "child",
+      cwd: "/workspace/parent",
+      env: { FROM_FORK: "1", FROM_PARENT: "1", PATH: "/bin" },
+      packageId: null,
+      stderr: "inherit",
+      stdin: "copy fork stdin\n",
+      stdout: "inherit",
+    },
+  );
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor provides a host asyncify buffer without stack bounds exports", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_FORK_COPY_NO_BOUNDS_WASM,
+    command: "copy-fork-no-bounds",
+    id: "copy-fork-no-bounds",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      ...baseRunRequest(packageRecord),
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return { exitCode: 33 };
+        },
+      },
+      command: "copy-fork-no-bounds",
+      cwd: "/workspace/parent",
+      env: { FROM_PARENT: "1", PATH: "/nowhere" },
+      stdin: encoder.encode("fallback fork stdin\n"),
+    },
+    output,
+  );
+
+  assert.deepEqual(
+    { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
+    {
+      args: ["--copy"],
+      command: "child",
+      cwd: "/workspace/parent",
+      env: { FROM_FORK: "1", FROM_PARENT: "1", PATH: "/bin" },
+      packageId: null,
+      stderr: "inherit",
+      stdin: "fallback fork stdin\n",
       stdout: "inherit",
     },
   );

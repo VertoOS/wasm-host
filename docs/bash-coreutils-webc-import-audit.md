@@ -37,17 +37,21 @@ bash -lc 'pwd; ls /workspace; echo BASH_BROWSER_OK'
 Current result:
 
 - `bash` starts and prints `/workspace`.
-- `stack_checkpoint` is handled as a browser-safe zero probe for non-asyncify
-  modules, and a narrow single-instance asyncify checkpoint/restore path exists
-  for modules that export asyncify controls plus browser-readable stack bounds.
-- The target remains blocked before `ls` completes. Raw asyncify fixtures can
-  now use a bounded `proc_fork(copy_memory=false)` vfork lifecycle, but the
-  Bash package still reaches unsupported fork/restore behavior for external
-  commands: the reported blocker set remains `proc_fork` plus the Bash
-  `stack_restore` call site.
+- `ls /workspace` is invoked by the script but Bash reports
+  `bash: line 1: ls: command not found`.
+- `bash` continues after that failure, prints `BASH_BROWSER_OK`, and exits
+  `0`, so the browser worker now gets past the fork/restore path used by this
+  non-interactive Bash script.
+- The runtime handles `stack_checkpoint` as a browser-safe zero probe for
+  non-asyncify modules, supports asyncify checkpoint/restore for modules with
+  exported stack bounds or a host-owned high-memory fallback buffer, supports
+  asyncify `proc_fork(copy_memory=false)` vfork children, and supports a
+  serialized `proc_fork(copy_memory=true)` child-exec subset.
 - The browser smoke is therefore marked blocked on
-  [#204](https://github.com/VertoOS/wasm-host/issues/204), with diagnostics
-  proving the remaining blocker set.
+  [#212](https://github.com/VertoOS/wasm-host/issues/212): loaded package
+  commands such as coreutils `ls` are not yet visible to Bash's PATH lookup.
+  The previous runtime blocker diagnostics for `proc_fork`, `stack_restore`,
+  and `proc_join` are no longer present in this smoke.
 
 ## Secondary Artifact Checked
 
@@ -113,12 +117,12 @@ is implementation depth inside grouped browser capability buckets.
 | --- | --- | --- | --- |
 | Import object and memory shape | `env.memory` | `env.memory`, `wasi.thread-spawn` | [#194](https://github.com/VertoOS/wasm-host/issues/194) |
 | TTY defaults | `tty_get`, `tty_set` | `tty_get`, `tty_set` | [#195](https://github.com/VertoOS/wasm-host/issues/195) |
-| Process/catalog | `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_parent`, `proc_raise_interval`, `proc_signal` | `proc_exec2`, `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_parent`, `proc_raise_interval`, `proc_signal`, `proc_snapshot`, `proc_spawn`, `proc_spawn2` | [#196](https://github.com/VertoOS/wasm-host/issues/196), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
+| Process/catalog | `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_parent`, `proc_raise_interval`, `proc_signal` | `proc_exec2`, `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_parent`, `proc_raise_interval`, `proc_signal`, `proc_snapshot`, `proc_spawn`, `proc_spawn2` | [#196](https://github.com/VertoOS/wasm-host/issues/196), [#204](https://github.com/VertoOS/wasm-host/issues/204), [#211](https://github.com/VertoOS/wasm-host/issues/211), [#212](https://github.com/VertoOS/wasm-host/issues/212) |
 | Thread/event/async | `futex_wait`, `futex_wake`, `futex_wake_all`, `stack_restore`, `thread_exit`, `thread_id`, `thread_signal` | `epoll_create`, `epoll_ctl`, `epoll_wait`, `fd_event`, `futex_wait`, `futex_wake`, `futex_wake_all`, `stack_restore`, `thread_exit`, `thread_id`, `thread_join`, `thread_parallelism`, `thread_signal`, `thread_sleep`, `thread_spawn_v2` | [#197](https://github.com/VertoOS/wasm-host/issues/197), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
 | Networking/ports | `sock_connect`, `sock_open`, `sock_send_to` | `port_*`, `resolve`, `sock_*` WASIX networking set | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Dynamic/closures/linking | `callback_signal` | `call_dynamic`, `callback_signal`, `closure_*`, `dl_invalid_handle`, `dlopen`, `dlsym`, `reflect_signature` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Clock mutation | none | `clock_time_set` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
-| Browser smoke | target command reaches Bash, then blocks at external command process control | target command reaches Bash, then blocks at external command process control | [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
+| Browser smoke | target command reaches Bash, runs the script, then cannot resolve `ls` through Bash PATH | target command reaches Bash, runs the script, then cannot resolve `ls` through Bash PATH | [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204), [#211](https://github.com/VertoOS/wasm-host/issues/211), [#212](https://github.com/VertoOS/wasm-host/issues/212) |
 
 ## Current Interpretation
 
@@ -150,11 +154,20 @@ truthful raw-fixture process lifecycle subset: asyncify
 `proc_fork(copy_memory=false)` resumes the vfork child first, lets it complete
 through `proc_exit2` or the existing `proc_exec*` child-command bridge, resumes
 the parent with the child pid, and reaps completed child status through
-`proc_join`. This is not full Bash process-control support: Bash external
-commands remain blocked on
-[#204](https://github.com/VertoOS/wasm-host/issues/204) until the browser host
-can implement the unsupported fork mode Bash reaches and process-level
-stack/store rewind semantics.
+`proc_join`. [#211](https://github.com/VertoOS/wasm-host/issues/211) adds the
+next child-exec fork slice: asyncify `proc_fork(copy_memory=true)` can run a
+serialized copied child instance from copied linear memory and exported mutable
+globals, and modules without explicit stack bounds can use a host-owned
+high-memory asyncify buffer fallback when memory is large enough. This is not
+full Bash process-control support because unexported store globals, live FD
+inheritance, concurrent children, broad blocking wait, spawn, signals, and
+worker-thread semantics remain out of scope.
+
+After [#211](https://github.com/VertoOS/wasm-host/issues/211), the first Bash
+smoke gets past fork/restore and reaches the next browser package-catalog
+boundary: Bash cannot find `ls` even though coreutils is loaded in the command
+worker catalog. That follow-up is tracked by
+[#212](https://github.com/VertoOS/wasm-host/issues/212).
 
 The audit did not find any reason to add first-class MCP, plugin, provider,
 connector, or OAuth modules under `apps/web`. Those remain adapter-package

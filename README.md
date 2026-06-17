@@ -50,6 +50,10 @@ until the boundaries are stable enough to split.
   and Fetch-backed WebC/Wasm artifacts, including magic-byte validation,
   optional sha256 pinning, command metadata normalization, and browser-safe
   cache path derivation.
+- The browser command worker has a first WebC/WASIX executor boundary for
+  loaded WebC packages. It routes WebC commands into a dedicated runtime layer
+  and currently returns a structured unimplemented error instead of failing as
+  an unsupported package type.
 - The browser adapter package has a first browser workspace store with
   canonical `/workspace` paths, in-memory operations, snapshot import/export,
   and IndexedDB-backed snapshot persistence when browser storage is available.

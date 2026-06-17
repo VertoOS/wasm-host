@@ -407,6 +407,127 @@ test("BrowserCommandWorkerRuntime runs the built-in HTTP smoke executor", async 
   });
 });
 
+test("BrowserCommandWorkerRuntime routes WebC packages to the WASIX executor boundary", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-webc",
+    package: {
+      bytes: webcBytes("bash"),
+      commands: ["bash"],
+      id: "bash-webc",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-webc",
+    packageId: "bash-webc",
+    command: "bash",
+    args: ["-lc", "pwd; ls /workspace; echo BASH_BROWSER_OK"],
+    cwd: "/workspace",
+  });
+
+  const loaded = port.messages.find((message) => message.id === "load-webc");
+  assert.equal(loaded.artifactKind, "webc-package");
+  assert.equal(loaded.packageType, "webc-package");
+  assert.deepEqual(loaded.commands, ["bash"]);
+  assert.match(loaded.contentSha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(
+    port.messages.find((message) => message.id === "run-webc"),
+    {
+      type: "command.started",
+      id: "run-webc",
+      packageId: "bash-webc",
+      command: "bash",
+      args: ["-lc", "pwd; ls /workspace; echo BASH_BROWSER_OK"],
+      cwd: "/workspace",
+    },
+  );
+  assert.deepEqual(port.messages.slice(-3), [
+    { type: "command.stdout.close", id: "run-webc" },
+    { type: "command.stderr.close", id: "run-webc" },
+    {
+      type: "command.error",
+      id: "run-webc",
+      error: {
+        kind: "webc_wasix_runtime_unimplemented",
+        message: "browser WebC/WASIX runtime execution is not implemented yet",
+        stage: "runtime",
+      },
+      result: {
+        cancelled: false,
+        exitCode: 126,
+        failureStage: "runtime",
+        stderrBytes: 0,
+        stdoutBytes: 0,
+        timedOut: false,
+      },
+    },
+  ]);
+});
+
+test("BrowserCommandWorkerRuntime accepts explicit webc-wasix packages", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-explicit-webc-wasix",
+    package: {
+      artifactKind: "webc-package",
+      commands: ["sh"],
+      id: "explicit-webc",
+      type: "webc-wasix",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-explicit-webc-wasix",
+    packageId: "explicit-webc",
+    command: "sh",
+  });
+
+  assert.deepEqual(
+    port.messages.find((message) => message.id === "load-explicit-webc-wasix"),
+    {
+      type: "command.loaded",
+      id: "load-explicit-webc-wasix",
+      artifactKind: "webc-package",
+      cache: null,
+      contentSha256: null,
+      entrypoint: "sh",
+      packageId: "explicit-webc",
+      packageType: "webc-wasix",
+      commands: ["sh"],
+    },
+  );
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-explicit-webc-wasix",
+    error: {
+      kind: "webc_wasix_runtime_unimplemented",
+      message: "browser WebC/WASIX runtime execution is not implemented yet",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 126,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
 test("BrowserCommandWorkerRuntime runs browser tool fixtures with workspace input", async () => {
   const port = recordingPort();
   const workspaceStore = createMemoryBrowserWorkspaceStore();

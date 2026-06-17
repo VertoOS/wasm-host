@@ -14,6 +14,11 @@ import {
   loadRawWasiModulePackage,
   packageNeedsRawWasiModuleLoader,
 } from "./wasi-module.js";
+import {
+  createWebcWasixExecutor,
+  WEBC_PACKAGE_TYPE,
+  WEBC_WASIX_EXECUTOR_TYPE,
+} from "./webc-wasix.js";
 import { createBrowserWorkspaceStore } from "./workspace.js";
 
 const DEFAULT_PACKAGE_ID = "default";
@@ -44,6 +49,7 @@ export class BrowserCommandWorkerRuntime {
       options.defaultHttpTransport ?? DEFAULT_HTTP_TRANSPORT;
     this.httpTransports =
       options.httpTransports ?? createDefaultHttpTransports(options);
+    const webcWasixExecutor = createWebcWasixExecutor(options.webcWasix);
     this.executors = options.executors ?? {
       "codex-browser": createCodexBrowserRequestBuilderExecutor(
         options.codexBrowser,
@@ -54,6 +60,8 @@ export class BrowserCommandWorkerRuntime {
       "http-smoke": createHttpSmokeCommandExecutor(options.httpSmoke),
       smoke: createSmokeCommandExecutor(options.smoke),
       "wasi-module": createRawWasiModuleExecutor(options.wasiModule),
+      [WEBC_PACKAGE_TYPE]: webcWasixExecutor,
+      [WEBC_WASIX_EXECUTOR_TYPE]: webcWasixExecutor,
     };
     this.packageLoader =
       options.packageLoader ??

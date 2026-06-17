@@ -185,6 +185,7 @@ const CLOCK_RESOLUTION_NANOS = NANOS_PER_MILLI;
 const WASI_ADVICE_NOREUSE = 5;
 const RANDOM_GET_CHUNK_SIZE = 65_536;
 const PIPE_BUFFER_LIMIT = 1024 * 1024;
+const WASIX_STACK_SNAPSHOT_SIZE = 24;
 const WASIX_UNSUPPORTED_NETWORK_IMPORTS = [
   "port_addr_add",
   "port_addr_clear",
@@ -234,7 +235,6 @@ const WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS = [
   "futex_wait",
   "futex_wake",
   "futex_wake_all",
-  "stack_checkpoint",
   "stack_restore",
   "thread_join",
   "thread_local_create",
@@ -3939,6 +3939,8 @@ class WasixRuntime {
       thread_parallelism: (parallelismPtr) =>
         this.threadParallelism(parallelismPtr),
       thread_sleep: (duration) => this.threadSleep(duration),
+      stack_checkpoint: (snapshotPtr, retValPtr) =>
+        this.stackCheckpoint(snapshotPtr, retValPtr),
       tty_get: (ttyStatePtr) => this.ttyGet(ttyStatePtr),
       tty_set: (ttyStatePtr) => this.ttySet(ttyStatePtr),
     };
@@ -4134,6 +4136,23 @@ class WasixRuntime {
       return ERRNO_SUCCESS;
     }
     return this.unsupportedThreadEventCapability("thread_sleep");
+  }
+
+  stackCheckpoint(snapshotPtr, retValPtr) {
+    this.host.throwIfAborted();
+    const snapshot = snapshotPtr >>> 0;
+    const retVal = retValPtr >>> 0;
+    if (
+      !this.host.canReadWrite(snapshot, WASIX_STACK_SNAPSHOT_SIZE) ||
+      !this.host.canReadWrite(retVal, 8)
+    ) {
+      return ERRNO_FAULT;
+    }
+    this.host.writeU64(snapshot, 0n);
+    this.host.writeU64(snapshot + 8, 0n);
+    this.host.writeU64(snapshot + 16, 0n);
+    this.host.writeU64(retVal, 0n);
+    return ERRNO_SUCCESS;
   }
 
   unsupportedNetworkCapability(name) {

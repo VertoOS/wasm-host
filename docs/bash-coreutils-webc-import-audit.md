@@ -25,6 +25,27 @@ The audit used direct Wasmer registry/CDN artifacts. It did not use npm
 Both registry records were resolved through the Wasmer GraphQL
 `getPackageVersion` endpoint at `https://registry.wasmer.io/graphql`.
 
+## Browser Smoke Status
+
+The browser e2e at `apps/web/e2e/bash-coreutils-smoke.js` loads both pinned
+WebC URLs above, verifies their SHA-256 values, and runs:
+
+```sh
+bash -lc 'pwd; ls /workspace; echo BASH_BROWSER_OK'
+```
+
+Current result:
+
+- `bash` starts and prints `/workspace`.
+- `stack_checkpoint` is now handled as a browser-safe checkpoint probe by
+  zeroing the 24-byte `StackSnapshot` and 8-byte return slot.
+- The target remains blocked before `ls` completes because external Bash
+  commands need browser WASIX process control: `proc_fork`, `proc_join`, and
+  `stack_restore`.
+- The browser smoke is therefore marked blocked on
+  [#204](https://github.com/VertoOS/wasm-host/issues/204), with diagnostics
+  proving the remaining blocker set.
+
 ## Secondary Artifact Checked
 
 The handoff also named `syrusakbary/coreutils@0.0.1` as a known-good
@@ -66,8 +87,8 @@ memory[0] pages: initial=37 max=65536 shared <- env.memory
 
 | Artifact | Total imports | Preview1 imports present in current runner | WASIX imports implemented by name | Import-object requirements resolved by #194 | Imported but unsupported capability names |
 | --- | ---: | ---: | ---: | --- | ---: |
-| `wasmer/bash@1.0.25` | 56 | 24 | 10 | `env.memory` | 21 |
-| `wasmer/coreutils@1.0.25` | 135 | 46 | 12 | `env.memory`, `wasi.thread-spawn` | 75 |
+| `wasmer/bash@1.0.25` | 56 | 24 | 11 | `env.memory` | 20 |
+| `wasmer/coreutils@1.0.25` | 135 | 46 | 13 | `env.memory`, `wasi.thread-spawn` | 74 |
 
 The audit found two import-object requirements that were absent before
 [#194](https://github.com/VertoOS/wasm-host/issues/194):
@@ -89,12 +110,12 @@ is implementation depth inside grouped browser capability buckets.
 | --- | --- | --- | --- |
 | Import object and memory shape | `env.memory` | `env.memory`, `wasi.thread-spawn` | [#194](https://github.com/VertoOS/wasm-host/issues/194) |
 | TTY defaults | `tty_get`, `tty_set` | `tty_get`, `tty_set` | [#195](https://github.com/VertoOS/wasm-host/issues/195) |
-| Process/catalog | `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_join`, `proc_parent`, `proc_raise_interval`, `proc_signal` | `proc_exec2`, `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_join`, `proc_parent`, `proc_raise_interval`, `proc_signal`, `proc_snapshot`, `proc_spawn`, `proc_spawn2` | [#196](https://github.com/VertoOS/wasm-host/issues/196) |
-| Thread/event/async | `futex_wait`, `futex_wake`, `futex_wake_all`, `stack_checkpoint`, `stack_restore`, `thread_exit`, `thread_id`, `thread_signal` | `epoll_create`, `epoll_ctl`, `epoll_wait`, `fd_event`, `futex_wait`, `futex_wake`, `futex_wake_all`, `stack_checkpoint`, `stack_restore`, `thread_exit`, `thread_id`, `thread_join`, `thread_parallelism`, `thread_signal`, `thread_sleep`, `thread_spawn_v2` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
+| Process/catalog | `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_join`, `proc_parent`, `proc_raise_interval`, `proc_signal` | `proc_exec2`, `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_join`, `proc_parent`, `proc_raise_interval`, `proc_signal`, `proc_snapshot`, `proc_spawn`, `proc_spawn2` | [#196](https://github.com/VertoOS/wasm-host/issues/196), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
+| Thread/event/async | `futex_wait`, `futex_wake`, `futex_wake_all`, `stack_restore`, `thread_exit`, `thread_id`, `thread_signal` | `epoll_create`, `epoll_ctl`, `epoll_wait`, `fd_event`, `futex_wait`, `futex_wake`, `futex_wake_all`, `stack_restore`, `thread_exit`, `thread_id`, `thread_join`, `thread_parallelism`, `thread_signal`, `thread_sleep`, `thread_spawn_v2` | [#197](https://github.com/VertoOS/wasm-host/issues/197), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
 | Networking/ports | `sock_connect`, `sock_open`, `sock_send_to` | `port_*`, `resolve`, `sock_*` WASIX networking set | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Dynamic/closures/linking | `callback_signal` | `call_dynamic`, `callback_signal`, `closure_*`, `dl_invalid_handle`, `dlopen`, `dlsym`, `reflect_signature` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Clock mutation | none | `clock_time_set` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
-| Browser smoke | target command is blocked until the runtime groups above are resolved | target command is blocked until the runtime groups above are resolved | [#198](https://github.com/VertoOS/wasm-host/issues/198) |
+| Browser smoke | target command reaches Bash, then blocks at external command process control | target command reaches Bash, then blocks at external command process control | [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
 
 ## Current Interpretation
 
@@ -115,6 +136,12 @@ dynamic linking, raw networking, clock mutation, nonzero sleep, and raw
 process-control behavior unsupported. The first Bash smoke can now use those
 diagnostics to decide whether any remaining broad bucket needs implementation
 instead of assuming every imported name is required.
+
+The [#198](https://github.com/VertoOS/wasm-host/issues/198) smoke adds a
+minimal `stack_checkpoint` implementation for the Bash entry path. This is not
+full stack rewind support: `stack_restore` remains blocked on
+[#204](https://github.com/VertoOS/wasm-host/issues/204) until the browser host
+has truthful process-control semantics for Bash external commands.
 
 The audit did not find any reason to add first-class MCP, plugin, provider,
 connector, or OAuth modules under `apps/web`. Those remain adapter-package

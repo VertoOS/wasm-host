@@ -307,7 +307,10 @@ cataloged packaged command. Supported Preview1 imports are also mirrored
 through `wasix_32v1` when the 32-bit import ABI matches the current browser
 handlers. `proc_spawn`, join, fork, and signal imports still return
 deterministic unsupported capability errors because blocking process handles
-need a later async-safe continuation strategy. Common `wasix_32v1`
+need a later async-safe continuation strategy. WASIX thread, futex, eventfd,
+epoll, stack checkpoint, and context-switching imports also instantiate with
+deterministic unsupported capability errors until the browser profile has a
+real worker-thread and async-continuation strategy. Common `wasix_32v1`
 socket/network imports are also recognized as browser network capability gaps:
 they instantiate and return deterministic `NOTSUP` instead of becoming
 first-class raw socket support. Browser-safe networking belongs on explicit
@@ -356,7 +359,8 @@ package-file fixtures:
 `sock_recv`, `sock_send`, and `sock_shutdown`.
 The same raw runner exposes a narrow `wasix_32v1` namespace that mirrors those
 supported Preview1 calls, adds `proc_exec`, keeps process imports as
-deterministic unsupported capability errors, and recognizes common raw
+deterministic unsupported capability errors, classifies thread/futex/eventfd
+imports as unsupported browser capability gaps, and recognizes common raw
 socket/network imports such as `sock_open`, `sock_connect`, `sock_recv_from`,
 `sock_send_to`, option helpers, multicast helpers, `port_addr_list`,
 `port_route_list`, and `resolve`, all of which return deterministic `NOTSUP` in

@@ -180,6 +180,14 @@ const WASIX_PREVIEW1_IMPORTS_WASM = base64ToBytes(
   "AGFzbQEAAAABLghgAn9/AX9gAn9/AX9gBX9/f39/AX9gBH9/f38Bf2AAAX9gAX8AYAJ/fwBgAAAC7wEJCndhc2l4XzMydjEOYXJnc19zaXplc19nZXQAAAp3YXNpeF8zMnYxEWVudmlyb25fc2l6ZXNfZ2V0AAAKd2FzaXhfMzJ2MQ1jbG9ja19yZXNfZ2V0AAAKd2FzaXhfMzJ2MQpyYW5kb21fZ2V0AAAKd2FzaXhfMzJ2MQ1mZF9mZHN0YXRfZ2V0AAEKd2FzaXhfMzJ2MRFwYXRoX2ZpbGVzdGF0X2dldAACCndhc2l4XzMydjELc2NoZWRfeWllbGQABAp3YXNpeF8zMnYxCGZkX3dyaXRlAAMKd2FzaXhfMzJ2MQlwcm9jX2V4aXQABQMDAgYHBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAoKfQILACAABEAgARAICwtvAEEAQQQQAEEKEAlBCEEMEAFBCxAJQQBByAAQAkEMEAlBwAFBEBADQQ0QCUEBQRAQBEEOEAlBA0EAQYAIQQtBgAEQBUEPEAkQBkEQEAlBgAJBkAg2AgBBhAJBGjYCAEEBQYACQQFBiAIQB0EREAkLCzICAEGACAsLZml4dHVyZS50eHQAQZAICxp3YXNpeC1wcmV2aWV3MS1pbXBvcnRzLW9rCg==",
 );
 
+const WASIX_THREAD_EVENT_IMPORTS_WASM = base64ToBytes(
+  "AGFzbQEAAAABWA9gA35/fwF/YAR/f39/AX9gA35/fwF/YAJ/fwF/YAF+AX9gAn5/AX9gAn9+AX9gAn9/AX9gAX8Bf2AAAX9gA39/fwF/YAR/f39/AX9gAX8AYAJ/fwBgAAACuwUaCndhc2l4XzMydjEOY29udGV4dF9jcmVhdGUACAp3YXNpeF8zMnYxD2NvbnRleHRfZGVzdHJveQAICndhc2l4XzMydjEOY29udGV4dF9zd2l0Y2gACAp3YXNpeF8zMnYxDGVwb2xsX2NyZWF0ZQAICndhc2l4XzMydjEJZXBvbGxfY3RsAAoKd2FzaXhfMzJ2MQplcG9sbF93YWl0AAoKd2FzaXhfMzJ2MQhmZF9ldmVudAAACndhc2l4XzMydjEKZnV0ZXhfd2FpdAABCndhc2l4XzMydjEKZnV0ZXhfd2FrZQAHCndhc2l4XzMydjEOZnV0ZXhfd2FrZV9hbGwABwp3YXNpeF8zMnYxEHN0YWNrX2NoZWNrcG9pbnQACAp3YXNpeF8zMnYxDXN0YWNrX3Jlc3RvcmUACAp3YXNpeF8zMnYxCXRocmVhZF9pZAAICndhc2l4XzMydjELdGhyZWFkX2pvaW4ACAp3YXNpeF8zMnYxE3RocmVhZF9sb2NhbF9jcmVhdGUABQp3YXNpeF8zMnYxFHRocmVhZF9sb2NhbF9kZXN0cm95AAgKd2FzaXhfMzJ2MRB0aHJlYWRfbG9jYWxfZ2V0AAcKd2FzaXhfMzJ2MRB0aHJlYWRfbG9jYWxfc2V0AAYKd2FzaXhfMzJ2MRJ0aHJlYWRfcGFyYWxsZWxpc20ACAp3YXNpeF8zMnYxDXRocmVhZF9zaWduYWwABwp3YXNpeF8zMnYxDHRocmVhZF9zbGVlcAAECndhc2l4XzMydjEMdGhyZWFkX3NwYXduAAIKd2FzaXhfMzJ2MQ90aHJlYWRfc3Bhd25fdjIAAwp3YXNpeF8zMnYxC3RocmVhZF9leGl0AAwKd2FzaXhfMzJ2MQhmZF93cml0ZQALCndhc2l4XzMydjEJcHJvY19leGl0AAwDBAMNDQ4FAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAHAqZAgMLACAABEAgARAZCwsOACAAQTpHBEAgARAZCwv7AQBBABAAQQoQG0EAEAFBCxAbQQAQAkEMEBtBABADQQ0QG0EAQQBBABAEQQ4QG0EAQQBBABAFQQ8QG0IAQQBBABAGQRAQG0EAQQBBAEEAEAdBERAbQQBBABAIQRIQG0EAQQAQCUETEBtBABAKQRQQG0EAEAtBFRAbQQAQDEEWEBtBABANQRcQG0IAQQAQDkEYEBtBABAPQRkQG0EAQQAQEEEaEBtBAEIAEBFBGxAbQQAQEkEcEBtBAEEAEBNBHRAbQgAQFEEeEBtCAEEAQQAQFUEfEBtBAEEAEBZBIBAbQQBBgAg2AgBBBEEeNgIAQQFBAEEBQQgQGEEhEBoLCyUBAEGACAsed2FzaXgtdGhyZWFkLWV2ZW50LWltcG9ydHMtb2sK",
+);
+
+const WASIX_THREAD_EXIT_WASM = base64ToBytes(
+  "AGFzbQEAAAABCAJgAX8AYAAAAhoBCndhc2l4XzMydjELdGhyZWFkX2V4aXQAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoIAQYAQQAQAAs=",
+);
+
 test("loadRawWasiModulePackage validates explicit raw WASI module bytes", async () => {
   const expectedSha256 = await sha256Hex(ARGV_ECHO_WASM);
   const record = await loadRawWasiModulePackage({
@@ -1981,6 +1989,56 @@ test("command worker runs WASIX modules that import mirrored Preview1 calls", as
       timedOut: false,
     },
   });
+});
+
+test("raw WASI executor keeps WASIX thread and event imports explicit", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_THREAD_EVENT_IMPORTS_WASM,
+    command: "thread-event-smoke",
+    id: "thread-event-smoke",
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "thread-event-smoke" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "wasix-thread-event-imports-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor reports unsupported WASIX thread_exit calls", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_THREAD_EXIT_WASM,
+    command: "thread-exit-smoke",
+    id: "thread-exit-smoke",
+  });
+
+  await assert.rejects(
+    () =>
+      executor.run(
+        { ...baseRunRequest(packageRecord), command: "thread-exit-smoke" },
+        output,
+      ),
+    (error) => {
+      assert.equal(error.kind, "unsupported");
+      assert.equal(
+        error.message,
+        "WASIX thread_exit requires browser thread runtime support",
+      );
+      assert.equal(error.exitCode, 126);
+      return true;
+    },
+  );
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
 });
 
 test("command worker times out WASIX proc_exec child commands", async () => {

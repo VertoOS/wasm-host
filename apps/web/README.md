@@ -51,8 +51,9 @@ Current scope:
   WASI module with a cataloged packaged command without structured-cloning
   JavaScript functions. Common `wasix_32v1` raw socket/network imports are
   recognized as deterministic unsupported browser capability gaps. WASIX
-  `proc_spawn`/join/fork/signal and raw socket/network semantics remain later
-  async-continuation or host-bridge runtime layers.
+  `proc_spawn`/join/fork/signal, thread/futex/eventfd/context, and raw
+  socket/network semantics remain later async-continuation, worker-thread, or
+  host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, and mounts
@@ -185,6 +186,9 @@ Current scope:
   and inherited stdout/stderr. Process spawn, join, fork, and signal imports
   return deterministic unsupported capability errors until the runtime has an
   async continuation strategy for blocking process waits.
+  WASIX thread, futex, eventfd, epoll, stack checkpoint, and context-switching
+  imports instantiate with deterministic unsupported capability errors until the
+  browser profile has a real worker-thread and async-continuation strategy.
   Common `wasix_32v1` raw socket/network imports also instantiate and return
   deterministic unsupported capability errors so browser networking can stay on
   explicit HTTP, WebSocket, gateway, or tool-adapter bridges instead of becoming
@@ -288,7 +292,8 @@ Current scope:
   scratch-file allocation/truncate/sync and directory create/remove operations,
   scratch path rename behavior, injected workspace-store reads and persisted
   workspace mutations, WASIX namespace mirroring for supported Preview1 calls,
-  explicit WASIX process and network unsupported capability behavior,
+  explicit WASIX process, thread/event, and network unsupported capability
+  behavior,
   stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle
   integration, and the local Codex version-smoke artifact when it is present.
 

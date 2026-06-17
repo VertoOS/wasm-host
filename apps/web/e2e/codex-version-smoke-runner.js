@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const E2E_PAGE_PATH = "/e2e/codex-version-smoke.html";
+const BASH_COREUTILS_PAGE_PATH = "/e2e/bash-coreutils-smoke.html";
 const TERMINAL_SHELL_PAGE_PATH = "/e2e/terminal-shell.html";
 const BROWSER_REQUIRED = process.env.WASM_HOST_BROWSER_E2E_REQUIRED === "1";
 const BROWSER_EXECUTABLE = resolveBrowserExecutable();
@@ -26,9 +27,13 @@ const CDP_AVAILABLE = typeof globalThis.WebSocket === "function";
 const DEVTOOLS_STARTUP_TIMEOUT_MS = 60000;
 const DEVTOOLS_POLL_INTERVAL_MS = 100;
 const BROWSER_STATUS_TIMEOUT_MS = 30000;
+const BASH_COREUTILS_STATUS_TIMEOUT_MS = 90000;
 const DEVTOOLS_COMMAND_TIMEOUT_MS = BROWSER_STATUS_TIMEOUT_MS;
 const BROWSER_E2E_TIMEOUT_MS =
-  DEVTOOLS_STARTUP_TIMEOUT_MS + BROWSER_STATUS_TIMEOUT_MS * 5 + 30000;
+  DEVTOOLS_STARTUP_TIMEOUT_MS +
+  BROWSER_STATUS_TIMEOUT_MS * 5 +
+  BASH_COREUTILS_STATUS_TIMEOUT_MS +
+  30000;
 const CODEX_VERSION_SMOKE_STAGE_NAMES = [
   "version",
   "hard-timeout",
@@ -70,7 +75,14 @@ async function runBrowserE2e() {
       `${server.origin}${TERMINAL_SHELL_PAGE_PATH}`,
     );
     const terminal = await runTerminalShellPage(page);
-    return `${smoke}\n${terminal}`;
+    page.close();
+
+    page = await DevToolsPage.open(
+      browser.debugPort,
+      `${server.origin}${BASH_COREUTILS_PAGE_PATH}`,
+    );
+    const bashCoreutils = await runBashCoreutilsSmokePage(page);
+    return `${smoke}\n${terminal}\n${bashCoreutils}`;
   } finally {
     page?.close();
     await browser?.close();
@@ -229,6 +241,53 @@ function assertCodexVersionSmokeStages(result) {
   assert.equal(stages["tool-fixture"].path, "/workspace/notes/edit.txt");
 }
 
+async function runBashCoreutilsSmokePage(page) {
+  await page.send("Runtime.enable");
+  await page.send("Log.enable");
+
+  const status = await waitForBashCoreutilsSmokeStatus(page, {
+    timeoutMs: BASH_COREUTILS_STATUS_TIMEOUT_MS,
+  });
+  assert.equal(status.status, "passed", status.error?.message);
+  assert.equal(status.result.blocked, true);
+  assert.equal(status.result.blockerIssue, 204);
+  assert.equal(status.result.stdout, "/workspace\n");
+  assert.match(status.result.stderr, /bash: fork: Not supported/);
+  assert.equal(
+    status.result.artifacts.bash.sha256,
+    "059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1",
+  );
+  assert.equal(
+    status.result.artifacts.coreutils.sha256,
+    "36ea48f185ca15fe8454b1defb6a11754659dbed6330549662b62874d509f95f",
+  );
+  assert.deepEqual(status.result.targetCommand, [
+    "bash",
+    "-lc",
+    "pwd; ls /workspace; echo BASH_BROWSER_OK",
+  ]);
+  const diagnostics = status.result.diagnostics.map((entry) => [
+    entry.group,
+    entry.name,
+  ]);
+  assert.ok(
+    diagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_fork",
+    ),
+  );
+  assert.ok(
+    diagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_join",
+    ),
+  );
+  assert.ok(
+    diagnostics.some(
+      ([group, name]) => group === "thread-event" && name === "stack_restore",
+    ),
+  );
+  return `PASS browser Bash/coreutils WebC blocker e2e: issue #${status.result.blockerIssue}`;
+}
+
 async function runTerminalShellPage(page) {
   await page.send("Runtime.enable");
   await page.send("Log.enable");
@@ -333,6 +392,8 @@ async function startStaticServer(root) {
       response.writeHead(200, {
         "Cache-Control": "no-store",
         Connection: "close",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cross-Origin-Opener-Policy": "same-origin",
         "Content-Type": contentType(filePath),
       });
       response.end(body);
@@ -569,6 +630,29 @@ async function waitForSmokeStatus(page, options = {}) {
   }
   throw new Error(
     `timed out waiting for browser smoke status: ${JSON.stringify({
+      lastStatus,
+      events: page.events,
+    })}`,
+  );
+}
+
+async function waitForBashCoreutilsSmokeStatus(page, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? 10000);
+  let lastStatus = null;
+  while (Date.now() < deadline) {
+    const evaluation = await page.send("Runtime.evaluate", {
+      expression: "window.__wasmHostBashCoreutilsSmokeStatus",
+      returnByValue: true,
+    });
+    const status = evaluation.result?.value;
+    lastStatus = status ?? lastStatus;
+    if (status?.status === "passed" || status?.status === "failed") {
+      return status;
+    }
+    await delay(100);
+  }
+  throw new Error(
+    `timed out waiting for Bash/coreutils smoke status: ${JSON.stringify({
       lastStatus,
       events: page.events,
     })}`,

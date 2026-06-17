@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Bash Coreutils Smoke</title>
+  </head>
+  <body data-status="pending">
+    <script>
+      window.__wasmHostBashCoreutilsSmokeStatus = { status: "pending" };
+    </script>
+    <script type="module">
+      import { runBashCoreutilsSmoke } from "./bash-coreutils-smoke.js";
+
+      runBashCoreutilsSmoke()
+        .then((result) => {
+          window.__wasmHostBashCoreutilsSmokeStatus = {
+            result,
+            status: "passed",
+          };
+          document.body.dataset.status = "passed";
+        })
+        .catch((error) => {
+          window.__wasmHostBashCoreutilsSmokeStatus = {
+            error: {
+              message: error?.message ?? String(error),
+              name: error?.name ?? "Error",
+              stack: error?.stack ?? null,
+            },
+            status: "failed",
+          };
+          document.body.dataset.status = "failed";
+        });
+    </script>
+  </body>
+</html>

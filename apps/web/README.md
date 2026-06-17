@@ -189,10 +189,10 @@ Current scope:
   async continuation strategy for blocking process waits.
   `wasix_32v1.getcwd`/`chdir` are backed by the browser virtual cwd across
   `/workspace`, `/tmp`, and read-only package-root paths. `path_open2`,
-  `fd_fdflags_get`/`fd_fdflags_set`, `getpid`, and empty signal-disposition
-  queries are also wired for low-level compatibility; fd duplication, pipes,
-  TTY state, clock mutation, dynamic linking, and advanced process variants
-  remain explicit deterministic unsupported capability gaps.
+  `fd_fdflags_get`/`fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
+  `getpid`, and empty signal-disposition queries are also wired for low-level
+  compatibility. TTY state, clock mutation, dynamic linking, and advanced
+  process variants remain explicit deterministic unsupported capability gaps.
   WASIX thread, futex, eventfd, epoll, stack checkpoint, and context-switching
   imports instantiate with deterministic unsupported capability errors until the
   browser profile has a real worker-thread and async-continuation strategy.
@@ -299,8 +299,9 @@ Current scope:
   scratch-file allocation/truncate/sync and directory create/remove operations,
   scratch path rename behavior, injected workspace-store reads and persisted
   workspace mutations, WASIX namespace mirroring for supported Preview1 calls,
-  WASIX cwd/fd utility import coverage, explicit WASIX process, thread/event,
-  and network unsupported capability behavior,
+  WASIX cwd/fd utility import coverage, fd duplication and pipe behavior,
+  explicit WASIX process, thread/event, and network unsupported capability
+  behavior,
   stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle
   integration, and the local Codex version-smoke artifact when it is present.
 

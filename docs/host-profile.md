@@ -319,10 +319,13 @@ surface.
 The same low-level namespace now handles `getcwd`/`chdir` against the browser
 virtual cwd, mirrors `path_open2` through the current fd/path model with
 extended fd flag bookkeeping, reports `getpid` as the single browser process,
-and returns an empty signal-disposition set. `fd_dup`, `fd_dup2`, `fd_pipe`,
-`pipe`, TTY state, clock mutation, dynamic linking, closure/callback, port, and
-advanced process imports instantiate with deterministic `NOTSUP` until those
-capabilities have concrete browser runtime designs.
+returns an empty signal-disposition set, and implements `fd_dup`, `fd_dup2`,
+`fd_pipe`, and `pipe` with descriptor-local rights, shared file offsets,
+duplicated stdio handles, duplicated preopen directories, deterministic
+in-memory pipe buffers, `AGAIN` for empty open pipes, and `PIPE` after the last
+reader closes. TTY state, clock mutation, dynamic linking, closure/callback,
+port, and advanced process imports instantiate with deterministic `NOTSUP`
+until those capabilities have concrete browser runtime designs.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory
@@ -366,10 +369,11 @@ package-file fixtures:
 `sock_recv`, `sock_send`, and `sock_shutdown`.
 The same raw runner exposes a narrow `wasix_32v1` namespace that mirrors those
 supported Preview1 calls, adds `proc_exec`, `getcwd`, `chdir`, `path_open2`,
-`fd_fdflags_get`, `fd_fdflags_set`, `getpid`, and empty signal-disposition
-queries, keeps unsupported process imports as deterministic capability errors,
-classifies thread/futex/eventfd imports as unsupported browser capability gaps,
-and recognizes common raw socket/network imports such as `sock_open`,
+`fd_fdflags_get`, `fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
+`getpid`, and empty signal-disposition queries, keeps unsupported process
+imports as deterministic capability errors, classifies thread/futex/eventfd
+imports as unsupported browser capability gaps, and recognizes common raw
+socket/network imports such as `sock_open`,
 `sock_connect`, `sock_recv_from`, `sock_send_to`, option helpers, multicast
 helpers, port helpers, and `resolve`, all of which return deterministic
 `NOTSUP` in the browser profile.

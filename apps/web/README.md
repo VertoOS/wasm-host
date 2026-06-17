@@ -33,20 +33,24 @@ Current scope:
 - `src/http-worker-entry.js` is the browser worker entrypoint for starting the
   HTTP bridge worker runtime.
 - `src/command-worker.js` implements the first browser command lifecycle
-  runtime. It handles `command.load`, `command.run`, `command.cancel`, stdin
-  messages, terminal resize messages, stdout/stderr chunk and close events,
-  timeout/cancellation result shaping, and pluggable HTTP bridge transport
-  selection. Its built-in `smoke` executor is a lifecycle fixture only; the
-  built-in `browser-tool-fixture` executor proves packaged tool command
-  dispatch with cwd/env/stdin, terminal transcript capture, and host-owned
-  workspace reads; the `wasi-module` executor supports the interim raw WASI
-  preview1 `codex --version` smoke; and the `webc-package`/`webc-wasix`
-  executor boundary accepts loaded WebC packages before returning a structured
-  unimplemented runtime error.
+  runtime. It handles `command.load`, `command.catalog`, `command.run`,
+  `command.cancel`, stdin messages, terminal resize messages, stdout/stderr
+  chunk and close events, timeout/cancellation result shaping, and pluggable
+  HTTP bridge transport selection. It maintains a protocol-neutral in-memory
+  command catalog for loaded packages and resolves explicit `packageId: null`
+  runs through browser PATH lookup. Its built-in `smoke` executor is a
+  lifecycle fixture only; the built-in `browser-tool-fixture` executor proves
+  packaged tool command dispatch with cwd/env/stdin, terminal transcript
+  capture, and host-owned workspace reads; the `wasi-module` executor supports
+  the interim raw WASI preview1 `codex --version` smoke; and the
+  `webc-package`/`webc-wasix` executor boundary delegates WASI-runner WebC
+  atoms to that raw Preview1 runtime.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
-  It validates command dispatch for WebC packages and reports that real runtime
-  execution is not implemented yet, giving the later Bash/coreutils work a
-  stable package type instead of falling through to unsupported package routing.
+  It validates command dispatch for WebC packages, maps WebC WASI-runner command
+  metadata into raw WASI module requests, resolves cached atom bytes, and mounts
+  read-only package-root files from WebC volumes. Full WASIX process behavior,
+  Bash/coreutils package semantics, and non-WASI runners remain later runtime
+  layers.
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
   artifact. It validates the expected exports, calls `codex_version` and
@@ -136,9 +140,10 @@ Current scope:
   module executor; WebC WASI-runner commands can resolve cached atom bytes and
   delegate executable atoms through that same Preview1 runtime with read-only
   package-root files from extracted WebC volume spans. Memory cache remains the
-  fallback and test-injectable cache. It does not provide a WebC package catalog
-  or PATH command resolver, implement WASIX process spawning, manage cache
-  eviction, or wire workspace persistence into full package execution yet.
+  fallback and test-injectable cache. Package catalog and PATH lookup live in
+  the command worker over loaded package records; the loader still does not
+  implement WASIX process spawning, manage cache eviction, or wire workspace
+  persistence into full package execution yet.
 - `src/artifact-manifest.js` consumes the interim Codex artifact manifest
   shapes. It validates the raw `wasi-module` `codex --version` contract and
   the `codex-browser` request-builder contract, normalizes them into command

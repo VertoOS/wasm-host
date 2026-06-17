@@ -226,24 +226,30 @@ WebC package startup or browser filesystem runtime.
 
 The initial browser command lifecycle runtime lives in
 `apps/web/src/command-worker.js`. It accepts `command.load` messages for
-package metadata, `command.run` messages with package id, command, argv, env,
-cwd, stdin, timeout, and HTTP transport selection, `command.cancel` messages for
-the active run, `command.terminal.resize` messages for active terminal
-dimensions, and `command.stdin` / `command.stdin.end` / `command.stdin.error`
-messages for streamed input. It emits `command.loaded`, `command.started`,
-`command.stdout`, `command.stderr`, `command.stdout.close`,
-`command.stderr.close`, `command.complete`, and `command.error` events.
+package metadata, `command.catalog` messages for the current browser command
+catalog, `command.run` messages with package id, command, argv, env, cwd,
+stdin, timeout, and HTTP transport selection, `command.cancel` messages for the
+active run, `command.terminal.resize` messages for active terminal dimensions,
+and `command.stdin` / `command.stdin.end` / `command.stdin.error` messages for
+streamed input. It emits `command.loaded`, `command.catalog`,
+`command.started`, `command.stdout`, `command.stderr`,
+`command.stdout.close`, `command.stderr.close`, `command.complete`, and
+`command.error` events.
 Completion payloads mirror the native runner shape at the browser message
 boundary: exit code, stdout/stderr byte counts, failure stage, cancellation
-state, and timeout state. The first built-in `smoke` executor is only a
-lifecycle fixture for worker-boundary tests. The deterministic
-`browser-tool-fixture` executor is the first packaged tool-command fixture: it
-receives cwd, filtered env, stdin, timeout/cancel signals, reads a host-owned
-browser workspace file, and emits JSON through stdout plus a fixed stderr line.
-The terminal transcript adapter now drives the same fixture with stdin writes,
-EOF, stdout/stderr capture, stream close ordering, and exit status. It proves
-the command-worker and terminal tool boundary only; real Bash, git, and
-arbitrary tool packages remain separate browser adapter layers.
+state, and timeout state. The worker maintains a protocol-neutral in-memory
+catalog for loaded package commands, exposes `/bin` and `/usr/bin` command
+paths, and resolves explicit `packageId: null` runs through browser PATH lookup
+without making higher-level tool adapter concepts first-class. The first
+built-in `smoke` executor is only a lifecycle fixture for worker-boundary
+tests. The deterministic `browser-tool-fixture` executor is the first packaged
+tool-command fixture: it receives cwd, filtered env, stdin, timeout/cancel
+signals, reads a host-owned browser workspace file, and emits JSON through
+stdout plus a fixed stderr line. The terminal transcript adapter now drives the
+same fixture with stdin writes, EOF, stdout/stderr capture, stream close
+ordering, and exit status. It proves the command-worker and terminal tool
+boundary only; real Bash, git, and arbitrary tool packages remain separate
+browser adapter layers.
 
 The first browser terminal/stdio adapter lives in `apps/web/src/terminal.js`.
 It is dependency-free and intentionally shaped for a later xterm.js surface: a
@@ -289,8 +295,8 @@ command atom metadata, reads cached atom bytes, and delegates executable atoms
 to the browser raw WASI Preview1 runtime with read-only package-root files from
 extracted WebC volume spans. Unsupported runners and missing atom artifacts
 still fail with structured errors. Compiled module cache persistence, package
-catalog/PATH resolution, WASIX process spawning, and Bash/coreutils execution
-are later browser runtime layers.
+command process spawning, and Bash/coreutils execution are later browser
+runtime layers.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory

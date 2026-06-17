@@ -29,6 +29,7 @@ const BROWSER_TOOL_DEFAULT_PATH = "/workspace/tools/input.txt";
 const BROWSER_TOOL_MODE_ENV = "BROWSER_TOOL_MODE";
 const CANCELLED_EXIT_CODE = 130;
 const TIMEOUT_EXIT_CODE = 124;
+const DEFAULT_COMMAND_PATH = "/bin:/usr/bin";
 
 export class BrowserCommandWorkerError extends Error {
   constructor(kind, message, stage = "runtime", options = {}) {
@@ -73,6 +74,7 @@ export class BrowserCommandWorkerRuntime {
     };
     this.packages = new Map();
     this.packageLoads = new Map();
+    this.packageCatalog = createPackageCatalog();
     this.workspaceStore =
       options.workspaceStore === undefined
         ? createBrowserWorkspaceStore(options.workspaceStoreOptions ?? {})
@@ -132,6 +134,9 @@ export class BrowserCommandWorkerRuntime {
       case "command.run":
         await this.runCommand(message);
         break;
+      case "command.catalog":
+        this.postCommandCatalog(message);
+        break;
       case "command.stdin":
         this.handleStdinChunk(message);
         break;
@@ -171,7 +176,7 @@ export class BrowserCommandWorkerRuntime {
       if (this.packageLoads.get(packageId) !== loadRecord) {
         return;
       }
-      this.packages.set(packageRecord.id, packageRecord);
+      this.registerPackage(packageRecord);
       postMessageToPort(this.port, {
         type: "command.loaded",
         id: message.id ?? packageRecord.id,
@@ -213,6 +218,14 @@ export class BrowserCommandWorkerRuntime {
     return normalizePackage(value);
   }
 
+  registerPackage(packageRecord) {
+    const packages = new Map(this.packages);
+    packages.set(packageRecord.id, packageRecord);
+    const catalog = createPackageCatalog([...packages.values()]);
+    this.packages = packages;
+    this.packageCatalog = catalog;
+  }
+
   async runCommand(message) {
     let run;
     try {
@@ -246,10 +259,16 @@ export class BrowserCommandWorkerRuntime {
     }
 
     let packageRecord;
+    let command;
     let executor;
     let http;
     try {
-      packageRecord = await waitForRunAbort(this.packageForRun(run), activeRun);
+      const resolution = await waitForRunAbort(
+        this.packageForRun(run),
+        activeRun,
+      );
+      packageRecord = resolution.packageRecord;
+      command = resolution.command;
       throwIfAborted(activeRun.controller.signal);
       executor = this.resolveExecutor(packageRecord.type);
       http = this.resolveHttpTransport(run.httpTransport);
@@ -274,14 +293,14 @@ export class BrowserCommandWorkerRuntime {
         type: "command.started",
         id: run.id,
         packageId: packageRecord.id,
-        command: run.command,
+        command,
         args: run.args,
         cwd: run.cwd,
       });
       const output = new CommandOutputWriter(this.port, run.id, activeRun);
       const result = await callExecutorWithAbort(executor, {
         args: run.args,
-        command: run.command,
+        command,
         cwd: run.cwd,
         env: run.env,
         httpBridge: new BrowserHttpBridgeClient({
@@ -418,6 +437,21 @@ export class BrowserCommandWorkerRuntime {
   }
 
   async packageForRun(run) {
+    if (run.packageId === null) {
+      const entry = this.packageCatalog.resolve(run.command, run.env.PATH);
+      const packageRecord = this.packages.get(entry.packageId);
+      if (!packageRecord) {
+        throw new BrowserCommandWorkerError(
+          "invalid_request",
+          `browser command package is not loaded: ${entry.packageId}`,
+          "package_load",
+        );
+      }
+      return {
+        command: entry.command,
+        packageRecord,
+      };
+    }
     const loadRecord = this.packageLoads.get(run.packageId);
     if (loadRecord) {
       await loadRecord.promise;
@@ -430,7 +464,7 @@ export class BrowserCommandWorkerRuntime {
         "package_load",
       );
     }
-    return packageRecord;
+    return { command: run.command, packageRecord };
   }
 
   resolveExecutor(type) {
@@ -456,6 +490,15 @@ export class BrowserCommandWorkerRuntime {
       );
     }
     return { name: transportName, transport };
+  }
+
+  postCommandCatalog(message) {
+    postMessageToPort(this.port, {
+      type: "command.catalog",
+      id: message.id ?? null,
+      defaultPath: DEFAULT_COMMAND_PATH,
+      entries: this.packageCatalog.entries(),
+    });
   }
 
   workspaceStoreForPackage(packageRecord) {
@@ -840,6 +883,149 @@ function normalizePackage(value) {
   };
 }
 
+function createPackageCatalog(packages = []) {
+  const entriesByPath = new Map();
+  for (const packageRecord of packages) {
+    for (const entry of catalogEntriesForPackage(packageRecord)) {
+      const existing = entriesByPath.get(entry.path);
+      if (existing && !sameCatalogTarget(existing, entry)) {
+        throw new BrowserCommandWorkerError(
+          "command_catalog_collision",
+          `browser command catalog path collision: ${entry.path}`,
+          "package_load",
+        );
+      }
+      entriesByPath.set(entry.path, entry);
+    }
+  }
+  return {
+    entries() {
+      return [...entriesByPath.values()].sort((left, right) =>
+        left.path.localeCompare(right.path) ||
+        left.packageId.localeCompare(right.packageId) ||
+        left.command.localeCompare(right.command),
+      );
+    },
+    resolve(command, pathValue) {
+      const paths = catalogLookupPaths(command, pathValue);
+      for (const path of paths) {
+        const entry = entriesByPath.get(path);
+        if (entry) {
+          return entry;
+        }
+      }
+      throw new BrowserCommandWorkerError(
+        "command_not_found",
+        `browser command not found in package catalog: ${String(command ?? "")}`,
+        "command_resolution",
+        { exitCode: 127 },
+      );
+    },
+  };
+}
+
+function catalogEntriesForPackage(packageRecord) {
+  const entries = [];
+  for (const command of packageRecord.commands ?? []) {
+    for (const path of catalogPathsForCommand(command)) {
+      entries.push({
+        command,
+        packageId: packageRecord.id,
+        packageType: packageRecord.type,
+        path,
+      });
+    }
+  }
+  return dedupeCatalogEntries(entries);
+}
+
+function catalogPathsForCommand(value) {
+  const text = String(value ?? "").trim();
+  if (!text || text.includes("\0")) {
+    return [];
+  }
+  if (text.startsWith("/")) {
+    const path = normalizeCommandPath(text);
+    return path ? [path] : [];
+  }
+  if (text.includes("/")) {
+    return [];
+  }
+  return commandPathDirs(DEFAULT_COMMAND_PATH).map((dir) => `${dir}/${text}`);
+}
+
+function catalogLookupPaths(command, pathValue) {
+  const text = nonEmptyString(command, "command_resolution");
+  if (text.includes("\0")) {
+    throw new BrowserCommandWorkerError(
+      "invalid_request",
+      "browser command fields must not contain NUL bytes",
+      "command_resolution",
+    );
+  }
+  if (text.startsWith("/")) {
+    const path = normalizeCommandPath(text);
+    return path ? [path] : [];
+  }
+  if (text.includes("/")) {
+    return [];
+  }
+  const searchPath = pathValue ?? DEFAULT_COMMAND_PATH;
+  return commandPathDirs(searchPath, {
+    fallbackToDefault: pathValue == null,
+  }).map((dir) => `${dir}/${text}`);
+}
+
+function commandPathDirs(pathValue, options = {}) {
+  const fallbackToDefault = options.fallbackToDefault ?? true;
+  const dirs = String(pathValue ?? DEFAULT_COMMAND_PATH)
+    .split(":")
+    .map(normalizeCommandPath)
+    .filter(Boolean);
+  if (dirs.length > 0) {
+    return dirs;
+  }
+  return fallbackToDefault
+    ? commandPathDirs(DEFAULT_COMMAND_PATH, { fallbackToDefault: false })
+    : [];
+}
+
+function normalizeCommandPath(value) {
+  const text = String(value ?? "").trim();
+  if (!text.startsWith("/") || text.includes("\0")) {
+    return null;
+  }
+  const segments = [];
+  for (const segment of text.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      return null;
+    }
+    segments.push(segment);
+  }
+  return segments.length > 0 ? `/${segments.join("/")}` : null;
+}
+
+function dedupeCatalogEntries(entries) {
+  const keys = new Set();
+  const deduped = [];
+  for (const entry of entries) {
+    const key = `${entry.path}\0${entry.packageId}\0${entry.command}`;
+    if (keys.has(key)) {
+      continue;
+    }
+    keys.add(key);
+    deduped.push(entry);
+  }
+  return deduped;
+}
+
+function sameCatalogTarget(left, right) {
+  return left.packageId === right.packageId && left.command === right.command;
+}
+
 function packageLoadKey(value) {
   return String(value?.id ?? value?.packageId ?? DEFAULT_PACKAGE_ID);
 }
@@ -864,7 +1050,10 @@ function normalizeRunMessage(message) {
     httpTransport: run.httpTransport ?? message.httpTransport,
     id,
     initialStdin: initialStdinChunks(run),
-    packageId: nonEmptyString(run.packageId ?? DEFAULT_PACKAGE_ID),
+    packageId:
+      run.packageId === null
+        ? null
+        : nonEmptyString(run.packageId ?? DEFAULT_PACKAGE_ID),
     stdinOpen: run.stdinOpen === true,
     terminal: normalizeInitialTerminal(run.terminal ?? message.terminal),
     timeoutMs: normalizeTimeout(run.timeoutMs ?? message.timeoutMs),

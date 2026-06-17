@@ -301,6 +301,11 @@ export class BrowserCommandWorkerRuntime {
       });
       const output = new CommandOutputWriter(this.port, run.id, activeRun);
       const childCommands = this.childCommandsForRun(run, activeRun, output);
+      const workspaceSnapshotStore =
+        this.workspaceSnapshotStoreForPackage(packageRecord);
+      const workspaceSnapshot = workspaceSnapshotStore
+        ? await workspaceSnapshotStore.exportSnapshot()
+        : undefined;
       const result = await callExecutorWithAbort(executor, {
         args: run.args,
         childCommands,
@@ -321,9 +326,13 @@ export class BrowserCommandWorkerRuntime {
         signal: activeRun.controller.signal,
         stdin: activeRun.stdin,
         terminal: activeRun.terminal,
+        workspaceSnapshot,
         workspaceStore: this.workspaceStoreForPackage(packageRecord),
       }, output);
       throwIfAborted(activeRun.controller.signal);
+      if (workspaceSnapshotStore && result?.workspaceSnapshot) {
+        await workspaceSnapshotStore.importSnapshot(result.workspaceSnapshot);
+      }
       postOutputStreamClose(this.port, run.id, activeRun);
       postMessageToPort(this.port, {
         type: "command.complete",
@@ -511,6 +520,13 @@ export class BrowserCommandWorkerRuntime {
       abort.throwIfAborted();
       const executor = this.resolveExecutor(packageRecord.type);
       const http = this.resolveHttpTransport(run.httpTransport);
+      const workspaceSnapshotStore =
+        this.workspaceSnapshotStoreForPackage(packageRecord);
+      const workspaceSnapshot =
+        run.workspaceSnapshot ??
+        (workspaceSnapshotStore
+          ? await workspaceSnapshotStore.exportSnapshot()
+          : undefined);
       const childCommands = this.childCommandsForRun(
         run,
         context.activeRun,
@@ -537,9 +553,17 @@ export class BrowserCommandWorkerRuntime {
         stdin,
         terminal: context.activeRun.terminal,
         wasixExecArgv0: run.wasixExecArgv0,
+        workspaceSnapshot,
         workspaceStore: this.workspaceStoreForPackage(packageRecord),
       }, output);
       abort.throwIfAborted();
+      if (
+        workspaceSnapshotStore &&
+        !run.workspaceSnapshot &&
+        result?.workspaceSnapshot
+      ) {
+        await workspaceSnapshotStore.importSnapshot(result.workspaceSnapshot);
+      }
       const childResult = {
         command,
         exitCode: Number(result?.exitCode ?? 0),
@@ -552,6 +576,11 @@ export class BrowserCommandWorkerRuntime {
       const diagnostics = commandResultDiagnostics(result?.diagnostics);
       if (diagnostics) {
         childResult.diagnostics = diagnostics;
+      }
+      if (result?.workspaceSnapshot) {
+        childResult.workspaceSnapshot = cloneWorkspaceSnapshot(
+          result.workspaceSnapshot,
+        );
       }
       return childResult;
     } finally {
@@ -598,6 +627,12 @@ export class BrowserCommandWorkerRuntime {
       packageRecord.type === "codex-browser" ||
       packageRecord.type === BROWSER_TOOL_FIXTURE_TYPE
     )
+      ? this.workspaceStore
+      : undefined;
+  }
+
+  workspaceSnapshotStoreForPackage(packageRecord) {
+    return isWorkspaceSnapshotPackageType(packageRecord?.type)
       ? this.workspaceStore
       : undefined;
   }
@@ -1281,6 +1316,9 @@ function normalizeChildCommandRequest(message = {}, parentRun = {}) {
     stdout: normalizeChildOutputMode(run.stdout ?? "pipe", "stdout"),
     timeoutMs: normalizeTimeout(run.timeoutMs),
     wasixExecArgv0: run.wasixExecArgv0 === true,
+    workspaceSnapshot: run.workspaceSnapshot
+      ? cloneWorkspaceSnapshot(run.workspaceSnapshot)
+      : undefined,
   };
 }
 
@@ -1667,6 +1705,19 @@ function commandResultDiagnostics(value) {
       }))
       .filter((entry) => entry.count > 0 && entry.group && entry.name)
       .sort(compareCommandUnsupportedCallDiagnostics),
+  };
+}
+
+function isWorkspaceSnapshotPackageType(type) {
+  return type === WEBC_PACKAGE_TYPE || type === WEBC_WASIX_EXECUTOR_TYPE;
+}
+
+function cloneWorkspaceSnapshot(snapshot) {
+  return {
+    directories: (snapshot?.directories ?? []).map((entry) => ({ ...entry })),
+    files: (snapshot?.files ?? []).map((entry) => ({ ...entry })),
+    root: snapshot?.root,
+    version: snapshot?.version,
   };
 }
 

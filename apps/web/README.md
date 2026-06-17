@@ -77,13 +77,21 @@ Current scope:
   primitive. `proc_spawn`, signal/raise-interval, general blocking join,
   futex/eventfd/context, nonzero sleep, and raw socket/network semantics remain
   later process, worker-thread, or host-bridge runtime layers.
+- WebC/WASIX package runs bridge the host-owned browser workspace through
+  cloneable snapshots, including snapshots returned from `proc_exec` child
+  commands. That lets Bash/coreutils workflows create, redirect, read, list,
+  and remove files under `/workspace` without sending live workspace store
+  objects to workers or making raw `wasi-module` package runs first-class
+  workspace owners.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, mounts
   read-only package-root files from WebC volumes, and overlays generated command
   shims for loaded package-catalog paths so Bash-style PATH checks can see
-  cataloged commands. Full WASIX process behavior, broad Bash/git semantics,
-  and non-WASI runners remain later runtime layers.
+  cataloged commands. It also passes workspace snapshots into executable atoms
+  and imports mutated snapshots from child command results for the current
+  non-interactive Bash/coreutils workspace smoke. Full WASIX process behavior,
+  broad Bash/git semantics, and non-WASI runners remain later runtime layers.
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
   artifact. It validates the expected exports, calls `codex_version` and
@@ -134,8 +142,10 @@ Current scope:
   directory grants, app-server wiring, and full Codex file-edit turns remain
   later runtime layers. The raw WASI fixture executor can consume an injected
   store as a writable `/workspace` mount by snapshotting before `_start` and
-  flushing the mutated snapshot after exit, and the `codex-browser`
-  `workspace-edit` fixture can read/write the host-owned store directly. The
+  flushing the mutated snapshot after exit. WebC/WASIX command runs use the
+  same snapshot shape across worker and child-command boundaries for the
+  Bash/coreutils workspace smoke, while the `codex-browser` `workspace-edit`
+  fixture can read/write the host-owned store directly. The
   `browser-tool-fixture` executor can inspect the same store directly.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
@@ -337,8 +347,8 @@ Current scope:
   a mocked turn, interrupt a pending turn, and reject unsupported native
   methods, assert a packaged tool fixture can read the edited file with
   cwd/env/stdin through the terminal transcript adapter, load the pinned
-  `wasmer/bash` and `wasmer/coreutils` WebC artifacts for the first passing
-  browser Bash/coreutils smoke, and publish named
+  `wasmer/bash` and `wasmer/coreutils` WebC artifacts for the passing
+  path-command and workspace-file Bash/coreutils smoke stages, and publish named
   stage summaries for the page-level smoke result. The browser e2e also drives
   the terminal UI shell through DOM controls. The terminal shell e2e also
   applies a package URL source backed by a local data URL,

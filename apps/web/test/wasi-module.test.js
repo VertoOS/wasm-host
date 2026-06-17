@@ -116,6 +116,10 @@ const FD_RENUMBER_WASM = base64ToBytes(
   "AGFzbQEAAAABPQlgCX9/f39/fn5/fwF/YAJ/fwF/YAR/f39/AX9gBH9+f38Bf2ABfwBgA39/fwBgBH9/f38AYAJ/fwBgAAAC0AEGFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQtmZF9yZW51bWJlcgABFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3JlYWQAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3NlZWsAAxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAAEAwYFBQYFBwgFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQACgrqAgUOACAAIAFHBEAgAhAFCwsgAEEAIAE2AgBBBCACNgIAIABBAEEBQQgQAkEAIAMQBgshAEEAQagCNgIAQQRBATYCACAAQQBBAUEIEAIgASACEAYLSgAgAEIAQQBBGBAEQQAgARAGQQBBIDYCAEEEQQQ2AgAgAEEAQQFBCBADQQAgARAGQQgoAgBBBCABEAZBICgCAEHhxI2LAiABEAYLygEBAn9BBEEAQYACQQxBAULGAEIAQQBBEBAAQQBBChAGQRAoAgAhACAAQQwQAUEAQQsQBiAAQQhBDBAIQQxBoAJBA0ENEAdBDEEMEAFBAEEOEAZBBEEAQZACQQtBAULAAEIAQQBBFBAAQQBBFBAGQRQoAgAhAUEMIAEQAUEAQRUQBkEMQQhBFhAIIAFBqAJBAUEXEAcgAUEYEAlB4wBBDBABQQhBHhAGIAFBARABQcwAQR8QBiABQagCQQFBIBAHQQFBsAJBD0EoEAcLC0kFAEGAAgsMcmVudW1iZXIudHh0AEGQAgsLcmVwbGFjZS50eHQAQaACCwNhYmMAQagCCwEhAEGwAgsPZmQtcmVudW1iZXItb2sK",
 );
 
+const FD_RENUMBER_STDIO_WASM = base64ToBytes(
+  "AGFzbQEAAAABIwVgCX9/f39/fn5/fwF/YAJ/fwF/YAR/f39/AX9gAX8AYAAAAo4BBBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXBhdGhfb3BlbgAAFndhc2lfc25hcHNob3RfcHJldmlldzELZmRfcmVudW1iZXIAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAwMCAQQFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQABApuAWwBAX9BA0EAQSBBDEEJQsAAQgBBAEEAEAAhACAABEAgABADC0EAKAIAQQEQASEAIAAEQCAAEAMLQRBBwAA2AgBBFEEMNgIAQQFBEEEBQRgQAiEAIAAEQCAAEAMLQRgoAgBBDEcEQEHGABADCwsLJAIAQSALDHJlZGlyZWN0LnR4dABBwAALDHJlZGlyZWN0LW9rCg==",
+);
+
 const FD_PREAD_WASM = base64ToBytes(
   "AGFzbQEAAAABUAtgCX9/f39/fn5/fwF/YAV/f39+fwF/YAR/f39/AX9gAn9/AX9gBH9+f38Bf2ABfwBgA39/fwBgA35+fwBgBn9+f39/fwBgBH9/f38AYAAAAu4BBxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXBhdGhfb3BlbgAAFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfcHJlYWQAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3JlYWQAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3RlbGwAAxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxB2ZkX3NlZWsABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQABQMGBQYHCAkKBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAsK/wMFDgAgACABRwRAIAIQBgsLDgAgACABUgRAIAIQBgsLNgBBAEHAADYCAEEEIAI2AgBBCEHjADYCACAAQQBBASABQQgQASADIAUQB0EIKAIAIAQgBRAHCyAAQQAgATYCAEEEIAI2AgAgAEEAQQFBCBAFQQAgAxAHC4YDAQN/QQNBAEGAAkEMQQBCpgFCAEEAQRAQAEEAQQoQB0EQKAIAIQAgAEIDQQBBGBAEQQBBCxAHIABCAkEDQQBBA0EMEAlBwAAoAgBB7Ni9A0ENEAcgAEEgEANBAEEOEAdBICkDAEIDQQ8QCCAAQgBBAEEAQQBBEBAJIABC5ABBBEEAQQBBERAJIABCf0EBQRxBAEESEAkgAEKAgICAgICAEEEBQT1BAEETEAlBBEIAQQFBH0EAQRQQCUEAQgBBAUHMAEEAQRUQCUHjAEIAQQFBCEEAQRYQCUEEQQBBkAJBC0EBQsYBQgBBAEEUEABBAEEeEAdBFCgCACEBIAFBoAJBBkEfEAogAUIGQQBBGBAEQQBBIBAHIAFCAkEDQQBBA0EhEAlBwAAoAgBB48iVA0EiEAcgAUEgEANBAEEjEAdBICkDAEIGQSQQCEEEQQBBsAJBDUEBQsAAQgBBAEEcEABBAEElEAdBHCgCACECIAJCAEEBQcwAQQBBJhAJQQFBwAJBDEEoEAoLC1UFAEGAAgsMcmVhZG9ubHkudHh0AEGQAgsLc2NyYXRjaC50eHQAQaACCwZhYmNkZWYAQbACCw13cml0ZW9ubHkudHh0AEHAAgsMZmQtcHJlYWQtb2sK",
 );
@@ -1156,6 +1160,40 @@ test("raw WASI executor renumbers open file descriptors", async () => {
   assert.deepEqual(result, { exitCode: 0 });
   assert.equal(output.stdout, "fd-renumber-ok\n");
   assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor renumbers workspace files onto stdout", async () => {
+  const output = recordingOutput();
+  const workspace = createMemoryBrowserWorkspaceStore();
+  const executor = createRawWasiModuleExecutor({
+    worker: false,
+    workspaceStore: workspace,
+  });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: FD_RENUMBER_STDIO_WASM,
+    command: "fd-renumber-stdio",
+    id: "fd-renumber-stdio",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "fd-renumber-stdio",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+    },
+    output,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+  assert.equal(
+    text(await workspace.readFile("/workspace/redirect.txt")),
+    "redirect-ok\n",
+  );
 });
 
 test("raw WASI executor supports positional file reads", async () => {
@@ -3254,11 +3292,14 @@ test("command worker times out WASIX proc_exec child commands", async () => {
   });
 });
 
-test("raw WASI worker executor rejects live workspace stores", async () => {
+test("raw WASI worker executor exports live workspace stores as snapshots", async () => {
   const output = recordingOutput();
+  const worker = recordingWasiWorker();
+  const workspaceStore = createMemoryBrowserWorkspaceStore();
+  await workspaceStore.writeFile("/workspace/input.txt", "from store\n");
   const executor = createRawWasiModuleWorkerExecutor({
-    createWorker: () => recordingWasiWorker(),
-    workspaceStore: createMemoryBrowserWorkspaceStore(),
+    createWorker: () => worker,
+    workspaceStore,
   });
   const packageRecord = await loadRawWasiModulePackage({
     artifactKind: "wasi-module",
@@ -3267,23 +3308,26 @@ test("raw WASI worker executor rejects live workspace stores", async () => {
     id: "codex",
   });
 
-  await assert.rejects(
-    () =>
-      executor.run(
-        {
-          args: ["--version"],
-          command: "codex",
-          env: {},
-          package: packageRecord,
-          signal: new AbortController().signal,
-        },
-        output,
-      ),
-    (error) => {
-      assert.equal(error.kind, "unsupported");
-      assert.match(error.message, /workspaceStore cannot be sent to a worker/);
-      return true;
+  const result = await executor.run(
+    {
+      args: ["--version"],
+      command: "codex",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
     },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(worker.messages[0].request.workspaceStore, undefined);
+  assert.equal(worker.messages[0].request.workspaceSnapshot.root, "/workspace");
+  assert.deepEqual(
+    worker.messages[0].request.workspaceSnapshot.files.map((entry) => [
+      entry.path,
+      entry.size,
+    ]),
+    [["/workspace/input.txt", 11]],
   );
 });
 

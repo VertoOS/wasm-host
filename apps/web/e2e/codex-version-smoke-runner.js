@@ -253,6 +253,22 @@ async function runBashCoreutilsSmokePage(page) {
   assert.equal(status.result.blockerIssue, null);
   assert.equal(status.result.stdout, "/workspace\nBASH_BROWSER_OK\n");
   assert.equal(status.result.stderr, "");
+  assert.deepEqual(
+    status.result.stages.map((stage) => [stage.name, stage.status]),
+    [
+      ["path-command", "passed"],
+      ["workspace-files", "passed"],
+    ],
+  );
+  assert.equal(status.result.stages[0].exitCode, 0);
+  assert.equal(status.result.stages[1].exitCode, 0);
+  assert.equal(
+    status.result.workspaceWorkflow.stdout,
+    "alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n",
+  );
+  assert.equal(status.result.workspaceWorkflow.stderr, "");
+  assert.equal(status.result.workspaceWorkflow.result.exitCode, 0);
+  assert.equal(status.result.workspaceWorkflow.result.failureStage, null);
   assert.equal(
     status.result.artifacts.bash.sha256,
     "059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1",
@@ -265,6 +281,24 @@ async function runBashCoreutilsSmokePage(page) {
     "bash",
     "-lc",
     "pwd; ls /workspace; echo BASH_BROWSER_OK",
+  ]);
+  assert.deepEqual(status.result.workspaceWorkflow.targetCommand, [
+    "bash",
+    "-lc",
+    [
+      "set -eu",
+      "export LC_ALL=C",
+      "cd /workspace",
+      "rm -rf issue-215-smoke",
+      "mkdir issue-215-smoke",
+      "printf 'alpha\\nbeta\\n' > issue-215-smoke/input.txt",
+      "cat issue-215-smoke/input.txt",
+      "ls issue-215-smoke",
+      "rm issue-215-smoke/input.txt",
+      "ls issue-215-smoke",
+      "rm -r issue-215-smoke",
+      "printf 'ISSUE_215_WORKSPACE_OK\\n'",
+    ].join("; "),
   ]);
   const diagnostics = status.result.diagnostics.map((entry) => [
     entry.group,
@@ -285,7 +319,30 @@ async function runBashCoreutilsSmokePage(page) {
       ([group, name]) => group === "process" && name === "proc_join",
     ),
   );
-  return "PASS browser Bash/coreutils WebC e2e";
+  const workspaceDiagnostics =
+    status.result.workspaceWorkflow.diagnostics.map((entry) => [
+      entry.group,
+      entry.name,
+    ]);
+  assert.ok(
+    !workspaceDiagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_fork",
+    ),
+  );
+  assert.ok(
+    !workspaceDiagnostics.some(
+      ([group, name]) => group === "thread-event" && name === "stack_restore",
+    ),
+  );
+  assert.ok(
+    !workspaceDiagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_join",
+    ),
+  );
+  return [
+    "PASS browser Bash/coreutils WebC e2e",
+    "PASS browser Bash/coreutils workspace e2e",
+  ].join("\n");
 }
 
 async function runTerminalShellPage(page) {

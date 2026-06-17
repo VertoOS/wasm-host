@@ -640,16 +640,18 @@ async function runWasiEntrypoint(start, wasi, signal) {
 }
 
 export async function runRawWasiModuleInWorker(request, output, options = {}) {
-  if (options.workspaceStore) {
-    throw new BrowserWasiModuleError(
-      "unsupported",
-      "raw WASI workspaceStore cannot be sent to a worker; use worker: false or a workspaceSnapshot",
-      "runtime",
-    );
+  const workspaceStore = request.workspaceStore ?? options.workspaceStore;
+  if (workspaceStore) {
+    validateWorkspaceStore(workspaceStore);
   }
+  const workspaceSnapshot =
+    request.workspaceSnapshot ??
+    options.workspaceSnapshot ??
+    (workspaceStore ? await workspaceStore.exportSnapshot() : undefined);
   const workerRequest = await workerRunRequest({
     ...request,
-    workspaceSnapshot: request.workspaceSnapshot ?? options.workspaceSnapshot,
+    workspaceSnapshot,
+    workspaceStore: undefined,
   });
   let worker;
   try {
@@ -687,7 +689,13 @@ export async function runRawWasiModuleInWorker(request, output, options = {}) {
       outputChain.then(complete, reject);
     };
     const rejectWith = (error) => finish(() => reject(error));
-    const resolveWith = (result) => finish(() => resolve(result));
+    const resolveWith = (result) =>
+      finish(() => {
+        void commitWorkerWorkspaceResult(result, workspaceStore).then(
+          resolve,
+          reject,
+        );
+      });
     const postChildReply = (message) => {
       if (!settled) {
         postMessageToChildCommandWorker(worker, message);
@@ -963,6 +971,50 @@ async function workspaceResult(result, workspace) {
     await workspace.store.importSnapshot(workspaceSnapshot);
   }
   return { ...result, workspaceSnapshot };
+}
+
+async function commitWorkerWorkspaceResult(result, workspaceStore) {
+  if (workspaceStore && result?.workspaceSnapshot) {
+    await workspaceStore.importSnapshot(result.workspaceSnapshot);
+  }
+  return result;
+}
+
+async function importWasiWorkspaceSnapshot(workspace, snapshot) {
+  if (!workspace?.writable || !snapshot) {
+    return false;
+  }
+  const memory = createMemoryBrowserWorkspaceStore({ snapshot });
+  const normalizedSnapshot = await memory.exportSnapshot();
+  const fallbackFiles = Array.from(workspace.files.values())
+    .filter((file) => file?.fallback)
+    .map((file) => ({
+      bytes: copyBytes(file.bytes),
+      fallback: true,
+      path: file.path,
+    }));
+
+  workspace.dirs.clear();
+  for (const entry of normalizedSnapshot.directories) {
+    workspace.dirs.add(normalizeWorkspacePath(entry.path).relativePath);
+  }
+
+  workspace.files.clear();
+  for (const entry of normalizedSnapshot.files) {
+    const normalized = normalizeWorkspacePath(entry.path);
+    workspace.files.set(normalized.relativePath, {
+      bytes: base64ToBytes(entry.contentBase64),
+      mtimeMs: entry.mtimeMs,
+      path: normalized.relativePath,
+    });
+  }
+  for (const file of fallbackFiles) {
+    if (!workspace.files.has(file.path)) {
+      workspace.files.set(file.path, file);
+    }
+  }
+  workspace.dirty = true;
+  return true;
 }
 
 function exportWasiWorkspaceSnapshot(workspace) {
@@ -1476,6 +1528,12 @@ class WasiPreview1Runtime {
       );
     }
     const result = await this.childCommands.run(request);
+    if (result?.workspaceSnapshot) {
+      await importWasiWorkspaceSnapshot(
+        this.workspace,
+        result.workspaceSnapshot,
+      );
+    }
     this.mergeDiagnostics(result?.diagnostics);
     return { exitCode: Number(result?.exitCode ?? 0) };
   }
@@ -2190,7 +2248,15 @@ class WasiPreview1Runtime {
     if (!file) {
       return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
     }
-    if (!isDynamicFileFdNumber(to)) {
+    const replacingStdio = isStdioFd(to);
+    if (!isDynamicFileFdNumber(to) && !replacingStdio) {
+      return ERRNO_NOTCAPABLE;
+    }
+    if (
+      replacingStdio &&
+      file.mount !== "workspace" &&
+      !isOpenStdio(file)
+    ) {
       return ERRNO_NOTCAPABLE;
     }
     if (fd === to) {
@@ -2209,7 +2275,7 @@ class WasiPreview1Runtime {
     if (fdFlagsExt != null) {
       this.fdFlagsExt.set(to, fdFlagsExt);
     }
-    if (to >= this.nextFileFd) {
+    if (isDynamicFileFdNumber(to) && to >= this.nextFileFd) {
       this.nextFileFd = to + 1;
     }
     return ERRNO_SUCCESS;
@@ -2574,10 +2640,11 @@ class WasiPreview1Runtime {
       ? this.workspaceBasePathForRight(fd, WASI_RIGHT_PATH_FILESTAT_SET_TIMES)
       : { errno: ERRNO_BADF };
     if (workspaceBase.value != null) {
-      const path = resolveScratchPath(
+      const path = resolveMountedPath(
         workspaceBase.value,
         this.readString(pathPtr, pathLen),
-        { lookup: true },
+        WORKSPACE_PREOPEN_PATH,
+        { allowAbsolute: this.workspace.writable, lookup: true },
       );
       if (path.errno != null) {
         return path.errno;
@@ -2596,9 +2663,10 @@ class WasiPreview1Runtime {
       return base.errno;
     }
 
-    const path = resolveScratchPath(
+    const path = resolveMountedPath(
       base.value,
       this.readString(pathPtr, pathLen),
+      TMP_PREOPEN_PATH,
       { lookup: true },
     );
     if (path.errno != null) {
@@ -2746,7 +2814,7 @@ class WasiPreview1Runtime {
     if (base == null) {
       return null;
     }
-    const path = resolveScratchPath(base, pathValue, {
+    const path = resolveMountedPath(base, pathValue, TMP_PREOPEN_PATH, {
       lookup: true,
     });
     if (path.errno != null) {
@@ -2795,10 +2863,11 @@ class WasiPreview1Runtime {
     if ((dirflags & ~WASI_LOOKUP_SYMLINK_FOLLOW) !== 0) {
       return ERRNO_INVAL;
     }
-    const workspaceBase = this.mutableWorkspaceBasePath(fd);
-    if (workspaceBase != null) {
+    const pathText = this.readString(pathPtr, pathLen);
+    const directWorkspaceBase = this.mutableWorkspaceBasePath(fd);
+    if (directWorkspaceBase != null) {
       return this.openWorkspaceFile(
-        workspaceBase,
+        directWorkspaceBase,
         pathPtr,
         pathLen,
         oflags,
@@ -2807,6 +2876,27 @@ class WasiPreview1Runtime {
         fdflags,
         openedFdPtr,
       );
+    }
+    const cwdWorkspaceBase = this.workspace.writable
+      ? this.workspaceCwdBasePathForPathRequest(fd, pathText)
+      : null;
+    if (cwdWorkspaceBase != null) {
+      const errno = this.openWorkspaceFile(
+        cwdWorkspaceBase,
+        pathPtr,
+        pathLen,
+        oflags,
+        rightsBase,
+        rightsInheriting,
+        fdflags,
+        openedFdPtr,
+      );
+      if (
+        errno !== ERRNO_NOENT ||
+        pathOpenRequiresWorkspace(oflags, rightsBase, rightsInheriting, fdflags)
+      ) {
+        return errno;
+      }
     }
     const scratchBase = this.scratchBasePath(fd);
     if (scratchBase != null) {
@@ -2840,7 +2930,7 @@ class WasiPreview1Runtime {
     }
     const path = resolveScratchPath(
       readOnlyWorkspaceBase,
-      this.readString(pathPtr, pathLen),
+      pathText,
       { lookup: true },
     );
     if (path.errno != null) {
@@ -2944,34 +3034,72 @@ class WasiPreview1Runtime {
       return virtualPath.errno;
     }
     if (virtualPath?.mount === "workspace") {
-      if ((oflags & WASI_OFLAGS_DIRECTORY) === 0) {
+      const isDirectory =
+        virtualPath.path === "" ||
+        this.workspacePathKind(virtualPath.path) === "directory";
+      if (!isDirectory) {
         return ERRNO_NOTCAPABLE;
       }
+      if (
+        (oflags &
+          (WASI_OFLAGS_CREAT | WASI_OFLAGS_EXCL | WASI_OFLAGS_TRUNC)) !==
+        0
+      ) {
+        return ERRNO_NOTCAPABLE;
+      }
+      const workspaceRights = this.workspace.writable
+        ? WASI_WRITABLE_WORKSPACE_RIGHTS
+        : WASI_WORKSPACE_RIGHTS;
+      const workspaceFileRights = this.workspace.writable
+        ? WASI_SCRATCH_FILE_RIGHTS
+        : WASI_REGULAR_FILE_RIGHTS;
+      const directoryRights =
+        requestedRights === 0n
+          ? workspaceRights
+          : requestedRights & workspaceRights;
+      const inheritingRights =
+        BigInt(rightsInheriting) & workspaceFileRights;
       if (!this.workspace.writable) {
         return this.openReadOnlyWorkspaceDirectory(
           virtualPath.path,
-          requestedRights,
-          rightsInheriting,
+          directoryRights,
+          inheritingRights,
           fdflags,
           openedFdPtr,
         );
       }
       return this.openWorkspaceDirectory(
         virtualPath.path,
-        requestedRights,
-        rightsInheriting,
+        directoryRights,
+        inheritingRights,
         fdflags,
         openedFdPtr,
       );
     }
     if (virtualPath?.mount === "scratch") {
-      if ((oflags & WASI_OFLAGS_DIRECTORY) === 0) {
+      const isDirectory =
+        virtualPath.path === "" ||
+        this.scratchPathKind(virtualPath.path) === "directory";
+      if (!isDirectory) {
         return ERRNO_NOTCAPABLE;
       }
+      if (
+        (oflags &
+          (WASI_OFLAGS_CREAT | WASI_OFLAGS_EXCL | WASI_OFLAGS_TRUNC)) !==
+        0
+      ) {
+        return ERRNO_NOTCAPABLE;
+      }
+      const directoryRights =
+        requestedRights === 0n
+          ? WASI_TMP_RIGHTS
+          : requestedRights & WASI_TMP_RIGHTS;
+      const inheritingRights =
+        BigInt(rightsInheriting) & WASI_SCRATCH_FILE_RIGHTS;
       return this.openScratchDirectory(
         virtualPath.path,
-        requestedRights,
-        rightsInheriting,
+        directoryRights,
+        inheritingRights,
         fdflags,
         openedFdPtr,
       );
@@ -3081,10 +3209,21 @@ class WasiPreview1Runtime {
     if ((fdflags & ~WASI_FDFLAGS_APPEND) !== 0) {
       return ERRNO_INVAL;
     }
-    const requestedRights = BigInt(rightsBase);
-    const path = resolveScratchPath(
+    const rawRequestedRights = BigInt(rightsBase);
+    const requestedRights =
+      rawRequestedRights === 0n
+        ? WASI_SCRATCH_FILE_RIGHTS
+        : rawRequestedRights & WASI_SCRATCH_FILE_RIGHTS;
+    const directoryRights =
+      rawRequestedRights === 0n
+        ? WASI_TMP_RIGHTS
+        : rawRequestedRights & WASI_TMP_RIGHTS;
+    const inheritingRights =
+      BigInt(rightsInheriting) & WASI_SCRATCH_FILE_RIGHTS;
+    const path = resolveMountedPath(
       basePath,
       this.readString(pathPtr, pathLen),
+      TMP_PREOPEN_PATH,
     );
     if (path.errno != null) {
       return path.errno;
@@ -3092,15 +3231,15 @@ class WasiPreview1Runtime {
     if ((oflags & WASI_OFLAGS_DIRECTORY) !== 0) {
       return this.openScratchDirectory(
         path.value,
-        requestedRights,
-        rightsInheriting,
+        directoryRights,
+        inheritingRights,
         fdflags,
         openedFdPtr,
       );
     }
     if (
       !allowsRights(requestedRights, WASI_SCRATCH_FILE_RIGHTS) ||
-      !allowsRights(BigInt(rightsInheriting), WASI_SCRATCH_FILE_RIGHTS)
+      !allowsRights(inheritingRights, WASI_SCRATCH_FILE_RIGHTS)
     ) {
       return ERRNO_NOTCAPABLE;
     }
@@ -3208,10 +3347,22 @@ class WasiPreview1Runtime {
     if ((fdflags & ~WASI_FDFLAGS_APPEND) !== 0) {
       return ERRNO_INVAL;
     }
-    const requestedRights = BigInt(rightsBase);
-    const path = resolveScratchPath(
+    const rawRequestedRights = BigInt(rightsBase);
+    const requestedRights =
+      rawRequestedRights === 0n
+        ? WASI_SCRATCH_FILE_RIGHTS
+        : rawRequestedRights & WASI_SCRATCH_FILE_RIGHTS;
+    const directoryRights =
+      rawRequestedRights === 0n
+        ? WASI_WRITABLE_WORKSPACE_RIGHTS
+        : rawRequestedRights & WASI_WRITABLE_WORKSPACE_RIGHTS;
+    const inheritingRights =
+      BigInt(rightsInheriting) & WASI_SCRATCH_FILE_RIGHTS;
+    const path = resolveMountedPath(
       basePath,
       this.readString(pathPtr, pathLen),
+      WORKSPACE_PREOPEN_PATH,
+      { allowAbsolute: this.workspace.writable },
     );
     if (path.errno != null) {
       return path.errno;
@@ -3219,15 +3370,15 @@ class WasiPreview1Runtime {
     if ((oflags & WASI_OFLAGS_DIRECTORY) !== 0) {
       return this.openWorkspaceDirectory(
         path.value,
-        requestedRights,
-        rightsInheriting,
+        directoryRights,
+        inheritingRights,
         fdflags,
         openedFdPtr,
       );
     }
     if (
       !allowsRights(requestedRights, WASI_SCRATCH_FILE_RIGHTS) ||
-      !allowsRights(BigInt(rightsInheriting), WASI_SCRATCH_FILE_RIGHTS)
+      !allowsRights(inheritingRights, WASI_SCRATCH_FILE_RIGHTS)
     ) {
       return ERRNO_NOTCAPABLE;
     }
@@ -3373,7 +3524,11 @@ class WasiPreview1Runtime {
 
   pathCreateDirectory(fd, pathPtr, pathLen) {
     this.throwIfAborted();
-    const workspaceBase = this.mutableWorkspaceBasePath(fd);
+    const pathText = this.readString(pathPtr, pathLen);
+    const workspaceBase = this.mutableWorkspaceBasePathForPathRequest(
+      fd,
+      pathText,
+    );
     if (workspaceBase != null) {
       return this.createWorkspaceDirectory(workspaceBase, pathPtr, pathLen);
     }
@@ -3381,7 +3536,11 @@ class WasiPreview1Runtime {
     if (base == null) {
       return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
     }
-    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    const path = resolveMountedPath(
+      base,
+      pathText,
+      TMP_PREOPEN_PATH,
+    );
     if (path.errno != null) {
       return path.errno;
     }
@@ -3401,7 +3560,12 @@ class WasiPreview1Runtime {
   }
 
   createWorkspaceDirectory(base, pathPtr, pathLen) {
-    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    const path = resolveMountedPath(
+      base,
+      this.readString(pathPtr, pathLen),
+      WORKSPACE_PREOPEN_PATH,
+      { allowAbsolute: this.workspace.writable },
+    );
     if (path.errno != null) {
       return path.errno;
     }
@@ -3423,7 +3587,11 @@ class WasiPreview1Runtime {
 
   pathUnlinkFile(fd, pathPtr, pathLen) {
     this.throwIfAborted();
-    const workspaceBase = this.mutableWorkspaceBasePath(fd);
+    const pathText = this.readString(pathPtr, pathLen);
+    const workspaceBase = this.mutableWorkspaceBasePathForPathRequest(
+      fd,
+      pathText,
+    );
     if (workspaceBase != null) {
       return this.unlinkWorkspaceFile(workspaceBase, pathPtr, pathLen);
     }
@@ -3431,7 +3599,11 @@ class WasiPreview1Runtime {
     if (base == null) {
       return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
     }
-    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    const path = resolveMountedPath(
+      base,
+      pathText,
+      TMP_PREOPEN_PATH,
+    );
     if (path.errno != null) {
       return path.errno;
     }
@@ -3449,7 +3621,12 @@ class WasiPreview1Runtime {
   }
 
   unlinkWorkspaceFile(base, pathPtr, pathLen) {
-    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    const path = resolveMountedPath(
+      base,
+      this.readString(pathPtr, pathLen),
+      WORKSPACE_PREOPEN_PATH,
+      { allowAbsolute: this.workspace.writable },
+    );
     if (path.errno != null) {
       return path.errno;
     }
@@ -3470,7 +3647,11 @@ class WasiPreview1Runtime {
 
   pathRemoveDirectory(fd, pathPtr, pathLen) {
     this.throwIfAborted();
-    const workspaceBase = this.mutableWorkspaceBasePath(fd);
+    const pathText = this.readString(pathPtr, pathLen);
+    const workspaceBase = this.mutableWorkspaceBasePathForPathRequest(
+      fd,
+      pathText,
+    );
     if (workspaceBase != null) {
       return this.removeWorkspaceDirectory(workspaceBase, pathPtr, pathLen);
     }
@@ -3478,7 +3659,11 @@ class WasiPreview1Runtime {
     if (base == null) {
       return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
     }
-    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    const path = resolveMountedPath(
+      base,
+      pathText,
+      TMP_PREOPEN_PATH,
+    );
     if (path.errno != null) {
       return path.errno;
     }
@@ -3512,7 +3697,12 @@ class WasiPreview1Runtime {
   }
 
   removeWorkspaceDirectory(base, pathPtr, pathLen) {
-    const path = resolveScratchPath(base, this.readString(pathPtr, pathLen));
+    const path = resolveMountedPath(
+      base,
+      this.readString(pathPtr, pathLen),
+      WORKSPACE_PREOPEN_PATH,
+      { allowAbsolute: this.workspace.writable },
+    );
     if (path.errno != null) {
       return path.errno;
     }
@@ -3575,16 +3765,18 @@ class WasiPreview1Runtime {
       return targetBase.errno;
     }
 
-    const source = resolveScratchPath(
+    const source = resolveMountedPath(
       sourceBase.value,
       this.readString(oldPathPtr, oldPathLen),
+      TMP_PREOPEN_PATH,
     );
     if (source.errno != null) {
       return source.errno;
     }
-    const target = resolveScratchPath(
+    const target = resolveMountedPath(
       targetBase.value,
       this.readString(newPathPtr, newPathLen),
+      TMP_PREOPEN_PATH,
     );
     if (target.errno != null) {
       return target.errno;
@@ -3642,43 +3834,51 @@ class WasiPreview1Runtime {
     newPathPtr,
     newPathLen,
   ) {
-    if (
-      !this.workspace.writable ||
-      (!this.isWorkspaceFd(oldFd) && !this.isWorkspaceFd(newFd))
-    ) {
+    if (!this.workspace.writable) {
       return null;
     }
-    if (!this.isWorkspaceFd(oldFd) || !this.isWorkspaceFd(newFd)) {
+
+    const oldPath = this.readString(oldPathPtr, oldPathLen);
+    const newPath = this.readString(newPathPtr, newPathLen);
+    const sourceBase = this.workspaceBasePathForRightOrPathRequest(
+      oldFd,
+      oldPath,
+      WASI_RIGHT_PATH_RENAME_SOURCE,
+    );
+    const targetBase = this.workspaceBasePathForRightOrPathRequest(
+      newFd,
+      newPath,
+      WASI_RIGHT_PATH_RENAME_TARGET,
+    );
+    if (sourceBase == null && targetBase == null) {
+      return null;
+    }
+    if (sourceBase?.errno != null) {
+      return sourceBase.errno;
+    }
+    if (targetBase?.errno != null) {
+      return targetBase.errno;
+    }
+    if (sourceBase == null || targetBase == null) {
       return this.fdStat(oldFd) && this.fdStat(newFd)
         ? ERRNO_NOTCAPABLE
         : ERRNO_BADF;
     }
 
-    const sourceBase = this.workspaceBasePathForRight(
-      oldFd,
-      WASI_RIGHT_PATH_RENAME_SOURCE,
-    );
-    if (sourceBase.errno != null) {
-      return sourceBase.errno;
-    }
-    const targetBase = this.workspaceBasePathForRight(
-      newFd,
-      WASI_RIGHT_PATH_RENAME_TARGET,
-    );
-    if (targetBase.errno != null) {
-      return targetBase.errno;
-    }
-
-    const source = resolveScratchPath(
+    const source = resolveMountedPath(
       sourceBase.value,
-      this.readString(oldPathPtr, oldPathLen),
+      oldPath,
+      WORKSPACE_PREOPEN_PATH,
+      { allowAbsolute: this.workspace.writable },
     );
     if (source.errno != null) {
       return source.errno;
     }
-    const target = resolveScratchPath(
+    const target = resolveMountedPath(
       targetBase.value,
-      this.readString(newPathPtr, newPathLen),
+      newPath,
+      WORKSPACE_PREOPEN_PATH,
+      { allowAbsolute: this.workspace.writable },
     );
     if (target.errno != null) {
       return target.errno;
@@ -3728,6 +3928,247 @@ class WasiPreview1Runtime {
     }
     this.markWorkspaceDirty();
     return ERRNO_SUCCESS;
+  }
+
+  workspaceBasePathForPathRequest(fd, pathValue) {
+    const directBase = this.workspaceBasePath(fd);
+    if (directBase != null) {
+      return directBase;
+    }
+    return this.workspaceCwdBasePathForPathRequest(fd, pathValue);
+  }
+
+  mutableWorkspaceBasePathForPathRequest(fd, pathValue) {
+    if (!this.workspace.writable) {
+      return null;
+    }
+    return this.workspaceBasePathForPathRequest(fd, pathValue);
+  }
+
+  workspaceBasePathForRightOrPathRequest(fd, pathValue, right) {
+    if (!this.workspace.writable) {
+      return null;
+    }
+    const directBase = this.workspaceBasePathForRight(fd, right);
+    if (directBase.value != null || this.isWorkspaceFd(fd)) {
+      return directBase;
+    }
+    return this.workspaceCwdBasePathForPathRequest(fd, pathValue) == null
+      ? null
+      : {
+          value: this.workspaceCwdBasePathForPathRequest(fd, pathValue),
+        };
+  }
+
+  workspaceCwdBasePathForPathRequest(fd, pathValue) {
+    const packageRootBase = this.packageRootBasePath(fd);
+    if (packageRootBase !== "") {
+      return null;
+    }
+    const pathText = String(pathValue ?? "");
+    if (mountedRelativePath(pathText, WORKSPACE_PREOPEN_PATH) != null) {
+      return "";
+    }
+    if (pathText.startsWith("/")) {
+      return null;
+    }
+    return mountedRelativePath(this.cwd, WORKSPACE_PREOPEN_PATH);
+  }
+
+  scratchBasePath(fd) {
+    if (fd === TMP_FD) {
+      return "";
+    }
+    const file = this.openFiles.get(fd);
+    return isOpenScratchDirectory(file) && file.path != null ? file.path : null;
+  }
+
+  packageRootBasePath(fd) {
+    if (fd === this.packageRootFd) {
+      return "";
+    }
+    const file = this.openFiles.get(fd);
+    return isOpenPackageRootDirectory(file) && file.path != null
+      ? file.path
+      : null;
+  }
+
+  workspaceBasePath(fd) {
+    if (fd === WORKSPACE_FD) {
+      return "";
+    }
+    const file = this.openFiles.get(fd);
+    return isOpenWorkspaceDirectory(file) && file.path != null ? file.path : null;
+  }
+
+  mutableWorkspaceBasePath(fd) {
+    if (!this.workspace.writable) {
+      return null;
+    }
+    return this.workspaceBasePath(fd);
+  }
+
+  isWorkspaceFd(fd) {
+    return fd === WORKSPACE_FD || isOpenWorkspaceDirectory(this.openFiles.get(fd));
+  }
+
+  pathStat(fd, pathValue) {
+    const workspaceStat = this.workspacePathStat(fd, pathValue);
+    if (workspaceStat != null) {
+      return workspaceStat;
+    }
+    const packageRootStat = this.packageRootPathStat(fd, pathValue);
+    if (packageRootStat != null) {
+      return packageRootStat;
+    }
+    const scratchStat = this.scratchPathStat(fd, pathValue);
+    if (scratchStat != null) {
+      return scratchStat;
+    }
+    return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
+  }
+
+  workspacePathStat(fd, pathValue) {
+    const directBase = this.workspaceBasePath(fd);
+    const cwdBase =
+      directBase == null
+        ? this.workspaceCwdBasePathForPathRequest(fd, pathValue)
+        : null;
+    const base = directBase ?? cwdBase;
+    if (base == null) {
+      return null;
+    }
+    const pathText = String(pathValue ?? "");
+    if (pathText === "") {
+      return { errno: ERRNO_NOENT };
+    }
+    const path = resolveMountedPath(base, pathText, WORKSPACE_PREOPEN_PATH, {
+      allowAbsolute: this.workspace.writable,
+      lookup: true,
+    });
+    if (path.errno != null) {
+      return path;
+    }
+    if (path.value === "") {
+      return {
+        filetype: WASI_FILETYPE_DIRECTORY,
+        size: 0,
+      };
+    }
+    const stat = statPath(this.files, this.workspaceDirs, path.value);
+    return cwdBase != null && stat.errno === ERRNO_NOENT ? null : stat;
+  }
+
+  workspaceDirectoryEntries(path = "") {
+    return directoryEntries(this.files, this.workspaceDirs, path);
+  }
+
+  scratchDirectoryEntries(path) {
+    return directoryEntries(this.scratchFiles, this.scratchDirs, path);
+  }
+
+  fdStat(fd) {
+    const file = this.openFiles.get(fd);
+    if (file) {
+      if (isOpenStdio(file) || isOpenPipe(file)) {
+        return {
+          filetype: WASI_FILETYPE_CHARACTER_DEVICE,
+          inheriting: 0n,
+          rights: file.rights,
+          size:
+            isOpenPipe(file) && file.direction === "read"
+              ? file.pipe.bytes.byteLength
+              : 0,
+        };
+      }
+      if (isOpenDirectory(file)) {
+        return {
+          filetype: WASI_FILETYPE_DIRECTORY,
+          inheriting: file.inheriting ?? WASI_SCRATCH_FILE_RIGHTS,
+          rights: file.rights,
+          size: 0,
+        };
+      }
+      return {
+        filetype: WASI_FILETYPE_REGULAR_FILE,
+        inheriting: 0n,
+        rights: file.rights,
+        size: file.record.bytes.byteLength,
+      };
+    }
+    const stdioRightsValue = stdioRights(fd);
+    if (stdioRightsValue != null) {
+      return {
+        filetype: WASI_FILETYPE_CHARACTER_DEVICE,
+        inheriting: 0n,
+        rights: stdioRightsValue,
+        size: 0,
+      };
+    }
+    if (fd === WORKSPACE_FD) {
+      return {
+        filetype: WASI_FILETYPE_DIRECTORY,
+        inheriting: this.workspace.writable
+          ? WASI_SCRATCH_FILE_RIGHTS
+          : WASI_REGULAR_FILE_RIGHTS,
+        rights: this.workspace.writable
+          ? WASI_WRITABLE_WORKSPACE_RIGHTS
+          : WASI_WORKSPACE_RIGHTS,
+        size: 0,
+      };
+    }
+    if (fd === TMP_FD) {
+      return {
+        filetype: WASI_FILETYPE_DIRECTORY,
+        inheriting: WASI_SCRATCH_FILE_RIGHTS,
+        rights: WASI_TMP_RIGHTS,
+        size: 0,
+      };
+    }
+    if (fd === this.packageRootFd) {
+      return {
+        filetype: WASI_FILETYPE_DIRECTORY,
+        inheriting: WASI_REGULAR_FILE_RIGHTS,
+        rights: WASI_WORKSPACE_RIGHTS,
+        size: 0,
+      };
+    }
+    return null;
+  }
+
+  pathStatForFd(fd, pathValue) {
+    const stat = this.pathStat(fd, pathValue);
+    if (stat == null) {
+      return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
+    }
+    return stat;
+  }
+
+  resolvePathForFd(fd, pathValue) {
+    const workspaceBase = this.workspaceBasePathForPathRequest(fd, pathValue);
+    if (workspaceBase != null) {
+      return resolveMountedPath(workspaceBase, pathValue, WORKSPACE_PREOPEN_PATH, {
+        allowAbsolute: this.workspace.writable,
+        lookup: true,
+      });
+    }
+    const packageRootBase = this.packageRootBasePath(fd);
+    if (packageRootBase != null) {
+      return resolvePackageRootPath(packageRootBase, pathValue);
+    }
+    const base = this.scratchBasePath(fd);
+    if (base == null) {
+      return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
+    }
+    return resolveMountedPath(base, pathValue, TMP_PREOPEN_PATH, {
+      lookup: true,
+    });
+  }
+
+  markWorkspaceDirty() {
+    if (this.workspace.writable) {
+      this.workspace.dirty = true;
+    }
   }
 
   scratchBasePathForRight(fd, right) {
@@ -3979,188 +4420,6 @@ class WasiPreview1Runtime {
       ) {
         openFile.path = null;
       }
-    }
-  }
-
-  scratchBasePath(fd) {
-    if (fd === TMP_FD) {
-      return "";
-    }
-    const file = this.openFiles.get(fd);
-    return isOpenScratchDirectory(file) && file.path != null ? file.path : null;
-  }
-
-  packageRootBasePath(fd) {
-    if (fd === this.packageRootFd) {
-      return "";
-    }
-    const file = this.openFiles.get(fd);
-    return isOpenPackageRootDirectory(file) && file.path != null
-      ? file.path
-      : null;
-  }
-
-  workspaceBasePath(fd) {
-    if (fd === WORKSPACE_FD) {
-      return "";
-    }
-    const file = this.openFiles.get(fd);
-    return isOpenWorkspaceDirectory(file) && file.path != null ? file.path : null;
-  }
-
-  mutableWorkspaceBasePath(fd) {
-    if (!this.workspace.writable) {
-      return null;
-    }
-    return this.workspaceBasePath(fd);
-  }
-
-  isWorkspaceFd(fd) {
-    return fd === WORKSPACE_FD || isOpenWorkspaceDirectory(this.openFiles.get(fd));
-  }
-
-  pathStat(fd, pathValue) {
-    const packageRootStat = this.packageRootPathStat(fd, pathValue);
-    if (packageRootStat != null) {
-      return packageRootStat;
-    }
-    const workspaceStat = this.workspacePathStat(fd, pathValue);
-    if (workspaceStat != null) {
-      return workspaceStat;
-    }
-    const scratchStat = this.scratchPathStat(fd, pathValue);
-    if (scratchStat != null) {
-      return scratchStat;
-    }
-    return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
-  }
-
-  workspacePathStat(fd, pathValue) {
-    const base = this.workspaceBasePath(fd);
-    if (base == null) {
-      return null;
-    }
-    const pathText = String(pathValue ?? "");
-    if (pathText === "") {
-      return { errno: ERRNO_NOENT };
-    }
-    const path = resolveScratchPath(base, pathText, { lookup: true });
-    if (path.errno != null) {
-      return path;
-    }
-    if (path.value === "") {
-      return {
-        filetype: WASI_FILETYPE_DIRECTORY,
-        size: 0,
-      };
-    }
-    return statPath(this.files, this.workspaceDirs, path.value);
-  }
-
-  workspaceDirectoryEntries(path = "") {
-    return directoryEntries(this.files, this.workspaceDirs, path);
-  }
-
-  scratchDirectoryEntries(path) {
-    return directoryEntries(this.scratchFiles, this.scratchDirs, path);
-  }
-
-  fdStat(fd) {
-    const stdioRightsValue = stdioRights(fd);
-    if (stdioRightsValue != null) {
-      return {
-        filetype: WASI_FILETYPE_CHARACTER_DEVICE,
-        inheriting: 0n,
-        rights: stdioRightsValue,
-        size: 0,
-      };
-    }
-    if (fd === WORKSPACE_FD) {
-      return {
-        filetype: WASI_FILETYPE_DIRECTORY,
-        inheriting: this.workspace.writable
-          ? WASI_SCRATCH_FILE_RIGHTS
-          : WASI_REGULAR_FILE_RIGHTS,
-        rights: this.workspace.writable
-          ? WASI_WRITABLE_WORKSPACE_RIGHTS
-          : WASI_WORKSPACE_RIGHTS,
-        size: 0,
-      };
-    }
-    if (fd === TMP_FD) {
-      return {
-        filetype: WASI_FILETYPE_DIRECTORY,
-        inheriting: WASI_SCRATCH_FILE_RIGHTS,
-        rights: WASI_TMP_RIGHTS,
-        size: 0,
-      };
-    }
-    if (fd === this.packageRootFd) {
-      return {
-        filetype: WASI_FILETYPE_DIRECTORY,
-        inheriting: WASI_REGULAR_FILE_RIGHTS,
-        rights: WASI_WORKSPACE_RIGHTS,
-        size: 0,
-      };
-    }
-    const file = this.openFiles.get(fd);
-    if (file) {
-      if (isOpenStdio(file) || isOpenPipe(file)) {
-        return {
-          filetype: WASI_FILETYPE_CHARACTER_DEVICE,
-          inheriting: 0n,
-          rights: file.rights,
-          size:
-            isOpenPipe(file) && file.direction === "read"
-              ? file.pipe.bytes.byteLength
-              : 0,
-        };
-      }
-      if (isOpenDirectory(file)) {
-        return {
-          filetype: WASI_FILETYPE_DIRECTORY,
-          inheriting: file.inheriting ?? WASI_SCRATCH_FILE_RIGHTS,
-          rights: file.rights,
-          size: 0,
-        };
-      }
-      return {
-        filetype: WASI_FILETYPE_REGULAR_FILE,
-        inheriting: 0n,
-        rights: file.rights,
-        size: file.record.bytes.byteLength,
-      };
-    }
-    return null;
-  }
-
-  pathStatForFd(fd, pathValue) {
-    const stat = this.pathStat(fd, pathValue);
-    if (stat == null) {
-      return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
-    }
-    return stat;
-  }
-
-  resolvePathForFd(fd, pathValue) {
-    const packageRootBase = this.packageRootBasePath(fd);
-    if (packageRootBase != null) {
-      return resolvePackageRootPath(packageRootBase, pathValue);
-    }
-    const workspaceBase = this.workspaceBasePath(fd);
-    if (workspaceBase != null) {
-      return resolveScratchPath(workspaceBase, pathValue, { lookup: true });
-    }
-    const base = this.scratchBasePath(fd);
-    if (base == null) {
-      return { errno: this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF };
-    }
-    return resolveScratchPath(base, pathValue, { lookup: true });
-  }
-
-  markWorkspaceDirty() {
-    if (this.workspace.writable) {
-      this.workspace.dirty = true;
     }
   }
 
@@ -4720,6 +4979,11 @@ class WasixRuntime {
       stdout,
       wasixExecArgv0: true,
     };
+    if (this.host.workspace.writable) {
+      request.workspaceSnapshot = exportWasiWorkspaceSnapshot(
+        this.host.workspace,
+      );
+    }
     if (this.host.diagnostics.unsupportedWasixCalls) {
       request.diagnostics = this.host.diagnostics;
     }
@@ -5298,6 +5562,22 @@ function requestsWriteRights(rights) {
   return (BigInt(rights) & WASI_WRITE_RIGHTS) !== 0n;
 }
 
+function pathOpenRequiresWorkspace(
+  oflags,
+  rightsBase,
+  rightsInheriting,
+  fdflags,
+) {
+  return (
+    (oflags &
+      (WASI_OFLAGS_CREAT | WASI_OFLAGS_EXCL | WASI_OFLAGS_TRUNC)) !==
+      0 ||
+    (fdflags & WASI_FDFLAGS_APPEND) !== 0 ||
+    requestsWriteRights(rightsBase) ||
+    requestsWriteRights(rightsInheriting)
+  );
+}
+
 function allowsRights(requested, allowed) {
   return (requested & ~allowed) === 0n;
 }
@@ -5391,6 +5671,10 @@ function isOpenPackageRootDirectory(file) {
 
 function isDynamicFileFdNumber(fd) {
   return Number.isInteger(fd) && fd >= FIRST_FILE_FD;
+}
+
+function isStdioFd(fd) {
+  return fd === STDIN_FD || fd === STDOUT_FD || fd === STDERR_FD;
 }
 
 function resizeOpenFile(file, size) {
@@ -5584,6 +5868,22 @@ function resolveScratchPath(basePath, pathValue, options = {}) {
   };
 }
 
+function resolveMountedPath(basePath, pathValue, mountPath, options = {}) {
+  const { allowAbsolute = false, ...resolveOptions } = options;
+  let path = String(pathValue ?? "");
+  let base = basePath;
+  const mountedAbsolute = allowAbsolute
+    ? mountedRelativePath(path, mountPath)
+    : null;
+  if (mountedAbsolute != null) {
+    path = mountedAbsolute || ".";
+    base = "";
+  } else if (path.startsWith("/")) {
+    return { errno: ERRNO_NOTCAPABLE };
+  }
+  return resolveScratchPath(base, path, resolveOptions);
+}
+
 function resolvePackageRootPath(basePath, pathValue) {
   let path = String(pathValue ?? "");
   if (basePath === "" && path.startsWith("/")) {
@@ -5604,19 +5904,18 @@ function rootVirtualMountPath(basePath, pathValue) {
   if (normalized == null) {
     return { errno: ERRNO_NOTCAPABLE };
   }
-  if (normalized === "workspace" || normalized.startsWith("workspace/")) {
+  const workspacePath = mountedRelativePath(normalized, "workspace");
+  if (workspacePath != null) {
     return {
       mount: "workspace",
-      path:
-        normalized === "workspace"
-          ? ""
-          : normalized.slice("workspace/".length),
+      path: workspacePath,
     };
   }
-  if (normalized === "tmp" || normalized.startsWith("tmp/")) {
+  const scratchPath = mountedRelativePath(normalized, "tmp");
+  if (scratchPath != null) {
     return {
       mount: "scratch",
-      path: normalized === "tmp" ? "" : normalized.slice("tmp/".length),
+      path: scratchPath,
     };
   }
   return null;
@@ -6024,6 +6323,9 @@ function normalizePackageFilePath(value) {
 
 function normalizeWasiPath(value) {
   const path = String(value ?? "");
+  if (path === ".") {
+    return "";
+  }
   if (path.startsWith("/")) {
     return null;
   }
@@ -6088,11 +6390,16 @@ function absolutePathSegments(value) {
 }
 
 function mountedRelativePath(path, mountPath) {
-  if (path === mountPath) {
+  const value = String(path ?? "");
+  if (value === mountPath || value === `${mountPath}%`) {
     return "";
   }
   const prefix = `${mountPath}/`;
-  return path.startsWith(prefix) ? path.slice(prefix.length) : null;
+  if (value.startsWith(prefix)) {
+    return value.slice(prefix.length);
+  }
+  const wasixPrefix = `${mountPath}%/`;
+  return value.startsWith(wasixPrefix) ? value.slice(wasixPrefix.length) : null;
 }
 
 function normalizeRelativeWasiPath(path) {
@@ -6401,6 +6708,9 @@ function workerChildCommandRequest(value = {}) {
   if (value.wasixExecArgv0 === true) {
     request.wasixExecArgv0 = true;
   }
+  if (value.workspaceSnapshot) {
+    request.workspaceSnapshot = cloneWorkspaceSnapshot(value.workspaceSnapshot);
+  }
   return request;
 }
 
@@ -6440,6 +6750,11 @@ function workerChildCommandResult(result = {}) {
   const diagnostics = normalizeRawWasiResultDiagnostics(result.diagnostics);
   if (diagnostics) {
     childResult.diagnostics = diagnostics;
+  }
+  if (result.workspaceSnapshot) {
+    childResult.workspaceSnapshot = cloneWorkspaceSnapshot(
+      result.workspaceSnapshot,
+    );
   }
   return childResult;
 }

@@ -1,7 +1,10 @@
 import {
+  CODEX_BROWSER_WORKSPACE_EDIT_BEFORE,
+  CODEX_BROWSER_WORKSPACE_EDIT_PATH,
   assertCodexBrowserRequestPayload,
   codexBrowserModelRequestFixture,
   codexBrowserRequestBuilderFixture,
+  codexBrowserWorkspaceEditFixture,
 } from "../fixtures/codex-browser-request-builder-core.js";
 import {
   CODEX_VERSION_SMOKE_STDOUT_PREFIX,
@@ -13,6 +16,7 @@ import {
   createBrowserTerminalSession,
   createTerminalTranscript,
 } from "../src/terminal.js";
+import { createDefaultBrowserWorkspaceStore } from "../src/workspace.js";
 
 const decoder = new TextDecoder();
 const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
@@ -69,6 +73,7 @@ export async function runCodexVersionSmoke() {
     const httpBridge = await runHttpBridgeSmoke(worker);
     const requestBuilder = await runCodexBrowserRequestBuilder(worker);
     const modelTurn = await runCodexBrowserModelTurn(worker);
+    const workspaceEdit = await runCodexBrowserWorkspaceEdit(worker);
 
     return {
       artifactKind: load.loaded.artifactKind,
@@ -81,6 +86,7 @@ export async function runCodexVersionSmoke() {
       stderr,
       stdout,
       stdoutBytes: result.stdoutBytes,
+      workspaceEdit,
       workerEntrypoint: new URL(
         "../src/command-worker-entry.js",
         import.meta.url,
@@ -89,6 +95,48 @@ export async function runCodexVersionSmoke() {
   } finally {
     worker.terminate();
   }
+}
+
+async function runCodexBrowserWorkspaceEdit(worker) {
+  const fixture = await codexBrowserWorkspaceEditFixture();
+  const workspace = createDefaultBrowserWorkspaceStore();
+  await workspace.createDirectory("/workspace/notes", { recursive: true });
+  await workspace.writeFile(
+    CODEX_BROWSER_WORKSPACE_EDIT_PATH,
+    CODEX_BROWSER_WORKSPACE_EDIT_BEFORE,
+  );
+
+  const load = await dispatchAndCollect(worker, fixture.commandLoad);
+  assert(
+    load.loaded.artifactKind === "codex-browser",
+    "Codex browser workspace edit package should load",
+  );
+  const run = await dispatchAndCollect(worker, fixture.commandRun);
+  const stdout = chunksText(run.stdout);
+  const stderr = chunksText(run.stderr);
+  const payload = JSON.parse(stdout);
+  const verifier = createDefaultBrowserWorkspaceStore();
+  const edited = chunksText([
+    await verifier.readFile(CODEX_BROWSER_WORKSPACE_EDIT_PATH),
+  ]);
+
+  assert(
+    payload.path === CODEX_BROWSER_WORKSPACE_EDIT_PATH,
+    "Codex workspace edit should report the edited path",
+  );
+  assert(
+    edited === "Browser Codex can edit this file.\n",
+    "Codex workspace edit should persist the edited file",
+  );
+  assert(stderr === "", "Codex workspace edit stderr should be empty");
+  return {
+    edited,
+    exitCode: run.complete.result.exitCode,
+    path: payload.path,
+    replacements: payload.replacements,
+    stderr,
+    stdoutBytes: run.complete.result.stdoutBytes,
+  };
 }
 
 async function runCodexBrowserModelTurn(worker) {

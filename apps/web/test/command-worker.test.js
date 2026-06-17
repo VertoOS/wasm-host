@@ -215,6 +215,61 @@ test("BrowserCommandWorkerRuntime exposes an HTTP bridge client to executors", a
   assert.equal(port.messages.at(-1).type, "command.complete");
 });
 
+test("BrowserCommandWorkerRuntime injects workspace stores only for codex-browser packages", async () => {
+  const port = recordingPort();
+  const workspaceStore = { readFile() {}, writeFile() {} };
+  const seen = {};
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    workspaceStore,
+    executors: {
+      "codex-browser": {
+        async run(request) {
+          seen.codexBrowser = request.workspaceStore;
+          return { exitCode: 0 };
+        },
+      },
+      test: {
+        async run(request) {
+          seen.test = request.workspaceStore;
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-codex-browser",
+    package: {
+      commands: ["workspace-edit"],
+      id: "codex-browser",
+      type: "codex-browser",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-test",
+    package: { commands: ["run-test"], id: "test-pkg", type: "test" },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-codex-browser",
+    packageId: "codex-browser",
+    command: "workspace-edit",
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-test",
+    packageId: "test-pkg",
+    command: "run-test",
+  });
+
+  assert.equal(seen.codexBrowser, workspaceStore);
+  assert.equal(seen.test, undefined);
+});
+
 test("BrowserCommandWorkerRuntime preserves HTTP bridge errors for executors", async () => {
   const port = recordingPort();
   let seenError = null;

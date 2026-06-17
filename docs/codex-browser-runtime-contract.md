@@ -139,6 +139,14 @@ the protocol itself. The browser host needs these neutral concepts first:
 | Auth and approval | Secrets remain host-owned opaque references; approvals, permission requests, and elicitations are separate protocol events with user-visible decisions. |
 | Transports | Browser-safe transports can be packaged commands, WASM components, workers, HTTP, WebSocket, or gateways. Native stdio server launch and arbitrary local process spawn are unsupported browser capabilities. |
 
+`apps/web` must not grow first-class high-level integration modules for MCP,
+plugins, OAuth, providers, or connectors. Those integrations should live in
+separate packages or adapter layers over the neutral browser tool protocol.
+The web package check enforces this with
+`apps/web/scripts/check-architecture.js`; it blocks first-class high-level file
+names and bare package imports. Additions to its allowlist should be limited to
+narrow protocol fixtures with documented reasons.
+
 ## Milestone Ladder
 
 | Level | Success criterion | Test shape | Issues |

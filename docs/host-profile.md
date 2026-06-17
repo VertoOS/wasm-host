@@ -310,15 +310,19 @@ imports are mirrored through `wasix_32v1` when the 32-bit import ABI matches the
 current browser handlers. `proc_spawn`, join, fork, signal, and raise-interval
 imports still return deterministic unsupported capability errors because
 blocking process handles need a later async-safe continuation strategy. WASIX
-thread, futex, eventfd,
-epoll, stack checkpoint, and context-switching imports also instantiate with
-deterministic unsupported capability errors until the browser profile has a
-real worker-thread and async-continuation strategy. Common `wasix_32v1`
-socket/network imports are also recognized as browser network capability gaps:
-they instantiate and return deterministic `NOTSUP` instead of becoming
-first-class raw socket support. Browser-safe networking belongs on explicit
-HTTP, WebSocket, gateway, or tool-adapter packages above this low-level import
-surface.
+`thread_id`, `thread_parallelism`, and zero-duration `thread_sleep` expose
+deterministic single-thread browser state; futex, eventfd, epoll, stack
+checkpoint, context-switching, thread spawn/join/signal, and nonzero sleep
+imports instantiate with deterministic unsupported capability errors until the
+browser profile has a real worker-thread and async-continuation strategy.
+`callback_signal` is a diagnostic no-op in this single-thread profile. Raw WASI
+runs can opt into `diagnostics.unsupportedWasixCalls` to return grouped
+unsupported WASIX call counts for smoke classification, including diagnostics
+merged back from `proc_exec` child commands. Common `wasix_32v1` socket/network
+imports are also recognized as browser network capability gaps: they instantiate
+and return deterministic `NOTSUP` instead of becoming first-class raw socket
+support. Browser-safe networking belongs on explicit HTTP, WebSocket, gateway,
+or tool-adapter packages above this low-level import surface.
 The same low-level namespace now handles `getcwd`/`chdir` against the browser
 virtual cwd, mirrors `path_open2` through the current fd/path model with
 extended fd flag bookkeeping, reports `getpid` as the single browser process,
@@ -375,13 +379,15 @@ The same raw runner exposes a narrow `wasix_32v1` namespace that mirrors those
 supported Preview1 calls, adds `proc_exec`, `proc_exec2`, `proc_exec3`,
 `proc_exit2`, `proc_parent`, `proc_snapshot`, `getcwd`, `chdir`, `path_open2`,
 `fd_fdflags_get`, `fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
-`getpid`, and empty signal-disposition queries, keeps unsupported process
-controls as deterministic capability errors, classifies thread/futex/eventfd
-imports as unsupported browser capability gaps, and recognizes common raw
-socket/network imports such as `sock_open`,
-`sock_connect`, `sock_recv_from`, `sock_send_to`, option helpers, multicast
-helpers, port helpers, and `resolve`, all of which return deterministic
-`NOTSUP` in the browser profile.
+`getpid`, `thread_id`, `thread_parallelism`, zero-duration `thread_sleep`, and
+empty signal-disposition queries, keeps unsupported process controls as
+deterministic capability errors, classifies futex/eventfd/thread-control
+imports as unsupported browser capability gaps, treats `callback_signal` as a
+diagnostic no-op, and recognizes common raw socket/network imports such as
+`sock_open`, `sock_connect`, `sock_recv_from`, `sock_send_to`, inherited
+Preview1-style `sock_accept`/`sock_recv`/`sock_send`/`sock_shutdown`, option
+helpers, multicast helpers, port helpers, and `resolve`, all of which return
+deterministic `NOTSUP` in the browser profile.
 For WebC atoms that import memory, the runner parses the Wasm import section,
 supplies `env.memory` before instantiation, and attaches that memory to the
 WASI/WASIX handlers. It also exposes the separate `wasi.thread-spawn` import
@@ -479,6 +485,11 @@ The current WASIX process/catalog proof covers replacement-style exec variants,
 env/PATH overlays, exit status propagation, and deterministic single-process
 parent/snapshot answers; it is not process spawn, fork, waitpid, Bash, git,
 native process spawning, or arbitrary uploaded JavaScript.
+The current thread/event classification exposes single-thread id/parallelism
+and zero-duration sleep, while opt-in unsupported-call diagnostics report the
+remaining thread/event, dynamic, network, clock, and process-control gaps,
+including child-command calls, without promoting those capabilities to
+first-class browser modules.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,
 hard termination of non-cooperative Wasm, or final WebC/WASIX package

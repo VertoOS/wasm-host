@@ -104,9 +104,17 @@ per PR. After [#194](https://github.com/VertoOS/wasm-host/issues/194) and
 [#196](https://github.com/VertoOS/wasm-host/issues/196) process/catalog slice
 maps replacement-style exec variants onto the browser packaged-command catalog,
 propagates `proc_exit2`, and keeps spawn/fork/join/signal controls
-deterministically unsupported. The first Bash smoke still likely needs the
-broader thread/event, dynamic, network, and clock buckets classified by actual
-runtime calls.
+deterministically unsupported. The
+[#197](https://github.com/VertoOS/wasm-host/issues/197) classification slice
+adds opt-in grouped unsupported-call diagnostics for the first Bash/coreutils
+smoke, exposes deterministic single-thread `thread_id`/`thread_parallelism`
+and zero-duration `thread_sleep`, treats `callback_signal` as a diagnostic
+no-op, includes inherited socket stubs in the network bucket, merges child
+`proc_exec` diagnostics back into the parent result, and keeps futex/event,
+dynamic linking, raw networking, clock mutation, nonzero sleep, and raw
+process-control behavior unsupported. The first Bash smoke can now use those
+diagnostics to decide whether any remaining broad bucket needs implementation
+instead of assuming every imported name is required.
 
 The audit did not find any reason to add first-class MCP, plugin, provider,
 connector, or OAuth modules under `apps/web`. Those remain adapter-package

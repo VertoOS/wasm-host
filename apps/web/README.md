@@ -53,10 +53,14 @@ Current scope:
   preserving cwd/stdin/stdout/stderr and applying WASIX env/PATH overlays.
   `proc_exit2`, `proc_parent`, and `proc_snapshot` provide deterministic
   single-process browser results. It also supplies the WASIX TTY state ABI with
-  deterministic non-interactive defaults. Common `wasix_32v1` raw
-  socket/network imports are recognized as deterministic unsupported browser
-  capability gaps. WASIX `proc_spawn`/join/fork/signal/raise-interval,
-  thread/futex/eventfd/context, and raw socket/network semantics remain later
+  deterministic non-interactive defaults, plus single-thread `thread_id`,
+  `thread_parallelism`, and zero-duration `thread_sleep` behavior. Opt-in raw
+  WASI diagnostics can report unsupported WASIX call counts by group/name,
+  including `proc_exec` child runs, dynamic callback signals, and raw socket
+  stubs. Common `wasix_32v1` raw socket/network imports are recognized as
+  deterministic unsupported browser capability gaps. WASIX
+  `proc_spawn`/join/fork/signal/raise-interval, futex/eventfd/context,
+  nonzero sleep, and raw socket/network semantics remain later
   async-continuation, worker-thread, or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
@@ -206,13 +210,20 @@ Current scope:
   `tty_get`/`tty_set` state are also wired for low-level compatibility. Clock
   mutation, dynamic linking, and advanced process variants remain explicit
   deterministic unsupported capability gaps.
-  WASIX thread, futex, eventfd, epoll, stack checkpoint, and context-switching
-  imports instantiate with deterministic unsupported capability errors until the
-  browser profile has a real worker-thread and async-continuation strategy.
-  Common `wasix_32v1` raw socket/network imports also instantiate and return
-  deterministic unsupported capability errors so browser networking can stay on
-  explicit HTTP, WebSocket, gateway, or tool-adapter bridges instead of becoming
-  first-class raw WASIX socket support.
+  WASIX `thread_id`, `thread_parallelism`, and zero-duration `thread_sleep`
+  expose deterministic single-thread browser state. Futex, eventfd, epoll,
+  stack checkpoint, context-switching, thread spawn/join/signal, and nonzero
+  sleep imports instantiate with deterministic unsupported capability errors
+  until the browser profile has a real worker-thread and async-continuation
+  strategy. `callback_signal` is a diagnostic no-op for the current
+  single-thread profile. Runs that set `diagnostics.unsupportedWasixCalls`
+  receive grouped unsupported-call counts in the command result, with child
+  `proc_exec` diagnostics merged back into the parent.
+  Common `wasix_32v1` raw socket/network imports, including inherited
+  Preview1-style `sock_accept`/`sock_recv`/`sock_send`/`sock_shutdown` stubs,
+  also instantiate and return deterministic unsupported capability errors so
+  browser networking can stay on explicit HTTP, WebSocket, gateway, or
+  tool-adapter bridges instead of becoming first-class raw WASIX socket support.
   Eight shallow Preview1 handlers remain for link/symlink/readlink,
   `proc_raise`, and sockets; they stay wired with deterministic browser-safe
   error/no-op behavior so modules can instantiate without implying symlink,
@@ -313,8 +324,9 @@ Current scope:
   scratch path rename behavior, injected workspace-store reads and persisted
   workspace mutations, WASIX namespace mirroring for supported Preview1 calls,
   WASIX cwd/fd utility import coverage, fd duplication and pipe behavior,
-  WASIX process/catalog bridge behavior plus explicit process, thread/event,
-  and network unsupported capability behavior,
+  WASIX process/catalog bridge behavior, single-thread defaults, opt-in
+  unsupported-call diagnostics, and explicit process, thread/event, and network
+  unsupported capability behavior,
   stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle
   integration, and the local Codex version-smoke artifact when it is present.
 

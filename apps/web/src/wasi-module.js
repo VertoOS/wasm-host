@@ -9,6 +9,7 @@ const DEFAULT_ENTRYPOINT = "_start";
 const RAW_WASI_ARTIFACT_KIND = "wasi-module";
 const ENV_IMPORT_MODULE = "env";
 const MEMORY_IMPORT_NAME = "memory";
+const WASM_PAGE_SIZE = 65_536;
 const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
 const WASI_THREAD_IMPORT_MODULE = "wasi";
 const WASI_THREAD_SPAWN_IMPORT = "thread-spawn";
@@ -196,6 +197,8 @@ const WASIX_JOIN_STATUS_EXIT_NORMAL = 1;
 const WASIX_PROC_JOIN_NON_BLOCKING = 1 << 0;
 const WASIX_ROOT_PID = 1;
 const WASIX_ROOT_PARENT_PID = 0;
+const WASIX_ASYNCIFY_FALLBACK_BUFFER_SIZE = 4 * 1024 * 1024;
+const WASIX_ASYNCIFY_FALLBACK_MIN_MEMORY_SIZE = 8 * 1024 * 1024;
 const WASIX_ASYNCIFY_EXPORTS = [
   "asyncify_get_state",
   "asyncify_start_rewind",
@@ -434,9 +437,23 @@ export async function runRawWasiModule(request, output, options = {}) {
     workspaceStore: request.workspaceStore ?? options.workspaceStore,
   });
   let instance = null;
-  const wasi = new WasiPreview1Runtime({
+  let wasi = null;
+  wasi = new WasiPreview1Runtime({
     args: [request.command, ...request.args],
     childCommands: request.childCommands,
+    copyForkRunner: (fork) =>
+      runCopiedForkChild({
+        bytes,
+        entrypoint:
+          packageRecord.entrypoint ??
+          packageRecord.metadata?.entrypoint ??
+          DEFAULT_ENTRYPOINT,
+        fork,
+        output,
+        parentWasi: wasi,
+        request,
+        workspace,
+      }),
     cwd: request.cwd,
     diagnostics: request.diagnostics ?? options.diagnostics,
     env: request.env,
@@ -448,23 +465,12 @@ export async function runRawWasiModule(request, output, options = {}) {
   });
 
   try {
-    const importedMemory = createImportedMemory(bytes);
-    if (importedMemory) {
-      wasi.setMemory(importedMemory.memory);
-    }
-    const importObject = wasi.importObject();
-    if (importedMemory) {
-      attachImportedMemory(importObject, importedMemory);
-    }
-    const instantiated = await globalThis.WebAssembly.instantiate(
+    instance = await instantiateRawWasiInstance(
       bytes,
-      importObject,
-    );
-    instance = instantiated.instance ?? instantiated;
-    const memory = importedMemory?.memory ?? exportedMemory(instance);
-    wasi.setMemory(memory);
-    wasi.setContinuationCapabilities(
-      wasixContinuationCapabilities(instance, memory),
+      wasi,
+      (instantiated) => {
+        instance = instantiated;
+      },
     );
     const entrypoint =
       packageRecord.entrypoint ?? packageRecord.metadata?.entrypoint ?? DEFAULT_ENTRYPOINT;
@@ -479,7 +485,7 @@ export async function runRawWasiModule(request, output, options = {}) {
     while (true) {
       try {
         throwIfAborted(request.signal);
-        runWasiEntrypoint(start, wasi, request.signal);
+        await runWasiEntrypoint(start, wasi, request.signal);
         throwIfAborted(request.signal);
         return await workspaceResult(wasi.result({ exitCode: 0 }), workspace);
       } catch (error) {
@@ -515,12 +521,113 @@ export async function runRawWasiModule(request, output, options = {}) {
   }
 }
 
-function runWasiEntrypoint(start, wasi, signal) {
+async function instantiateRawWasiInstance(
+  bytes,
+  wasi,
+  setInstance,
+  memorySnapshot = null,
+) {
+  const importedMemory = createImportedMemory(bytes);
+  if (importedMemory) {
+    if (memorySnapshot) {
+      copyMemorySnapshotTo(importedMemory.memory, memorySnapshot);
+    }
+    wasi.setMemory(importedMemory.memory);
+  }
+  const importObject = wasi.importObject();
+  if (importedMemory) {
+    attachImportedMemory(importObject, importedMemory);
+  }
+  const instantiated = await globalThis.WebAssembly.instantiate(
+    bytes,
+    importObject,
+  );
+  const instance = instantiated.instance ?? instantiated;
+  setInstance(instance);
+  const memory = importedMemory?.memory ?? exportedMemory(instance);
+  if (!importedMemory && memorySnapshot) {
+    copyMemorySnapshotTo(memory, memorySnapshot);
+  }
+  wasi.setMemory(memory);
+  wasi.setContinuationCapabilities(
+    wasixContinuationCapabilities(instance, memory),
+  );
+  return instance;
+}
+
+async function runCopiedForkChild({
+  bytes,
+  entrypoint,
+  fork,
+  output,
+  parentWasi,
+  request,
+  workspace,
+}) {
+  let childInstance = null;
+  const childWasi = new WasiPreview1Runtime({
+    args: parentWasi.args,
+    childCommands: request.childCommands,
+    cwd: parentWasi.cwd,
+    diagnostics: parentWasi.diagnostics,
+    env: parentWasi.envObject,
+    getInstance: () => childInstance,
+    output,
+    signal: request.signal,
+    stdin: parentWasi.remainingStdinBytes(),
+    workspace,
+  });
+  childWasi.processes.set(fork.childPid, {
+    exitCode: null,
+    parentPid: fork.parentPid,
+    pid: fork.childPid,
+    state: "running",
+  });
+  childWasi.currentProcessId = fork.childPid;
+  childInstance = await instantiateRawWasiInstance(
+    bytes,
+    childWasi,
+    (instantiated) => {
+      childInstance = instantiated;
+    },
+    fork.memorySnapshot,
+  );
+  restoreExportedMutableGlobals(childInstance, fork.globals);
+  const start = childInstance.exports?.[entrypoint];
+  if (typeof start !== "function") {
+    throw new BrowserWasiModuleError(
+      "invalid_package",
+      `raw WASI module entrypoint not found: ${String(entrypoint)}`,
+      "package_load",
+    );
+  }
+  childWasi.beginForkRewind(
+    fork.record,
+    0,
+    ERRNO_SUCCESS,
+    fork.childPid,
+  );
+  try {
+    await runWasiEntrypoint(start, childWasi, request.signal);
+    return childWasi.result({ exitCode: 0 });
+  } catch (error) {
+    if (error instanceof WasiProcExit) {
+      return childWasi.result({ exitCode: error.exitCode });
+    }
+    if (error instanceof WasixProcExec) {
+      const result = await childWasi.runProcessExec(error.request);
+      return childWasi.result(result);
+    }
+    throw error;
+  }
+}
+
+async function runWasiEntrypoint(start, wasi, signal) {
   for (let turn = 0; turn < WASIX_CONTINUATION_MAX_TURNS; turn += 1) {
     throwIfAborted(signal);
     start();
     throwIfAborted(signal);
-    if (!wasi.finishContinuationTurn()) {
+    if (!(await wasi.finishContinuationTurn())) {
       return;
     }
   }
@@ -896,6 +1003,7 @@ class WasiPreview1Runtime {
     this.envObject = normalizeEnvObject(options.env ?? {});
     this.args = normalizeStringList(options.args ?? []);
     this.childCommands = options.childCommands ?? null;
+    this.copyForkRunner = options.copyForkRunner ?? null;
     this.cwd = normalizeRuntimeCwd(options.cwd);
     this.diagnostics = normalizeRawWasiDiagnostics(options.diagnostics);
     this.env = envEntries(this.envObject);
@@ -1065,6 +1173,26 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
+  beginCopyFork(pidPtr) {
+    const parentPid = this.currentProcessId;
+    const childPid = this.nextProcessId;
+    this.nextProcessId += 1;
+    this.processes.set(childPid, {
+      exitCode: null,
+      parentPid,
+      pid: childPid,
+      state: "running",
+    });
+    this.pendingStackUnwind = {
+      childPid,
+      parentPid,
+      pidPtr,
+      type: "copy-fork-child",
+    };
+    this.startAsyncifyUnwind();
+    return ERRNO_SUCCESS;
+  }
+
   finishForkRewind(pidPtr) {
     if (!this.pendingForkRewind) {
       return null;
@@ -1108,7 +1236,7 @@ class WasiPreview1Runtime {
     return true;
   }
 
-  finishContinuationTurn() {
+  async finishContinuationTurn() {
     if (!this.pendingStackUnwind) {
       return false;
     }
@@ -1145,6 +1273,25 @@ class WasiPreview1Runtime {
         parentPid: action.parentPid,
       };
       this.beginForkRewind(record, 0, ERRNO_SUCCESS, action.childPid);
+      return true;
+    }
+    if (action.type === "copy-fork-child") {
+      const record = {
+        childPid: action.childPid,
+        parentPid: action.parentPid,
+        pidPtr: action.pidPtr,
+        rewindStack: copyBytes(rewindStack),
+      };
+      const result = await this.runCopyForkChild({
+        childPid: action.childPid,
+        globals: snapshotExportedMutableGlobals(this.getInstance?.()),
+        memorySnapshot: copyBytes(this.bytes()),
+        parentPid: action.parentPid,
+        record,
+      });
+      this.mergeDiagnostics(result?.diagnostics);
+      this.markProcessExited(action.childPid, Number(result?.exitCode ?? 0));
+      this.beginForkRewind(record, action.childPid, ERRNO_SUCCESS, action.parentPid);
       return true;
     }
     if (action.type === "vfork-parent") {
@@ -1233,6 +1380,18 @@ class WasiPreview1Runtime {
     const { forkRecord, parentPid } = this.activeVfork;
     this.activeVfork = null;
     this.beginForkRewind(forkRecord, childPid, ERRNO_SUCCESS, parentPid);
+  }
+
+  async runCopyForkChild(fork) {
+    if (typeof this.copyForkRunner !== "function") {
+      throw new BrowserWasiModuleError(
+        "unsupported",
+        "WASIX copied-memory fork requires a browser child instance runner",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    return this.copyForkRunner(fork);
   }
 
   stopAsyncifyRewind() {
@@ -4493,7 +4652,14 @@ class WasixRuntime {
       return rewindResult;
     }
     if ((copyMemory >>> 0) !== 0) {
-      return this.unsupportedProcessCapability("proc_fork");
+      if (
+        !this.host.hasStackContinuationSupport() ||
+        this.host.activeVfork ||
+        typeof this.host.copyForkRunner !== "function"
+      ) {
+        return this.unsupportedProcessCapability("proc_fork");
+      }
+      return this.host.beginCopyFork(ptr);
     }
     if (!this.host.hasStackContinuationSupport() || this.host.activeVfork) {
       return this.unsupportedProcessCapability("proc_fork");
@@ -4781,20 +4947,28 @@ function wasixContinuationCapabilities(instance, memory = null) {
     missingStackExports.length === 0
       ? validateAsyncifyStackBounds(stackLow, stackHigh, memoryLength)
       : null;
-  const stackBounds =
+  const explicitStackBounds =
     missingStackExports.length === 0 && !stackBoundsError
       ? {
           dataEnd: stackHigh,
           dataPtr: stackLow,
           dataStart: stackLow + 8,
+          source: "exports",
         }
+      : null;
+  const fallbackStackBounds =
+    !explicitStackBounds &&
+    missingStackExports.length > 0 &&
+    missingAsyncifyExports.length === 0
+      ? fallbackAsyncifyStackBounds(memoryLength)
       : null;
   return {
     asyncifyExports: missingAsyncifyExports.length === 0,
     exports,
+    fallbackStackBounds: fallbackStackBounds != null,
     missingAsyncifyExports,
     missingStackExports,
-    stackBounds,
+    stackBounds: explicitStackBounds ?? fallbackStackBounds,
     stackBoundsError,
   };
 }
@@ -4805,12 +4979,62 @@ function wasixStackRestoreUnsupportedMessage(capabilities) {
     return `WASIX stack_restore requires asyncify continuation exports; missing: ${missing.join(", ")}`;
   }
   if (capabilities?.missingStackExports?.length > 0) {
+    if (capabilities?.fallbackStackBounds) {
+      return "WASIX stack_restore uses a host-owned browser asyncify buffer for this module";
+    }
     return `WASIX stack_restore requires browser stack bounds; missing: ${capabilities.missingStackExports.join(", ")}`;
   }
   if (capabilities?.stackBoundsError) {
     return `WASIX stack_restore requires usable browser stack bounds; ${capabilities.stackBoundsError}`;
   }
   return "WASIX stack_restore requires browser stack rewind support";
+}
+
+function fallbackAsyncifyStackBounds(memoryLength) {
+  if (memoryLength < WASIX_ASYNCIFY_FALLBACK_MIN_MEMORY_SIZE) {
+    return null;
+  }
+  const dataStart = memoryLength - WASIX_ASYNCIFY_FALLBACK_BUFFER_SIZE;
+  if (dataStart < 8) {
+    return null;
+  }
+  return {
+    dataEnd: memoryLength,
+    dataPtr: dataStart - 8,
+    dataStart,
+    source: "host-buffer",
+  };
+}
+
+function snapshotExportedMutableGlobals(instance) {
+  const snapshot = [];
+  for (const [name, value] of Object.entries(instance?.exports ?? {})) {
+    if (!(value instanceof WebAssembly.Global)) {
+      continue;
+    }
+    try {
+      const current = value.value;
+      value.value = current;
+      snapshot.push({ name, value: current });
+    } catch {
+      // Immutable globals cannot be restored in a copied child instance.
+    }
+  }
+  return snapshot;
+}
+
+function restoreExportedMutableGlobals(instance, snapshot) {
+  for (const entry of snapshot ?? []) {
+    const target = instance?.exports?.[entry.name];
+    if (!(target instanceof WebAssembly.Global)) {
+      continue;
+    }
+    try {
+      target.value = entry.value;
+    } catch {
+      // Keep immutable or type-mismatched globals at their module defaults.
+    }
+  }
 }
 
 function stackSnapshotKey(snapshot) {
@@ -5395,6 +5619,36 @@ function createImportedMemory(bytes) {
       "package_load",
     );
   }
+}
+
+function copyMemorySnapshotTo(memory, snapshot) {
+  const source = toUint8Array(snapshot);
+  const requiredPages = Math.ceil(source.byteLength / WASM_PAGE_SIZE);
+  const currentPages = Math.floor(memory.buffer.byteLength / WASM_PAGE_SIZE);
+  if (requiredPages > currentPages) {
+    try {
+      memory.grow(requiredPages - currentPages);
+    } catch (error) {
+      throw new BrowserWasiModuleError(
+        "unsupported",
+        `raw WASI copied fork memory could not grow: ${
+          error?.message ?? "WebAssembly.Memory.grow failed"
+        }`,
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+  }
+  const target = new Uint8Array(memory.buffer);
+  if (target.byteLength < source.byteLength) {
+    throw new BrowserWasiModuleError(
+      "unsupported",
+      "raw WASI copied fork memory snapshot exceeds child memory",
+      "runtime",
+      { exitCode: 126 },
+    );
+  }
+  target.set(source);
 }
 
 function attachImportedMemory(importObject, memoryImport) {

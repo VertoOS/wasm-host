@@ -250,9 +250,9 @@ async function runBashCoreutilsSmokePage(page) {
   });
   assert.equal(status.status, "passed", status.error?.message);
   assert.equal(status.result.blocked, true);
-  assert.equal(status.result.blockerIssue, 204);
-  assert.equal(status.result.stdout, "/workspace\n");
-  assert.match(status.result.stderr, /bash: fork: Not supported/);
+  assert.equal(status.result.blockerIssue, 212);
+  assert.equal(status.result.stdout, "/workspace\nBASH_BROWSER_OK\n");
+  assert.match(status.result.stderr, /bash: line 1: ls: command not found/);
   assert.equal(
     status.result.artifacts.bash.sha256,
     "059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1",
@@ -271,12 +271,12 @@ async function runBashCoreutilsSmokePage(page) {
     entry.name,
   ]);
   assert.ok(
-    diagnostics.some(
+    !diagnostics.some(
       ([group, name]) => group === "process" && name === "proc_fork",
     ),
   );
   assert.ok(
-    diagnostics.some(
+    !diagnostics.some(
       ([group, name]) => group === "thread-event" && name === "stack_restore",
     ),
   );

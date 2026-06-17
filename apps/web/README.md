@@ -53,19 +53,25 @@ Current scope:
   preserving cwd/stdin/stdout/stderr and applying WASIX env/PATH overlays.
   `proc_exit2`, `proc_parent`, `proc_snapshot`, and no-child `proc_join`
   provide deterministic browser process results. Asyncify-capable modules can
-  also use a bounded `proc_fork(copy_memory=false)` vfork subset: the child
-  resumes with pid `0`, the parent resumes after child `proc_exit2` or
-  `proc_exec*`, and completed child exit codes can be reaped through
-  `proc_join`. It also supplies the WASIX TTY state ABI with
+  also use bounded browser process-continuation subsets: `proc_fork` with
+  `copy_memory=false` acts as a vfork-style child-first branch, while
+  `copy_memory=true` runs a serialized copied child instance from a copied
+  linear-memory snapshot plus exported mutable globals. In both paths the child
+  can finish through `proc_exit2` or the existing `proc_exec*` child-command
+  bridge, the parent resumes with the child pid, and completed child exit codes
+  can be reaped through `proc_join`. Modules that expose asyncify controls but
+  not explicit stack bounds can use a host-owned high-memory asyncify buffer
+  fallback when memory is large enough. It also supplies the WASIX TTY state ABI
+  with
   deterministic non-interactive defaults, plus single-thread `thread_id`,
   `thread_parallelism`, and zero-duration `thread_sleep` behavior. Opt-in raw
   WASI diagnostics can report unsupported WASIX call counts by group/name,
   including `proc_exec` child runs, dynamic callback signals, and raw socket
   stubs. Common `wasix_32v1` raw socket/network imports are recognized as
   deterministic unsupported browser capability gaps. Single-instance asyncify
-  modules with exported stack bounds can use WASIX `stack_checkpoint` and
-  `stack_restore` as a browser continuation primitive. WASIX copied-memory
-  fork, `proc_spawn`, signal/raise-interval, general blocking join,
+  modules with exported stack bounds or the host-owned fallback buffer can use
+  WASIX `stack_checkpoint` and `stack_restore` as a browser continuation
+  primitive. `proc_spawn`, signal/raise-interval, general blocking join,
   futex/eventfd/context, nonzero sleep, and raw socket/network semantics remain
   later process, worker-thread, or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
@@ -206,12 +212,17 @@ Current scope:
   bridge with cwd/env/stdin, PATH-aware catalog lookup, and inherited
   stdout/stderr. `proc_exit2` maps to normal WASI exit status propagation, while
   `proc_parent` and `proc_snapshot` expose deterministic browser process state.
-  No-child `proc_join` returns the WASIX no-child status, and completed vfork
+  No-child `proc_join` returns the WASIX no-child status, and completed forked
   children can be reaped with `JoinStatus::ExitNormal`. Asyncify-capable raw
   WASI modules can use a bounded `proc_fork(copy_memory=false)` vfork path that
   resumes the child first, then resumes the parent after child `proc_exit2` or
-  `proc_exec*`. Process spawn, copied-memory fork, signal, raise-interval, and
-  general blocking join imports return deterministic unsupported capability
+  `proc_exec*`. They can also use a serialized
+  `proc_fork(copy_memory=true)` child-exec subset: the browser host snapshots
+  linear memory and exported mutable globals, instantiates a copied child, runs
+  that child to `proc_exit2` or `proc_exec*`, marks the child complete, and then
+  rewinds the parent with the child pid. This is not a full
+  store/global/FD/thread process clone. Process spawn, signal, raise-interval,
+  and general blocking join imports return deterministic unsupported capability
   errors until the runtime has a fuller process snapshot strategy.
   `wasix_32v1.getcwd`/`chdir` are backed by the browser virtual cwd across
   `/workspace`, `/tmp`, and read-only package-root paths. `path_open2`,
@@ -223,9 +234,10 @@ Current scope:
   WASIX `thread_id`, `thread_parallelism`, and zero-duration `thread_sleep`
   expose deterministic single-thread browser state. `stack_checkpoint` keeps
   the browser-safe zero probe for non-asyncify modules, and asyncify-capable
-  modules with `__stack_low`/`__stack_high` exports can checkpoint and restore
-  within one running instance. Missing snapshots or modules without the needed
-  continuation exports fail with stable runtime errors and diagnostics. Futex,
+  modules with `__stack_low`/`__stack_high` exports or a large enough memory for
+  the host-owned fallback buffer can checkpoint and restore within one running
+  instance. Missing snapshots or modules without the needed continuation
+  exports fail with stable runtime errors and diagnostics. Futex,
   eventfd, epoll, context-switching, thread spawn/join/signal, and nonzero
   sleep imports instantiate with deterministic unsupported capability errors
   until the browser profile has a real worker-thread strategy.

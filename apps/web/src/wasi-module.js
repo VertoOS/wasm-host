@@ -192,6 +192,16 @@ const WASIX_JOIN_STATUS_SIZE = 8;
 const WASIX_OPTION_TAG_NONE = 0;
 const WASIX_OPTION_TAG_SOME = 1;
 const WASIX_JOIN_STATUS_NOTHING = 0;
+const WASIX_ASYNCIFY_EXPORTS = [
+  "asyncify_get_state",
+  "asyncify_start_rewind",
+  "asyncify_start_unwind",
+  "asyncify_stop_rewind",
+  "asyncify_stop_unwind",
+];
+const WASIX_ASYNCIFY_STATE_NORMAL = 0;
+const WASIX_ASYNCIFY_STATE_UNWINDING = 1;
+const WASIX_CONTINUATION_MAX_TURNS = 64;
 const WASIX_UNSUPPORTED_NETWORK_IMPORTS = [
   "port_addr_add",
   "port_addr_clear",
@@ -241,7 +251,6 @@ const WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS = [
   "futex_wait",
   "futex_wake",
   "futex_wake_all",
-  "stack_restore",
   "thread_join",
   "thread_local_create",
   "thread_local_destroy",
@@ -450,6 +459,9 @@ export async function runRawWasiModule(request, output, options = {}) {
     instance = instantiated.instance ?? instantiated;
     const memory = importedMemory?.memory ?? exportedMemory(instance);
     wasi.setMemory(memory);
+    wasi.setContinuationCapabilities(
+      wasixContinuationCapabilities(instance, memory),
+    );
     const entrypoint =
       packageRecord.entrypoint ?? packageRecord.metadata?.entrypoint ?? DEFAULT_ENTRYPOINT;
     const start = instance.exports?.[entrypoint];
@@ -461,7 +473,7 @@ export async function runRawWasiModule(request, output, options = {}) {
       );
     }
     throwIfAborted(request.signal);
-    start();
+    runWasiEntrypoint(start, wasi, request.signal);
     throwIfAborted(request.signal);
     return await workspaceResult(wasi.result({ exitCode: 0 }), workspace);
   } catch (error) {
@@ -486,6 +498,23 @@ export async function runRawWasiModule(request, output, options = {}) {
       { diagnostics: wasi.resultDiagnostics() },
     );
   }
+}
+
+function runWasiEntrypoint(start, wasi, signal) {
+  for (let turn = 0; turn < WASIX_CONTINUATION_MAX_TURNS; turn += 1) {
+    throwIfAborted(signal);
+    start();
+    throwIfAborted(signal);
+    if (!wasi.finishContinuationTurn()) {
+      return;
+    }
+  }
+  throw new BrowserWasiModuleError(
+    "runtime",
+    "WASIX continuation loop exceeded the browser turn limit",
+    "runtime",
+    { exitCode: 126 },
+  );
 }
 
 export async function runRawWasiModuleInWorker(request, output, options = {}) {
@@ -875,6 +904,11 @@ class WasiPreview1Runtime {
     this.signal = options.signal;
     this.stdin = toUint8Array(options.stdin ?? new Uint8Array());
     this.stdinOffset = 0;
+    this.continuationCapabilities = wasixContinuationCapabilities(null);
+    this.stackContinuationSnapshots = new Map();
+    this.stackContinuationCounter = 0n;
+    this.pendingStackUnwind = null;
+    this.pendingStackRewindValue = null;
     this.unsupportedWasixCalls = new Map();
   }
 
@@ -928,6 +962,179 @@ class WasiPreview1Runtime {
 
   setMemory(memory) {
     this.memory = memory;
+  }
+
+  setContinuationCapabilities(capabilities) {
+    this.continuationCapabilities = capabilities;
+  }
+
+  hasStackContinuationSupport() {
+    return (
+      this.continuationCapabilities.asyncifyExports &&
+      this.continuationCapabilities.stackBounds
+    );
+  }
+
+  beginStackCheckpoint(snapshotPtr, retValPtr) {
+    this.pendingStackUnwind = {
+      retValPtr,
+      snapshotPtr,
+      type: "checkpoint",
+    };
+    this.startAsyncifyUnwind();
+  }
+
+  beginStackRestore(snapshotPtr, value) {
+    const snapshot = this.readStackSnapshot(snapshotPtr);
+    const key = stackSnapshotKey(snapshot);
+    const record = this.stackContinuationSnapshots.get(key);
+    if (!record) {
+      this.recordUnsupportedWasixCall("thread-event", "stack_restore");
+      throw new BrowserWasiModuleError(
+        "runtime",
+        "WASIX stack_restore snapshot is not available in this browser run",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    this.pendingStackUnwind = {
+      record,
+      type: "restore",
+      value: BigInt(value),
+    };
+    this.startAsyncifyUnwind();
+  }
+
+  finishStackRewind(retValPtr) {
+    if (this.pendingStackRewindValue == null) {
+      return false;
+    }
+    this.stopAsyncifyRewind();
+    this.writeU64(retValPtr, this.pendingStackRewindValue);
+    this.pendingStackRewindValue = null;
+    return true;
+  }
+
+  finishContinuationTurn() {
+    if (!this.pendingStackUnwind) {
+      return false;
+    }
+    if (this.asyncifyState() !== WASIX_ASYNCIFY_STATE_UNWINDING) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        "WASIX continuation did not unwind before returning to the browser host",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    const action = this.pendingStackUnwind;
+    this.pendingStackUnwind = null;
+    const rewindStack = this.finishAsyncifyUnwind();
+    if (action.type === "checkpoint") {
+      const snapshot = this.createStackSnapshot(
+        action.snapshotPtr,
+        action.retValPtr,
+        rewindStack,
+      );
+      this.beginStackRewind(snapshot, 0n);
+      return true;
+    }
+    this.beginStackRewind(action.record, action.value);
+    return true;
+  }
+
+  startAsyncifyUnwind() {
+    const bounds = this.requireStackContinuationBounds();
+    this.writeU32(bounds.dataPtr, bounds.dataStart);
+    this.writeU32(bounds.dataPtr + 4, bounds.dataEnd);
+    this.continuationCapabilities.exports.asyncify_start_unwind(bounds.dataPtr);
+  }
+
+  finishAsyncifyUnwind() {
+    const bounds = this.requireStackContinuationBounds();
+    const finish = this.readU32(bounds.dataPtr);
+    if (finish < bounds.dataStart || finish > bounds.dataEnd) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        "WASIX asyncify unwind wrote an invalid stack range",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    const rewindStack = this.bytes().slice(bounds.dataStart, finish);
+    this.continuationCapabilities.exports.asyncify_stop_unwind();
+    return rewindStack;
+  }
+
+  beginStackRewind(snapshot, value) {
+    const bounds = this.requireStackContinuationBounds();
+    const rewindStack = snapshot.rewindStack ?? new Uint8Array();
+    const rewindEnd = bounds.dataStart + rewindStack.byteLength;
+    if (rewindEnd > bounds.dataEnd) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        "WASIX asyncify rewind stack exceeds the browser continuation buffer",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    this.bytes().set(rewindStack, bounds.dataStart);
+    this.writeU32(bounds.dataPtr, rewindEnd);
+    this.writeU32(bounds.dataPtr + 4, bounds.dataEnd);
+    this.pendingStackRewindValue = BigInt(value);
+    this.continuationCapabilities.exports.asyncify_start_rewind(bounds.dataPtr);
+  }
+
+  stopAsyncifyRewind() {
+    this.continuationCapabilities.exports.asyncify_stop_rewind();
+  }
+
+  asyncifyState() {
+    return Number(this.continuationCapabilities.exports.asyncify_get_state());
+  }
+
+  createStackSnapshot(snapshotPtr, retValPtr, rewindStack) {
+    const hash = this.nextStackSnapshotHash();
+    const snapshot = {
+      hashHigh: hash.high,
+      hashLow: hash.low,
+      key: stackSnapshotKey({ hashHigh: hash.high, hashLow: hash.low }),
+      retValPtr,
+      rewindStack: copyBytes(rewindStack),
+    };
+    this.writeU64(snapshotPtr, BigInt(retValPtr));
+    this.writeU64(snapshotPtr + 8, snapshot.hashLow);
+    this.writeU64(snapshotPtr + 16, snapshot.hashHigh);
+    this.stackContinuationSnapshots.set(snapshot.key, snapshot);
+    return snapshot;
+  }
+
+  readStackSnapshot(snapshotPtr) {
+    return {
+      hashLow: this.readU64(snapshotPtr + 8),
+      hashHigh: this.readU64(snapshotPtr + 16),
+    };
+  }
+
+  nextStackSnapshotHash() {
+    this.stackContinuationCounter += 1n;
+    return {
+      high: 0x737461636b000000n,
+      low: this.stackContinuationCounter,
+    };
+  }
+
+  requireStackContinuationBounds() {
+    const bounds = this.continuationCapabilities.stackBounds;
+    if (!bounds) {
+      throw new BrowserWasiModuleError(
+        "unsupported",
+        wasixStackRestoreUnsupportedMessage(this.continuationCapabilities),
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    return bounds;
   }
 
   importObject() {
@@ -3947,6 +4154,8 @@ class WasixRuntime {
       thread_sleep: (duration) => this.threadSleep(duration),
       stack_checkpoint: (snapshotPtr, retValPtr) =>
         this.stackCheckpoint(snapshotPtr, retValPtr),
+      stack_restore: (snapshotPtr, value) =>
+        this.stackRestore(snapshotPtr, value),
       tty_get: (ttyStatePtr) => this.ttyGet(ttyStatePtr),
       tty_set: (ttyStatePtr) => this.ttySet(ttyStatePtr),
     };
@@ -4173,11 +4382,44 @@ class WasixRuntime {
     ) {
       return ERRNO_FAULT;
     }
+    if (this.host.finishStackRewind(retVal)) {
+      return ERRNO_SUCCESS;
+    }
     this.host.writeU64(snapshot, 0n);
     this.host.writeU64(snapshot + 8, 0n);
     this.host.writeU64(snapshot + 16, 0n);
     this.host.writeU64(retVal, 0n);
+    if (!this.host.hasStackContinuationSupport()) {
+      return ERRNO_SUCCESS;
+    }
+    this.host.beginStackCheckpoint(snapshot, retVal);
     return ERRNO_SUCCESS;
+  }
+
+  stackRestore(snapshotPtr, _value) {
+    this.host.throwIfAborted();
+    const snapshot = snapshotPtr >>> 0;
+    if (!this.host.canReadWrite(snapshot, WASIX_STACK_SNAPSHOT_SIZE)) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        "WASIX stack_restore received an invalid stack snapshot pointer",
+        "runtime",
+        { exitCode: ERRNO_FAULT },
+      );
+    }
+    if (this.host.hasStackContinuationSupport()) {
+      this.host.beginStackRestore(snapshot, _value);
+      return;
+    }
+    this.host.recordUnsupportedWasixCall("thread-event", "stack_restore");
+    throw new BrowserWasiModuleError(
+      "runtime",
+      wasixStackRestoreUnsupportedMessage(
+        this.host.continuationCapabilities,
+      ),
+      "runtime",
+      { exitCode: 126 },
+    );
   }
 
   unsupportedNetworkCapability(name) {
@@ -4267,6 +4509,94 @@ function compareWasixUnsupportedCallDiagnostics(left, right) {
   return (
     left.group.localeCompare(right.group) || left.name.localeCompare(right.name)
   );
+}
+
+function wasixContinuationCapabilities(instance, memory = null) {
+  const exports = instance?.exports ?? {};
+  const missingAsyncifyExports = WASIX_ASYNCIFY_EXPORTS.filter(
+    (name) => typeof exports[name] !== "function",
+  );
+  const stackLow = exportedI32Global(exports, "__stack_low");
+  const stackHigh = exportedI32Global(exports, "__stack_high");
+  const missingStackExports = [];
+  if (stackLow == null) {
+    missingStackExports.push("__stack_low");
+  }
+  if (stackHigh == null) {
+    missingStackExports.push("__stack_high");
+  }
+  const memoryLength = memory?.buffer?.byteLength ?? 0;
+  const stackBoundsError =
+    missingStackExports.length === 0
+      ? validateAsyncifyStackBounds(stackLow, stackHigh, memoryLength)
+      : null;
+  const stackBounds =
+    missingStackExports.length === 0 && !stackBoundsError
+      ? {
+          dataEnd: stackHigh,
+          dataPtr: stackLow,
+          dataStart: stackLow + 8,
+        }
+      : null;
+  return {
+    asyncifyExports: missingAsyncifyExports.length === 0,
+    exports,
+    missingAsyncifyExports,
+    missingStackExports,
+    stackBounds,
+    stackBoundsError,
+  };
+}
+
+function wasixStackRestoreUnsupportedMessage(capabilities) {
+  if (!capabilities?.asyncifyExports) {
+    const missing = capabilities?.missingAsyncifyExports ?? WASIX_ASYNCIFY_EXPORTS;
+    return `WASIX stack_restore requires asyncify continuation exports; missing: ${missing.join(", ")}`;
+  }
+  if (capabilities?.missingStackExports?.length > 0) {
+    return `WASIX stack_restore requires browser stack bounds; missing: ${capabilities.missingStackExports.join(", ")}`;
+  }
+  if (capabilities?.stackBoundsError) {
+    return `WASIX stack_restore requires usable browser stack bounds; ${capabilities.stackBoundsError}`;
+  }
+  return "WASIX stack_restore requires browser stack rewind support";
+}
+
+function stackSnapshotKey(snapshot) {
+  return `${BigInt(snapshot.hashHigh).toString(16)}:${BigInt(
+    snapshot.hashLow,
+  ).toString(16)}`;
+}
+
+function exportedI32Global(exports, name) {
+  const value = exports?.[name];
+  const raw =
+    value instanceof WebAssembly.Global
+      ? value.value
+      : typeof value === "number"
+        ? value
+        : null;
+  if (raw == null) {
+    return null;
+  }
+  const number = Number(raw);
+  if (!Number.isInteger(number) || number < 0 || number > 0xffffffff) {
+    return null;
+  }
+  return number >>> 0;
+}
+
+function validateAsyncifyStackBounds(stackLow, stackHigh, memoryLength) {
+  if (memoryLength <= 0) {
+    return "linear memory is unavailable";
+  }
+  if (stackLow + 8 >= stackHigh) {
+    return "__stack_low must leave room for asyncify metadata";
+  }
+  if (checkedMemoryRange(stackLow, stackHigh - stackLow, memoryLength) == null) {
+    return "__stack_low and __stack_high must be inside linear memory";
+  }
+  return null;
 }
 
 function isSupportedClock(clockId) {

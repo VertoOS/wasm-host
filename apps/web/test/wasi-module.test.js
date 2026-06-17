@@ -216,6 +216,18 @@ const WASIX_THREAD_EVENT_IMPORTS_WASM = base64ToBytes(
   "AGFzbQEAAAABKghgAAF/YAF/AX9gAX4Bf2AEf39/fwF/YAF/AGADf39/AGAAAGACf38BfwKiBRkKd2FzaXhfMzJ2MQ5jb250ZXh0X2NyZWF0ZQAACndhc2l4XzMydjEPY29udGV4dF9kZXN0cm95AAAKd2FzaXhfMzJ2MQ5jb250ZXh0X3N3aXRjaAAACndhc2l4XzMydjEMZXBvbGxfY3JlYXRlAAAKd2FzaXhfMzJ2MQllcG9sbF9jdGwAAAp3YXNpeF8zMnYxCmVwb2xsX3dhaXQAAAp3YXNpeF8zMnYxCGZkX2V2ZW50AAAKd2FzaXhfMzJ2MQpmdXRleF93YWl0AAAKd2FzaXhfMzJ2MQpmdXRleF93YWtlAAAKd2FzaXhfMzJ2MQ5mdXRleF93YWtlX2FsbAAACndhc2l4XzMydjEQc3RhY2tfY2hlY2twb2ludAAHCndhc2l4XzMydjENc3RhY2tfcmVzdG9yZQAACndhc2l4XzMydjEJdGhyZWFkX2lkAAEKd2FzaXhfMzJ2MQt0aHJlYWRfam9pbgAACndhc2l4XzMydjETdGhyZWFkX2xvY2FsX2NyZWF0ZQAACndhc2l4XzMydjEUdGhyZWFkX2xvY2FsX2Rlc3Ryb3kAAAp3YXNpeF8zMnYxEHRocmVhZF9sb2NhbF9nZXQAAAp3YXNpeF8zMnYxEHRocmVhZF9sb2NhbF9zZXQAAAp3YXNpeF8zMnYxEnRocmVhZF9wYXJhbGxlbGlzbQABCndhc2l4XzMydjENdGhyZWFkX3NpZ25hbAAACndhc2l4XzMydjEMdGhyZWFkX3NsZWVwAAIKd2FzaXhfMzJ2MQx0aHJlYWRfc3Bhd24AAAp3YXNpeF8zMnYxD3RocmVhZF9zcGF3bl92MgAACndhc2l4XzMydjEIZmRfd3JpdGUAAwp3YXNpeF8zMnYxCXByb2NfZXhpdAAEAwMCBQYFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAGgqPAwIOACAAIAFHBEAgAhAYCwv9AgAQAEE6QQoQGRABQTpBCxAZEAJBOkEMEBkQA0E6QQ0QGRAEQTpBDhAZEAVBOkEPEBkQBkE6QRAQGRAHQTpBERAZEAhBOkESEBkQCUE6QRMQGUHIAEIBNwMAQdAAQgE3AwBB2ABCATcDAEHgAEIBNwMAQcgAQeAAEApBAEEUEBlByAApAwBCAFIEQEEUEBgLQdAAKQMAQgBSBEBBFBAYC0HYACkDAEIAUgRAQRQQGAtB4AApAwBCAFIEQEEUEBgLEAtBOkEVEBlBwABBFzYCAEHAABAMQQBBFhAZQcAAKAIAQQFBFxAZEA1BOkEYEBkQDkE6QRkQGRAPQTpBGhAZEBBBOkEbEBkQEUE6QRwQGUHEAEEdNgIAQcQAEBJBAEEeEBlBxAAoAgBBAUEfEBkQE0E6QSAQGUIAEBRBAEEhEBlCARAUQTpBIhAZEBVBOkEjEBkQFkE6QSQQGUGAAkGACDYCAEGEAkEeNgIAQQFBgAJBAUGQAhAXQQBBJRAZCwslAQBBgAgLHndhc2l4LXRocmVhZC1ldmVudC1pbXBvcnRzLW9rCg==",
 );
 
+const WASIX_STACK_RESTORE_WASM = base64ToBytes(
+  "AGFzbQEAAAABDQNgAn9+AGABfwBgAAACPwIKd2FzaXhfMzJ2MQ1zdGFja19yZXN0b3JlAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAQMCAQIFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAgoPAQ0AQRBCBxAAQc0AEAEL",
+);
+
+const WASIX_STACK_CONTINUATION_WASM = base64ToBytes(
+  "AGFzbQEAAAABFwVgAn9/AX9gAn9+AGABfwBgAABgAAF/Al0DCndhc2l4XzMydjEQc3RhY2tfY2hlY2twb2ludAAACndhc2l4XzMydjENc3RhY2tfcmVzdG9yZQABFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAIDBwYCAwIDBAMFAwEAAQYdBX8BQQALfwFBAAt/AUGAEAt/AEGACAt/AEGAEAsHtQEKBm1lbW9yeQIAD19fc3RhY2tfcG9pbnRlcgMCC19fc3RhY2tfbG93AwMMX19zdGFja19oaWdoAwQVYXN5bmNpZnlfc3RhcnRfdW53aW5kAAMUYXN5bmNpZnlfc3RvcF91bndpbmQABBVhc3luY2lmeV9zdGFydF9yZXdpbmQABRRhc3luY2lmeV9zdG9wX3Jld2luZAAGEmFzeW5jaWZ5X2dldF9zdGF0ZQAHBl9zdGFydAAICmsGCgAgACQBQQEkAAsGAEEAJAALCgAgACQBQQIkAAsGAEEAJAALBAAjAAtAAQF+QRBBKBAAGhAHBEAPC0EoKQMAIQAgAFAEQEEQQioQARAHBEAPC0HNABACCyAAQipSBEBBzgAQAgtBABACCw==",
+);
+
+const WASIX_STACK_MISSING_SNAPSHOT_WASM = base64ToBytes(
+  "AGFzbQEAAAABEQRgAn9+AGABfwBgAABgAAF/AhwBCndhc2l4XzMydjENc3RhY2tfcmVzdG9yZQAAAwcGAQIBAgMCBQMBAAEGHQV/AUEAC38BQQALfwFBgBALfwBBgAgLfwBBgBALB7UBCgZtZW1vcnkCAA9fX3N0YWNrX3BvaW50ZXIDAgtfX3N0YWNrX2xvdwMDDF9fc3RhY2tfaGlnaAMEFWFzeW5jaWZ5X3N0YXJ0X3Vud2luZAABFGFzeW5jaWZ5X3N0b3BfdW53aW5kAAIVYXN5bmNpZnlfc3RhcnRfcmV3aW5kAAMUYXN5bmNpZnlfc3RvcF9yZXdpbmQABBJhc3luY2lmeV9nZXRfc3RhdGUABQZfc3RhcnQABgozBgoAIAAkAUEBJAALBgBBACQACwoAIAAkAUECJAALBgBBACQACwQAIwALCABBEEIqEAAL",
+);
+
 const WASIX_THREAD_EXIT_WASM = base64ToBytes(
   "AGFzbQEAAAABCAJgAX8AYAAAAhoBCndhc2l4XzMydjELdGhyZWFkX2V4aXQAAAMCAQEFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAQoIAQYAQQAQAAs=",
 );
@@ -2379,7 +2391,7 @@ test("command worker runs WASIX modules that import mirrored Preview1 calls", as
   });
 });
 
-test("raw WASI executor keeps WASIX thread and event imports explicit", async () => {
+test("raw WASI executor rejects non-returning WASIX stack_restore", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleExecutor({ worker: false });
   const packageRecord = await loadRawWasiModulePackage({
@@ -2389,13 +2401,118 @@ test("raw WASI executor keeps WASIX thread and event imports explicit", async ()
     id: "thread-event-smoke",
   });
 
+  await assert.rejects(
+    () =>
+      executor.run(
+        { ...baseRunRequest(packageRecord), command: "thread-event-smoke" },
+        output,
+      ),
+    (error) => {
+      assert.equal(error.kind, "runtime");
+      assert.equal(error.exitCode, 126);
+      assert.equal(
+        error.message,
+        "WASIX stack_restore requires asyncify continuation exports; missing: asyncify_get_state, asyncify_start_rewind, asyncify_start_unwind, asyncify_stop_rewind, asyncify_stop_unwind",
+      );
+      return true;
+    },
+  );
+
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor restores WASIX stack continuations for asyncify modules", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_STACK_CONTINUATION_WASM,
+    command: "stack-continuation-smoke",
+    id: "stack-continuation-smoke",
+  });
+
   const result = await executor.run(
-    { ...baseRunRequest(packageRecord), command: "thread-event-smoke" },
+    { ...baseRunRequest(packageRecord), command: "stack-continuation-smoke" },
     output,
   );
 
   assert.deepEqual(result, { exitCode: 0 });
-  assert.equal(output.stdout, "wasix-thread-event-imports-ok\n");
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor records stack_restore diagnostics before aborting", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_STACK_RESTORE_WASM,
+    command: "stack-restore-smoke",
+    id: "stack-restore-smoke",
+  });
+
+  await assert.rejects(
+    () =>
+      executor.run(
+        {
+          ...baseRunRequest(packageRecord),
+          command: "stack-restore-smoke",
+          diagnostics: { unsupportedWasixCalls: true },
+        },
+        output,
+      ),
+    (error) => {
+      assert.equal(error.kind, "runtime");
+      assert.equal(error.exitCode, 126);
+      assert.deepEqual(error.diagnostics, {
+        unsupportedWasixCalls: [
+          { count: 1, group: "thread-event", name: "stack_restore" },
+        ],
+      });
+      return true;
+    },
+  );
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor rejects missing WASIX stack continuation snapshots", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_STACK_MISSING_SNAPSHOT_WASM,
+    command: "stack-missing-snapshot-smoke",
+    id: "stack-missing-snapshot-smoke",
+  });
+
+  await assert.rejects(
+    () =>
+      executor.run(
+        {
+          ...baseRunRequest(packageRecord),
+          command: "stack-missing-snapshot-smoke",
+          diagnostics: { unsupportedWasixCalls: true },
+        },
+        output,
+      ),
+    (error) => {
+      assert.equal(error.kind, "runtime");
+      assert.equal(error.exitCode, 126);
+      assert.equal(
+        error.message,
+        "WASIX stack_restore snapshot is not available in this browser run",
+      );
+      assert.deepEqual(error.diagnostics, {
+        unsupportedWasixCalls: [
+          { count: 1, group: "thread-event", name: "stack_restore" },
+        ],
+      });
+      return true;
+    },
+  );
+  assert.equal(output.stdout, "");
   assert.equal(output.stderr, "");
 });
 

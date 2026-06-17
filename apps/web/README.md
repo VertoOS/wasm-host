@@ -58,10 +58,12 @@ Current scope:
   WASI diagnostics can report unsupported WASIX call counts by group/name,
   including `proc_exec` child runs, dynamic callback signals, and raw socket
   stubs. Common `wasix_32v1` raw socket/network imports are recognized as
-  deterministic unsupported browser capability gaps. WASIX
+  deterministic unsupported browser capability gaps. Single-instance asyncify
+  modules with exported stack bounds can use WASIX `stack_checkpoint` and
+  `stack_restore` as a browser continuation primitive. WASIX
   `proc_spawn`/fork/signal/raise-interval, blocking join, futex/eventfd/context,
-  nonzero sleep, and raw socket/network semantics remain later
-  async-continuation, worker-thread, or host-bridge runtime layers.
+  nonzero sleep, and raw socket/network semantics remain later process,
+  worker-thread, or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, and mounts
@@ -212,14 +214,18 @@ Current scope:
   mutation, dynamic linking, and advanced process variants remain explicit
   deterministic unsupported capability gaps.
   WASIX `thread_id`, `thread_parallelism`, and zero-duration `thread_sleep`
-  expose deterministic single-thread browser state. Futex, eventfd, epoll,
-  stack checkpoint, context-switching, thread spawn/join/signal, and nonzero
+  expose deterministic single-thread browser state. `stack_checkpoint` keeps
+  the browser-safe zero probe for non-asyncify modules, and asyncify-capable
+  modules with `__stack_low`/`__stack_high` exports can checkpoint and restore
+  within one running instance. Missing snapshots or modules without the needed
+  continuation exports fail with stable runtime errors and diagnostics. Futex,
+  eventfd, epoll, context-switching, thread spawn/join/signal, and nonzero
   sleep imports instantiate with deterministic unsupported capability errors
-  until the browser profile has a real worker-thread and async-continuation
-  strategy. `callback_signal` is a diagnostic no-op for the current
-  single-thread profile. Runs that set `diagnostics.unsupportedWasixCalls`
-  receive grouped unsupported-call counts in the command result, with child
-  `proc_exec` diagnostics merged back into the parent.
+  until the browser profile has a real worker-thread strategy.
+  `callback_signal` is a diagnostic no-op for the current single-thread
+  profile. Runs that set `diagnostics.unsupportedWasixCalls` receive grouped
+  unsupported-call counts in the command result, with child `proc_exec`
+  diagnostics merged back into the parent.
   Common `wasix_32v1` raw socket/network imports, including inherited
   Preview1-style `sock_accept`/`sock_recv`/`sock_send`/`sock_shutdown` stubs,
   also instantiate and return deterministic unsupported capability errors so

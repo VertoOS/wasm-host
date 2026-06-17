@@ -50,10 +50,13 @@ This intentionally does not implement blocking joins or child lifecycle.
 
 ## Next Slice
 
-Create a grouped WASIX continuation foundation before attempting fork:
+After [#206](https://github.com/VertoOS/wasm-host/issues/206), continue with a
+grouped process-control slice:
 
-- determine whether target atoms are asyncify/continuation capable
-- make `stack_checkpoint`/`stack_restore` truthful for resumable modules
-- keep `proc_fork` unsupported until the host can resume parent and child
-- add fixtures for checkpoint/restore, fork parent/child return values, child
-  `proc_exec3`, blocking join, cancellation, and stdout/stderr ordering
+- keep `proc_fork` unsupported until parent and child can resume from the same
+  call site with truthful process state
+- decide how browser fork/vfork duplicates memory, globals, descriptors,
+  workspace state, and child-command catalog access
+- add fixtures for fork parent/child return values, child `proc_exec3`,
+  blocking and nonblocking `proc_join`, cancellation, and stdout/stderr
+  ordering

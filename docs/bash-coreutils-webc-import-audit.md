@@ -37,11 +37,12 @@ bash -lc 'pwd; ls /workspace; echo BASH_BROWSER_OK'
 Current result:
 
 - `bash` starts and prints `/workspace`.
-- `stack_checkpoint` is now handled as a browser-safe checkpoint probe by
-  zeroing the 24-byte `StackSnapshot` and 8-byte return slot.
+- `stack_checkpoint` is handled as a browser-safe zero probe for non-asyncify
+  modules, and a narrow single-instance asyncify checkpoint/restore path exists
+  for modules that export asyncify controls plus browser-readable stack bounds.
 - The target remains blocked before `ls` completes because external Bash
-  commands still need browser-safe fork plus stack rewind behavior:
-  `proc_fork` and `stack_restore`.
+  commands still need browser-safe fork plus process-level stack/store rewind
+  behavior: `proc_fork` and the Bash `stack_restore` call site.
 - The browser smoke is therefore marked blocked on
   [#204](https://github.com/VertoOS/wasm-host/issues/204), with diagnostics
   proving the remaining blocker set.
@@ -138,10 +139,14 @@ diagnostics to decide whether any remaining broad bucket needs implementation
 instead of assuming every imported name is required.
 
 The [#198](https://github.com/VertoOS/wasm-host/issues/198) smoke adds a
-minimal `stack_checkpoint` implementation for the Bash entry path. This is not
-full stack rewind support: `stack_restore` remains blocked on
-[#204](https://github.com/VertoOS/wasm-host/issues/204) until the browser host
-has truthful process-control semantics for Bash external commands.
+minimal `stack_checkpoint` implementation for the Bash entry path. The
+[#206](https://github.com/VertoOS/wasm-host/issues/206) continuation slice adds
+single-instance asyncify checkpoint/restore support for continuation-capable
+modules and stable runtime errors for missing snapshots or missing continuation
+exports. This is not full Bash process-control support: Bash external commands
+remain blocked on [#204](https://github.com/VertoOS/wasm-host/issues/204) until
+the browser host can implement truthful fork, child lifecycle, and process-level
+stack/store rewind semantics.
 
 The audit did not find any reason to add first-class MCP, plugin, provider,
 connector, or OAuth modules under `apps/web`. Those remain adapter-package

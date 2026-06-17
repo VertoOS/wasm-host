@@ -214,10 +214,11 @@ Current scope:
   fixture through the WebSocket-compatible constructor and session controller
   can initialize, report account status, cancel login, reuse a thread, complete
   a mocked turn, interrupt a pending turn, and reject unsupported native
-  methods, assert a packaged tool fixture
-  can read the edited file with cwd/env/stdin through the terminal transcript
-  adapter, and drive the terminal UI shell through DOM controls. The terminal
-  shell e2e also applies a package URL source backed by a local data URL,
+  methods, assert a packaged tool fixture can read the edited file with
+  cwd/env/stdin through the terminal transcript adapter, and publish named
+  stage summaries for the page-level smoke result. The browser e2e also drives
+  the terminal UI shell through DOM controls. The terminal shell e2e also
+  applies a package URL source backed by a local data URL,
   verifies sanitized package metadata, and runs the selected package through
   the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package

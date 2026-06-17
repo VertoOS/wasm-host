@@ -29,6 +29,16 @@ const BROWSER_STATUS_TIMEOUT_MS = 30000;
 const DEVTOOLS_COMMAND_TIMEOUT_MS = BROWSER_STATUS_TIMEOUT_MS;
 const BROWSER_E2E_TIMEOUT_MS =
   DEVTOOLS_STARTUP_TIMEOUT_MS + BROWSER_STATUS_TIMEOUT_MS * 5 + 30000;
+const CODEX_VERSION_SMOKE_STAGE_NAMES = [
+  "version",
+  "hard-timeout",
+  "http-bridge",
+  "request-builder",
+  "model-turn",
+  "workspace-edit",
+  "app-server",
+  "tool-fixture",
+];
 
 async function runBrowserE2e() {
   const skip = skipReason();
@@ -175,6 +185,7 @@ async function runCodexVersionSmokePage(page) {
     "stdout",
   ]);
   assert.equal(status.result.workerEntrypoint, "/src/command-worker-entry.js");
+  assertCodexVersionSmokeStages(status.result);
   return [
     `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`,
     `PASS browser Codex model-turn e2e: ${status.result.modelTurn.stdout.trim()}`,
@@ -183,6 +194,39 @@ async function runCodexVersionSmokePage(page) {
     `PASS browser Codex workspace-edit e2e: ${status.result.workspaceEdit.path}`,
     `PASS browser tool fixture e2e: ${status.result.toolFixture.cwd}`,
   ].join("\n");
+}
+
+function assertCodexVersionSmokeStages(result) {
+  assert.ok(Array.isArray(result.stages), "smoke result should include stages");
+  assert.deepEqual(
+    result.stages.map((stage) => stage.name),
+    CODEX_VERSION_SMOKE_STAGE_NAMES,
+  );
+  assert.deepEqual(
+    result.stages.map((stage) => stage.status),
+    CODEX_VERSION_SMOKE_STAGE_NAMES.map(() => "passed"),
+  );
+
+  const stages = Object.fromEntries(
+    result.stages.map((stage) => [stage.name, stage]),
+  );
+  assert.equal(stages.version.artifactKind, "wasi-module");
+  assert.equal(stages.version.exitCode, 0);
+  assert.equal(stages.version.stdoutPrefix, "codex-cli ");
+  assert.equal(stages["hard-timeout"].errorKind, "timeout");
+  assert.equal(stages["hard-timeout"].timedOut, true);
+  assert.equal(stages["http-bridge"].stdoutBytes, 15);
+  assert.equal(stages["http-bridge"].urlPath, "/e2e/http-bridge-smoke.txt");
+  assert.equal(stages["request-builder"].model, "gpt-5.1");
+  assert.equal(stages["request-builder"].surface, "browser");
+  assert.equal(stages["model-turn"].stdoutBytes, 20);
+  assert.equal(stages["model-turn"].urlPath, "/e2e/codex-model-response.sse");
+  assert.equal(stages["workspace-edit"].path, "/workspace/notes/edit.txt");
+  assert.equal(stages["workspace-edit"].replacements, 1);
+  assert.equal(stages["app-server"].threadId, "browser-thread-1");
+  assert.equal(stages["app-server"].turnId, "browser-turn-1");
+  assert.equal(stages["tool-fixture"].cwd, "/workspace/notes");
+  assert.equal(stages["tool-fixture"].path, "/workspace/notes/edit.txt");
 }
 
 async function runTerminalShellPage(page) {

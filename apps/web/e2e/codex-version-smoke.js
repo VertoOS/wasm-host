@@ -74,6 +74,11 @@ export async function runCodexVersionSmoke() {
       "Codex version smoke stdout should report the codex-cli version",
     );
     assert(stderr === fixture.expected.stderr, "Codex stderr should be empty");
+    const artifactKind = load.loaded.artifactKind;
+    const workerEntrypoint = new URL(
+      "../src/command-worker-entry.js",
+      import.meta.url,
+    ).pathname;
     const hardTimeout = await runNonCooperativeTimeout(worker);
     const httpBridge = await runHttpBridgeSmoke(worker);
     const requestBuilder = await runCodexBrowserRequestBuilder(worker);
@@ -84,7 +89,7 @@ export async function runCodexVersionSmoke() {
 
     return {
       appServer,
-      artifactKind: load.loaded.artifactKind,
+      artifactKind,
       artifactUrl,
       exitCode: result.exitCode,
       hardTimeout,
@@ -94,16 +99,99 @@ export async function runCodexVersionSmoke() {
       stderr,
       stdout,
       stdoutBytes: result.stdoutBytes,
+      stages: codexVersionSmokeStages({
+        appServer,
+        artifactKind,
+        artifactUrl,
+        exitCode: result.exitCode,
+        hardTimeout,
+        httpBridge,
+        modelTurn,
+        requestBuilder,
+        stdoutBytes: result.stdoutBytes,
+        toolFixture,
+        workerEntrypoint,
+        workspaceEdit,
+      }),
       toolFixture,
       workspaceEdit,
-      workerEntrypoint: new URL(
-        "../src/command-worker-entry.js",
-        import.meta.url,
-      ).pathname,
+      workerEntrypoint,
     };
   } finally {
     worker.terminate();
   }
+}
+
+function codexVersionSmokeStages(result) {
+  return [
+    {
+      name: "version",
+      status: "passed",
+      artifactKind: result.artifactKind,
+      artifactUrl: result.artifactUrl,
+      exitCode: result.exitCode,
+      stdoutBytes: result.stdoutBytes,
+      stdoutPrefix: CODEX_VERSION_SMOKE_STDOUT_PREFIX,
+      workerEntrypoint: result.workerEntrypoint,
+    },
+    {
+      name: "hard-timeout",
+      status: "passed",
+      errorKind: result.hardTimeout.errorKind,
+      exitCode: result.hardTimeout.exitCode,
+      timedOut: result.hardTimeout.timedOut,
+    },
+    {
+      name: "http-bridge",
+      status: "passed",
+      exitCode: result.httpBridge.exitCode,
+      stderrBytes: result.httpBridge.stderrBytes,
+      stdoutBytes: result.httpBridge.stdoutBytes,
+      urlPath: result.httpBridge.urlPath,
+    },
+    {
+      name: "request-builder",
+      status: "passed",
+      exitCode: result.requestBuilder.exitCode,
+      model: result.requestBuilder.model,
+      prompt: result.requestBuilder.prompt,
+      runtime: result.requestBuilder.metadata.runtime,
+      stdoutBytes: result.requestBuilder.stdoutBytes,
+      surface: result.requestBuilder.metadata.surface,
+    },
+    {
+      name: "model-turn",
+      status: "passed",
+      exitCode: result.modelTurn.exitCode,
+      stdoutBytes: result.modelTurn.stdoutBytes,
+      urlPath: result.modelTurn.urlPath,
+    },
+    {
+      name: "workspace-edit",
+      status: "passed",
+      exitCode: result.workspaceEdit.exitCode,
+      path: result.workspaceEdit.path,
+      replacements: result.workspaceEdit.replacements,
+      stdoutBytes: result.workspaceEdit.stdoutBytes,
+    },
+    {
+      name: "app-server",
+      status: "passed",
+      boundedMessages: result.appServer.boundedMessages,
+      interruptStatus: result.appServer.interruptStatus,
+      threadId: result.appServer.threadId,
+      turnId: result.appServer.turnId,
+    },
+    {
+      name: "tool-fixture",
+      status: "passed",
+      cwd: result.toolFixture.cwd,
+      exitCode: result.toolFixture.exitCode,
+      mode: result.toolFixture.mode,
+      path: result.toolFixture.path,
+      stdoutBytes: result.toolFixture.stdoutBytes,
+    },
+  ];
 }
 
 async function runBrowserAppServerFixture() {

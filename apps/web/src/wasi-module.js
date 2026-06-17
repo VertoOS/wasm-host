@@ -28,6 +28,7 @@ const ERRNO_SUCCESS = 0;
 const ERRNO_ACCESS = 2;
 const ERRNO_AGAIN = 6;
 const ERRNO_BADF = 8;
+const ERRNO_CHILD = 12;
 const ERRNO_EXIST = 20;
 const ERRNO_FAULT = 21;
 const ERRNO_INVAL = 28;
@@ -186,6 +187,11 @@ const WASI_ADVICE_NOREUSE = 5;
 const RANDOM_GET_CHUNK_SIZE = 65_536;
 const PIPE_BUFFER_LIMIT = 1024 * 1024;
 const WASIX_STACK_SNAPSHOT_SIZE = 24;
+const WASIX_OPTION_PID_SIZE = 8;
+const WASIX_JOIN_STATUS_SIZE = 8;
+const WASIX_OPTION_TAG_NONE = 0;
+const WASIX_OPTION_TAG_SOME = 1;
+const WASIX_JOIN_STATUS_NOTHING = 0;
 const WASIX_UNSUPPORTED_NETWORK_IMPORTS = [
   "port_addr_add",
   "port_addr_clear",
@@ -3909,8 +3915,8 @@ class WasixRuntime {
       proc_fork: (_copyMemory, _pidPtr) =>
         this.unsupportedProcessCapability("proc_fork"),
       proc_id: (pidPtr) => this.procId(pidPtr),
-      proc_join: (_pidPtr, _flags, _statusPtr) =>
-        this.unsupportedProcessCapability("proc_join"),
+      proc_join: (pidPtr, flags, statusPtr) =>
+        this.procJoin(pidPtr, flags, statusPtr),
       proc_parent: (pid, parentPidPtr) => this.procParent(pid, parentPidPtr),
       proc_signal: (_pid, _signal) =>
         this.unsupportedProcessCapability("proc_signal"),
@@ -4091,6 +4097,25 @@ class WasixRuntime {
     }
     this.host.writeU32(parentPidPtr, 0);
     return ERRNO_SUCCESS;
+  }
+
+  procJoin(pidPtr, _flags, statusPtr) {
+    this.host.throwIfAborted();
+    const pid = pidPtr >>> 0;
+    const status = statusPtr >>> 0;
+    if (
+      !this.host.canReadWrite(pid, WASIX_OPTION_PID_SIZE) ||
+      !this.host.canReadWrite(status, WASIX_JOIN_STATUS_SIZE)
+    ) {
+      return ERRNO_FAULT;
+    }
+    const tag = this.host.readU8(pid);
+    if (tag !== WASIX_OPTION_TAG_NONE && tag !== WASIX_OPTION_TAG_SOME) {
+      return ERRNO_INVAL;
+    }
+    writeWasixOptionPid(this.host, pid, WASIX_OPTION_TAG_NONE, 0);
+    writeWasixJoinStatusNothing(this.host, status);
+    return tag === WASIX_OPTION_TAG_NONE ? ERRNO_CHILD : ERRNO_SUCCESS;
   }
 
   procSnapshot() {
@@ -4329,6 +4354,20 @@ function writeWasixTtyState(host, ptr, state) {
   host.writeU8(ptr + 21, 0);
   host.writeU8(ptr + 22, 0);
   host.writeU8(ptr + 23, 0);
+}
+
+function writeWasixOptionPid(host, ptr, tag, pid) {
+  host.writeU8(ptr, tag);
+  host.writeU8(ptr + 1, 0);
+  host.writeU16(ptr + 2, 0);
+  host.writeU32(ptr + 4, pid);
+}
+
+function writeWasixJoinStatusNothing(host, ptr) {
+  host.writeU8(ptr, WASIX_JOIN_STATUS_NOTHING);
+  host.writeU8(ptr + 1, 0);
+  host.writeU16(ptr + 2, 0);
+  host.writeU32(ptr + 4, 0);
 }
 
 function boolByte(value) {

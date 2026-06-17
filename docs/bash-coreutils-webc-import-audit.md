@@ -40,8 +40,8 @@ Current result:
 - `stack_checkpoint` is now handled as a browser-safe checkpoint probe by
   zeroing the 24-byte `StackSnapshot` and 8-byte return slot.
 - The target remains blocked before `ls` completes because external Bash
-  commands need browser WASIX process control: `proc_fork`, `proc_join`, and
-  `stack_restore`.
+  commands still need browser-safe fork plus stack rewind behavior:
+  `proc_fork` and `stack_restore`.
 - The browser smoke is therefore marked blocked on
   [#204](https://github.com/VertoOS/wasm-host/issues/204), with diagnostics
   proving the remaining blocker set.
@@ -110,7 +110,7 @@ is implementation depth inside grouped browser capability buckets.
 | --- | --- | --- | --- |
 | Import object and memory shape | `env.memory` | `env.memory`, `wasi.thread-spawn` | [#194](https://github.com/VertoOS/wasm-host/issues/194) |
 | TTY defaults | `tty_get`, `tty_set` | `tty_get`, `tty_set` | [#195](https://github.com/VertoOS/wasm-host/issues/195) |
-| Process/catalog | `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_join`, `proc_parent`, `proc_raise_interval`, `proc_signal` | `proc_exec2`, `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_join`, `proc_parent`, `proc_raise_interval`, `proc_signal`, `proc_snapshot`, `proc_spawn`, `proc_spawn2` | [#196](https://github.com/VertoOS/wasm-host/issues/196), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
+| Process/catalog | `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_parent`, `proc_raise_interval`, `proc_signal` | `proc_exec2`, `proc_exec3`, `proc_exit2`, `proc_fork`, `proc_parent`, `proc_raise_interval`, `proc_signal`, `proc_snapshot`, `proc_spawn`, `proc_spawn2` | [#196](https://github.com/VertoOS/wasm-host/issues/196), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
 | Thread/event/async | `futex_wait`, `futex_wake`, `futex_wake_all`, `stack_restore`, `thread_exit`, `thread_id`, `thread_signal` | `epoll_create`, `epoll_ctl`, `epoll_wait`, `fd_event`, `futex_wait`, `futex_wake`, `futex_wake_all`, `stack_restore`, `thread_exit`, `thread_id`, `thread_join`, `thread_parallelism`, `thread_signal`, `thread_sleep`, `thread_spawn_v2` | [#197](https://github.com/VertoOS/wasm-host/issues/197), [#204](https://github.com/VertoOS/wasm-host/issues/204) |
 | Networking/ports | `sock_connect`, `sock_open`, `sock_send_to` | `port_*`, `resolve`, `sock_*` WASIX networking set | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Dynamic/closures/linking | `callback_signal` | `call_dynamic`, `callback_signal`, `closure_*`, `dl_invalid_handle`, `dlopen`, `dlsym`, `reflect_signature` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
@@ -124,8 +124,8 @@ per PR. After [#194](https://github.com/VertoOS/wasm-host/issues/194) and
 [#195](https://github.com/VertoOS/wasm-host/issues/195), the
 [#196](https://github.com/VertoOS/wasm-host/issues/196) process/catalog slice
 maps replacement-style exec variants onto the browser packaged-command catalog,
-propagates `proc_exit2`, and keeps spawn/fork/join/signal controls
-deterministically unsupported. The
+propagates `proc_exit2`, handles no-child `proc_join`, and keeps
+spawn/fork/signal controls deterministically unsupported. The
 [#197](https://github.com/VertoOS/wasm-host/issues/197) classification slice
 adds opt-in grouped unsupported-call diagnostics for the first Bash/coreutils
 smoke, exposes deterministic single-thread `thread_id`/`thread_parallelism`
@@ -133,7 +133,7 @@ and zero-duration `thread_sleep`, treats `callback_signal` as a diagnostic
 no-op, includes inherited socket stubs in the network bucket, merges child
 `proc_exec` diagnostics back into the parent result, and keeps futex/event,
 dynamic linking, raw networking, clock mutation, nonzero sleep, and raw
-process-control behavior unsupported. The first Bash smoke can now use those
+fork/rewind behavior unsupported. The first Bash smoke can now use those
 diagnostics to decide whether any remaining broad bucket needs implementation
 instead of assuming every imported name is required.
 

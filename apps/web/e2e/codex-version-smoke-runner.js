@@ -277,12 +277,12 @@ async function runBashCoreutilsSmokePage(page) {
   );
   assert.ok(
     diagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_join",
+      ([group, name]) => group === "thread-event" && name === "stack_restore",
     ),
   );
   assert.ok(
-    diagnostics.some(
-      ([group, name]) => group === "thread-event" && name === "stack_restore",
+    !diagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_join",
     ),
   );
   return `PASS browser Bash/coreutils WebC blocker e2e: issue #${status.result.blockerIssue}`;

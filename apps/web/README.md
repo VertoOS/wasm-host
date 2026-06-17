@@ -59,7 +59,7 @@ Current scope:
   including `proc_exec` child runs, dynamic callback signals, and raw socket
   stubs. Common `wasix_32v1` raw socket/network imports are recognized as
   deterministic unsupported browser capability gaps. WASIX
-  `proc_spawn`/join/fork/signal/raise-interval, futex/eventfd/context,
+  `proc_spawn`/fork/signal/raise-interval, blocking join, futex/eventfd/context,
   nonzero sleep, and raw socket/network semantics remain later
   async-continuation, worker-thread, or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
@@ -200,9 +200,10 @@ Current scope:
   bridge with cwd/env/stdin, PATH-aware catalog lookup, and inherited
   stdout/stderr. `proc_exit2` maps to normal WASI exit status propagation, while
   `proc_parent` and `proc_snapshot` expose deterministic single-process browser
-  state. Process spawn, join, fork, signal, and raise-interval imports return
-  deterministic unsupported capability errors until the runtime has an async
-  continuation strategy for blocking process waits.
+  state. No-child `proc_join` returns the WASIX no-child status; process spawn,
+  fork, signal, raise-interval, and blocking join imports return deterministic
+  unsupported capability errors until the runtime has an async continuation
+  strategy for blocking process waits.
   `wasix_32v1.getcwd`/`chdir` are backed by the browser virtual cwd across
   `/workspace`, `/tmp`, and read-only package-root paths. `path_open2`,
   `fd_fdflags_get`/`fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,

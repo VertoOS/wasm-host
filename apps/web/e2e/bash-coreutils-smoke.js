@@ -64,7 +64,7 @@ export async function runBashCoreutilsSmoke() {
     assertEqual(run.error.result?.exitCode, null);
     assertEqual(run.error.result?.failureStage, "runtime");
     assertEqual(diagnosticCount(diagnostics, "process", "proc_fork"), 1);
-    assertEqual(diagnosticCount(diagnostics, "process", "proc_join"), 1);
+    assertEqual(diagnosticCount(diagnostics, "process", "proc_join"), 0);
     assertEqual(
       diagnosticCount(diagnostics, "thread-event", "stack_restore"),
       1,

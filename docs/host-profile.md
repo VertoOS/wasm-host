@@ -304,12 +304,12 @@ layers. Raw WASI execution exposes narrow `wasix_32v1.proc_exec`,
 `proc_exec2`, and `proc_exec3` adapters that escape the synchronous WebAssembly
 import frame, then await the existing child-command bridge so the current module
 can be replaced by a cataloged packaged command with cwd/stdin/stdout/stderr
-and WASIX env/PATH overlays. `proc_exit2`, `proc_parent`, and `proc_snapshot`
-also provide deterministic single-process browser behavior. Supported Preview1
-imports are mirrored through `wasix_32v1` when the 32-bit import ABI matches the
-current browser handlers. `proc_spawn`, join, fork, signal, and raise-interval
-imports still return deterministic unsupported capability errors because
-blocking process handles need a later async-safe continuation strategy. WASIX
+and WASIX env/PATH overlays. `proc_exit2`, `proc_parent`, `proc_snapshot`, and
+no-child `proc_join` also provide deterministic single-process browser behavior.
+Supported Preview1 imports are mirrored through `wasix_32v1` when the 32-bit
+import ABI matches the current browser handlers. `proc_spawn`, fork, signal, and
+raise-interval imports still return deterministic unsupported capability errors
+because blocking process handles need a later async-safe continuation strategy. WASIX
 `thread_id`, `thread_parallelism`, and zero-duration `thread_sleep` expose
 deterministic single-thread browser state; futex, eventfd, epoll, stack
 checkpoint, context-switching, thread spawn/join/signal, and nonzero sleep

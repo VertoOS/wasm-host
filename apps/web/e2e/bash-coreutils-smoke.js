@@ -30,6 +30,8 @@ const SCRIPT_CREATE_SHELL_SCRIPT = [
     "'printf \"SCRIPT_PWD:\"'",
     "'pwd'",
     "'printf \"from-script\\\\n\" > issue-219-script/output.txt'",
+    "'printf \"SCRIPT_PWD_SUBST:%s\\\\n\" \"$(pwd)\"'",
+    "'printf \"SCRIPT_CAT_SUBST:%s\\\\n\" \"$(cat issue-219-script/output.txt)\"'",
     "'cat issue-219-script/output.txt'",
     "'ls issue-219-script'",
   ].join(" ") + " > issue-219-script/run.sh",
@@ -50,6 +52,8 @@ const SCRIPT_CREATE_EXPECTED_STDOUT = "ISSUE_219_SCRIPT_READY\n";
 const SCRIPT_RUN_EXPECTED_STDOUT =
   "SCRIPT_ARG:browser-arg\n" +
   "SCRIPT_PWD:/workspace\n" +
+  "SCRIPT_PWD_SUBST:/workspace\n" +
+  "SCRIPT_CAT_SUBST:from-script\n" +
   "from-script\n" +
   "output.txt\n" +
   "run.sh\n" +

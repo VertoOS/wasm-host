@@ -45,7 +45,9 @@ bash -lc 'set -eu; export LC_ALL=C; cd /workspace; rm -rf issue-215-smoke; mkdir
 The persisted script stages write `/workspace/issue-219-script/run.sh` in one
 Bash command, then run it in a later Bash command with an argv argument. This
 proves browser workspace contents can be treated as executable script code
-without relying on native process spawn or file mode bits.
+without relying on native process spawn or file mode bits. The same persisted
+script now checks Bash command substitution for both a builtin `$(pwd)` and a
+packaged child command `$(cat issue-219-script/output.txt)`.
 
 Current result:
 
@@ -62,6 +64,9 @@ Current result:
   script code into `/workspace`, invoking Bash on that path in a later command,
   passing argv, redirecting script output, and resolving `cat`/`ls` through the
   packaged command catalog.
+- Command substitution captures `/workspace` from `$(pwd)` and `from-script`
+  from packaged `cat` without leaking those child bytes directly to terminal
+  stdout.
 - The runtime handles `stack_checkpoint` as a browser-safe zero probe for
   non-asyncify modules, supports asyncify checkpoint/restore for modules with
   exported stack bounds or a host-owned high-memory fallback buffer, supports

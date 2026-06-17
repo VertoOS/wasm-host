@@ -59,12 +59,13 @@ Current scope:
   also use bounded browser process-continuation subsets: `proc_fork` with
   `copy_memory=false` acts as a vfork-style child-first branch, while
   `copy_memory=true` runs a serialized copied child instance from a copied
-  linear-memory snapshot plus exported mutable globals. In both paths the child
-  can finish through `proc_exit2` or the existing `proc_exec*` child-command
-  bridge, the parent resumes with the child pid, and completed child exit codes
-  can be reaped through `proc_join`. Modules that expose asyncify controls but
-  not explicit stack bounds can use a host-owned high-memory asyncify buffer
-  fallback when memory is large enough. It also supplies the WASIX TTY state ABI
+  linear-memory snapshot plus exported mutable globals and an inherited fd
+  table for pipe-backed captures. In both paths the child can finish through
+  `proc_exit2` or the existing `proc_exec*` child-command bridge, the parent
+  resumes with the child pid, and completed child exit codes can be reaped
+  through `proc_join`. Modules that expose asyncify controls but not explicit
+  stack bounds can use a host-owned high-memory asyncify buffer fallback when
+  memory is large enough. It also supplies the WASIX TTY state ABI
   with
   deterministic non-interactive defaults, plus single-thread `thread_id`,
   `thread_parallelism`, and zero-duration `thread_sleep` behavior. Opt-in raw
@@ -80,9 +81,10 @@ Current scope:
 - WebC/WASIX package runs bridge the host-owned browser workspace through
   cloneable snapshots, including snapshots returned from `proc_exec` child
   commands. That lets Bash/coreutils workflows create, redirect, read, list,
-  remove files, and execute persisted shell scripts under `/workspace` without
-  sending live workspace store objects to workers or making raw `wasi-module`
-  package runs first-class workspace owners.
+  remove files, execute persisted shell scripts, and capture Bash command
+  substitution output under `/workspace` without sending live workspace store
+  objects to workers or making raw `wasi-module` package runs first-class
+  workspace owners.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, mounts
@@ -350,8 +352,9 @@ Current scope:
   methods, assert a packaged tool fixture can read the edited file with
   cwd/env/stdin through the terminal transcript adapter, load the pinned
   `wasmer/bash` and `wasmer/coreutils` WebC artifacts for the passing
-  path-command, workspace-file, and workspace-script Bash/coreutils smoke
-  stages, and publish named stage summaries for the page-level smoke result.
+  path-command, workspace-file, workspace-script, and command-substitution
+  Bash/coreutils smoke coverage, and publish named stage summaries for the
+  page-level smoke result.
   The browser e2e also drives
   the terminal UI shell through DOM controls. The terminal shell e2e also
   applies a package URL source backed by a local data URL,

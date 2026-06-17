@@ -305,6 +305,7 @@ export class BrowserCommandWorkerRuntime {
         args: run.args,
         childCommands,
         command,
+        commandCatalog: this.packageCatalog.entries(),
         cwd: run.cwd,
         diagnostics: run.diagnostics,
         env: run.env,
@@ -519,6 +520,7 @@ export class BrowserCommandWorkerRuntime {
         args: run.args,
         childCommands,
         command,
+        commandCatalog: this.packageCatalog.entries(),
         cwd: run.cwd,
         diagnostics: run.diagnostics,
         env: run.env,
@@ -534,6 +536,7 @@ export class BrowserCommandWorkerRuntime {
         signal: abort.signal,
         stdin,
         terminal: context.activeRun.terminal,
+        wasixExecArgv0: run.wasixExecArgv0,
         workspaceStore: this.workspaceStoreForPackage(packageRecord),
       }, output);
       abort.throwIfAborted();
@@ -1277,6 +1280,7 @@ function normalizeChildCommandRequest(message = {}, parentRun = {}) {
     stderr: normalizeChildOutputMode(run.stderr ?? "pipe", "stderr"),
     stdout: normalizeChildOutputMode(run.stdout ?? "pipe", "stdout"),
     timeoutMs: normalizeTimeout(run.timeoutMs),
+    wasixExecArgv0: run.wasixExecArgv0 === true,
   };
 }
 

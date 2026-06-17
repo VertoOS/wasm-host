@@ -39,9 +39,12 @@ Current scope:
   chunk and close events, timeout/cancellation result shaping, and pluggable
   HTTP bridge transport selection. It maintains a protocol-neutral in-memory
   command catalog for loaded packages and resolves explicit `packageId: null`
-  runs through browser PATH lookup. Executor requests also receive a low-level
-  child packaged-command helper for invoking another loaded command by catalog
-  path without native process spawn. Its built-in `smoke` executor is a
+  runs through browser PATH lookup. Executor requests receive the current
+  command catalog so low-level package runners can project loaded command paths
+  into guest-visible virtual filesystems for shell PATH probes. Executor
+  requests also receive a low-level child packaged-command helper for invoking
+  another loaded command by catalog path without native process spawn. Its
+  built-in `smoke` executor is a
   lifecycle fixture only; the built-in `browser-tool-fixture` executor proves
   packaged tool command dispatch and child command invocation with cwd/env/stdin,
   terminal transcript capture, and host-owned workspace reads; the `wasi-module`
@@ -76,10 +79,11 @@ Current scope:
   later process, worker-thread, or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
-  metadata into raw WASI module requests, resolves cached atom bytes, and mounts
-  read-only package-root files from WebC volumes. Full WASIX process behavior,
-  Bash/coreutils package semantics, and non-WASI runners remain later runtime
-  layers.
+  metadata into raw WASI module requests, resolves cached atom bytes, mounts
+  read-only package-root files from WebC volumes, and overlays generated command
+  shims for loaded package-catalog paths so Bash-style PATH checks can see
+  cataloged commands. Full WASIX process behavior, broad Bash/git semantics,
+  and non-WASI runners remain later runtime layers.
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
   artifact. It validates the expected exports, calls `codex_version` and
@@ -225,7 +229,10 @@ Current scope:
   and general blocking join imports return deterministic unsupported capability
   errors until the runtime has a fuller process snapshot strategy.
   `wasix_32v1.getcwd`/`chdir` are backed by the browser virtual cwd across
-  `/workspace`, `/tmp`, and read-only package-root paths. `path_open2`,
+  `/workspace`, `/tmp`, and read-only package-root paths. The package-root `/`
+  preopen resolves absolute guest paths like `/bin/ls` against package-root
+  files and exposes virtual `/workspace` and `/tmp` directories for package
+  tools reached through that root. `path_open2`,
   `fd_fdflags_get`/`fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
   `getpid`, empty signal-disposition queries, and non-interactive
   `tty_get`/`tty_set` state are also wired for low-level compatibility. Clock
@@ -329,7 +336,9 @@ Current scope:
   can initialize, report account status, cancel login, reuse a thread, complete
   a mocked turn, interrupt a pending turn, and reject unsupported native
   methods, assert a packaged tool fixture can read the edited file with
-  cwd/env/stdin through the terminal transcript adapter, and publish named
+  cwd/env/stdin through the terminal transcript adapter, load the pinned
+  `wasmer/bash` and `wasmer/coreutils` WebC artifacts for the first passing
+  browser Bash/coreutils smoke, and publish named
   stage summaries for the page-level smoke result. The browser e2e also drives
   the terminal UI shell through DOM controls. The terminal shell e2e also
   applies a package URL source backed by a local data URL,
@@ -368,8 +377,9 @@ npm --prefix apps/web run test:e2e
 `google-chrome-stable`, `microsoft-edge`, or an explicit `WASM_HOST_BROWSER`
 path. It skips when no browser is available unless
 `WASM_HOST_BROWSER_E2E_REQUIRED=1` is set, which is how CI keeps the browser
-smoke required. This e2e smoke covers the successful page-to-worker version run
-and the first interactive terminal UI shell path. Full Bash/readline TTY
+smoke required. This e2e smoke covers the successful page-to-worker version run,
+the first Bash/coreutils WebC package smoke, and the first interactive terminal
+UI shell path. Full Bash/readline TTY
 behavior is still tracked by #6, and hard termination of non-cooperative Wasm
 remains #50.
 

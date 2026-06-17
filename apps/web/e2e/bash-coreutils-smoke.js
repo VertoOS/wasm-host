@@ -1,6 +1,5 @@
 const decoder = new TextDecoder();
 const TARGET_SHELL_SCRIPT = "pwd; ls /workspace; echo BASH_BROWSER_OK";
-const BLOCKER_ISSUE = 212;
 
 const BASH_ARTIFACT = {
   name: "wasmer/bash",
@@ -50,7 +49,7 @@ export async function runBashCoreutilsSmoke() {
         timeoutMs: 30000,
       },
     );
-    assert(run.complete, "target command should complete with the current blocker");
+    assert(run.complete, "target command should complete");
 
     const stdout = chunksText(run.stdout);
     const stderr = chunksText(run.stderr);
@@ -58,7 +57,7 @@ export async function runBashCoreutilsSmoke() {
       run.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
 
     assertEqual(stdout, "/workspace\nBASH_BROWSER_OK\n");
-    assertMatch(stderr, /bash: line 1: ls: command not found/);
+    assertEqual(stderr, "");
     assertEqual(run.complete.result?.exitCode, 0);
     assertEqual(run.complete.result?.failureStage, null);
     assertEqual(diagnosticCount(diagnostics, "process", "proc_fork"), 0);
@@ -78,8 +77,8 @@ export async function runBashCoreutilsSmoke() {
         bash: BASH_ARTIFACT,
         coreutils: COREUTILS_ARTIFACT,
       },
-      blocked: true,
-      blockerIssue: BLOCKER_ISSUE,
+      blocked: false,
+      blockerIssue: null,
       diagnostics,
       loadedCommands: {
         bash: bashLoad.commands,
@@ -206,11 +205,5 @@ function assertEqual(actual, expected) {
     throw new Error(
       `expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
     );
-  }
-}
-
-function assertMatch(value, pattern) {
-  if (!pattern.test(String(value))) {
-    throw new Error(`expected ${JSON.stringify(value)} to match ${pattern}`);
   }
 }

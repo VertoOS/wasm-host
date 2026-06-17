@@ -38,6 +38,7 @@ test("BrowserCommandWorkerRuntime loads and runs a command", async () => {
       test: {
         async run(request, output) {
           seen.command = request.command;
+          seen.commandCatalog = request.commandCatalog;
           seen.args = request.args;
           seen.cwd = request.cwd;
           seen.env = request.env;
@@ -76,6 +77,20 @@ test("BrowserCommandWorkerRuntime loads and runs a command", async () => {
   assert.deepEqual(seen, {
     args: ["--flag", "value"],
     command: "run-test",
+    commandCatalog: [
+      {
+        command: "run-test",
+        packageId: "pkg",
+        packageType: "test",
+        path: "/bin/run-test",
+      },
+      {
+        command: "run-test",
+        packageId: "pkg",
+        packageType: "test",
+        path: "/usr/bin/run-test",
+      },
+    ],
     cwd: "/workspace/app",
     env: { A: "1", B: "2" },
     httpTransport: { name: "gateway" },
@@ -431,6 +446,7 @@ test("BrowserCommandWorkerRuntime lets commands invoke catalog child commands", 
             env: request.env,
             packageId: request.package.id,
             stdin,
+            wasixExecArgv0: request.wasixExecArgv0,
           });
           await output.writeStdout(`${request.package.id}:stdout:${stdin}`);
           await output.writeStderr(`${request.package.id}:stderr\n`);
@@ -454,6 +470,7 @@ test("BrowserCommandWorkerRuntime lets commands invoke catalog child commands", 
             },
             packageId: null,
             stdin: "path stdin\n",
+            wasixExecArgv0: true,
           });
           parentSummary = {
             default: childResultSummary(defaultChild),
@@ -494,6 +511,7 @@ test("BrowserCommandWorkerRuntime lets commands invoke catalog child commands", 
       env: { PARENT_ENV: "1" },
       packageId: "default",
       stdin: "default stdin\n",
+      wasixExecArgv0: false,
     },
     {
       args: ["--flag"],
@@ -502,6 +520,7 @@ test("BrowserCommandWorkerRuntime lets commands invoke catalog child commands", 
       env: { CHILD_ENV: "1", PARENT_ENV: "1", PATH: "/usr/bin" },
       packageId: "path-child",
       stdin: "path stdin\n",
+      wasixExecArgv0: true,
     },
   ]);
   assert.deepEqual(parentSummary, {
@@ -1201,6 +1220,12 @@ test("WebC WASIX executor maps command metadata into raw WASI requests", async (
     args: ["--user"],
     childCommands,
     command: "codex",
+    commandCatalog: [
+      { command: "ls", packageId: "coreutils", path: "/bin/ls" },
+      { command: "env", packageId: "coreutils", path: "/usr/bin/env" },
+      { command: "message", packageId: "rootfs", path: "/etc/message.txt" },
+      { command: "ignored", packageId: "bad", path: "relative" },
+    ],
     cwd: "/workspace/request",
     env: { EXTRA: "1", FROM_WEB: "override" },
     package: webcPackageForRun({
@@ -1263,7 +1288,60 @@ test("WebC WASIX executor maps command metadata into raw WASI requests", async (
       bytes: encoder.encode("from-volume\n"),
       path: "etc/message.txt",
     },
+    {
+      bytes: encoder.encode("# wasm-host packaged command\n"),
+      path: "bin/ls",
+    },
+    {
+      bytes: encoder.encode("# wasm-host packaged command\n"),
+      path: "usr/bin/env",
+    },
   ]);
+});
+
+test("WebC WASIX executor strips duplicate WASIX exec argv0", async () => {
+  let delegated = null;
+  const executor = createWebcWasixExecutor({
+    cache: {
+      async getModuleArtifact(key) {
+        assert.equal(key, "cache://coreutils-atom");
+        return CODEX_VERSION_SMOKE_WASM;
+      },
+    },
+    rawWasiExecutor: {
+      async run(request) {
+        delegated = request;
+        return { exitCode: 0 };
+      },
+    },
+  });
+
+  await executor.run({
+    args: ["ls", "/workspace"],
+    command: "ls",
+    cwd: "/workspace",
+    env: {},
+    package: webcPackageForRun({
+      commandMetadata: {
+        ls: {
+          atom: "coreutils-atom",
+          runner: "https://webc.org/runner/wasi",
+        },
+      },
+      webcArtifacts: {
+        atoms: {
+          "coreutils-atom": {
+            cacheKey: "cache://coreutils-atom",
+          },
+        },
+      },
+    }),
+    signal: new AbortController().signal,
+    wasixExecArgv0: true,
+  });
+
+  assert.equal(delegated.command, "ls");
+  assert.deepEqual(delegated.args, ["/workspace"]);
 });
 
 test("WebC WASIX executor reports missing cached atom bytes", async () => {

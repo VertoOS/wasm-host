@@ -24,6 +24,9 @@ export const WEBC_WASIX_VOLUME_SPAN_INVALID_KIND =
 
 const UNSUPPORTED_CAPABILITY_EXIT_CODE = 126;
 const COMMAND_NOT_FOUND_EXIT_CODE = 127;
+const COMMAND_SHIM_BYTES = new TextEncoder().encode(
+  "# wasm-host packaged command\n",
+);
 
 export function createWebcWasixExecutor(options = {}) {
   const rawWasiExecutor =
@@ -50,8 +53,14 @@ export function createWebcWasixExecutor(options = {}) {
       }
       const atom = webcAtomArtifact(request, atomName);
       const atomBytes = await readAtomBytes(atom, options);
-      const rootFiles = await readWebcRootFiles(request, options);
+      const rootFiles = mergeRootFiles(
+        await readWebcRootFiles(request, options),
+        catalogCommandRootFiles(request.commandCatalog),
+      );
       const execName = nonEmptyString(command.execName ?? request.command);
+      const args = request.wasixExecArgv0
+        ? stripWasixExecArgv0(request.args, request.command, execName)
+        : request.args;
       const packageRecord = await loadRawWasiModulePackage({
         artifactKind: "wasi-module",
         bytes: atomBytes,
@@ -68,7 +77,7 @@ export function createWebcWasixExecutor(options = {}) {
       return rawWasiExecutor.run(
         {
           ...request,
-          args: [...(command.mainArgs ?? []), ...(request.args ?? [])],
+          args: [...(command.mainArgs ?? []), ...(args ?? [])],
           command: execName,
           cwd: command.cwd ?? request.cwd,
           env: mergeWebcEnv(command.env, request.env),
@@ -164,6 +173,65 @@ async function readWebcRootFiles(request, options) {
     }
   }
   return files;
+}
+
+function catalogCommandRootFiles(commandCatalog) {
+  const files = [];
+  const seen = new Set();
+  for (const entry of commandCatalog ?? []) {
+    const path = catalogCommandRootPath(entry?.path);
+    if (!path || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    files.push({
+      bytes: COMMAND_SHIM_BYTES,
+      path,
+    });
+  }
+  return files;
+}
+
+function catalogCommandRootPath(pathValue) {
+  if (typeof pathValue !== "string" || !pathValue.startsWith("/")) {
+    return null;
+  }
+  return joinPackageRootPath("", trimSlashes(pathValue));
+}
+
+function mergeRootFiles(primaryFiles, fallbackFiles) {
+  const files = [];
+  const paths = new Set();
+  for (const file of primaryFiles ?? []) {
+    files.push(file);
+    paths.add(file.path);
+  }
+  for (const file of fallbackFiles ?? []) {
+    if (paths.has(file.path)) {
+      continue;
+    }
+    files.push(file);
+    paths.add(file.path);
+  }
+  return files;
+}
+
+function stripWasixExecArgv0(args = [], commandName, execName) {
+  const [first, ...rest] = args ?? [];
+  if (
+    first != null &&
+    (commandBasename(first) === commandBasename(commandName) ||
+      commandBasename(first) === commandBasename(execName))
+  ) {
+    return rest;
+  }
+  return args ?? [];
+}
+
+function commandBasename(value) {
+  const text = String(value ?? "").trim();
+  const parts = text.split("/").filter(Boolean);
+  return parts.at(-1) ?? text;
 }
 
 function webcVolumeMounts(request) {

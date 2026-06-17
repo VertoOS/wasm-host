@@ -241,10 +241,13 @@ state, and timeout state. The worker maintains a protocol-neutral in-memory
 catalog for loaded package commands, exposes `/bin` and `/usr/bin` command
 paths, and resolves explicit `packageId: null` runs through browser PATH lookup
 without making higher-level tool adapter concepts first-class. Executor
-requests also receive a low-level child packaged-command helper that resolves
-another loaded command through the same package/catalog rules, carries
-cwd/env/args/stdin, can pipe or inherit stdout/stderr, and follows parent
-timeout/cancel signals. This is not arbitrary native process spawn. The first
+requests receive the current command catalog so WebC/WASIX package runners can
+surface low-level command shims in their virtual package root for guest shells
+that perform their own PATH probes. Executor requests also receive a low-level
+child packaged-command helper that resolves another loaded command through the
+same package/catalog rules, carries cwd/env/args/stdin, can pipe or inherit
+stdout/stderr, and follows parent timeout/cancel signals. This is not arbitrary
+native process spawn. The first
 built-in `smoke` executor is only a lifecycle fixture for worker-boundary
 tests. The deterministic `browser-tool-fixture` executor is the first packaged
 tool-command fixture: it receives cwd, filtered env, stdin, timeout/cancel
@@ -297,10 +300,11 @@ input/cache boundary plus the first dispatch boundary:
 `apps/web/src/webc-wasix.js` now receives loaded WebC commands, resolves WASI
 command atom metadata, reads cached atom bytes, and delegates executable atoms
 to the browser raw WASI Preview1 runtime with read-only package-root files from
-extracted WebC volume spans. Unsupported runners and missing atom artifacts
-still fail with structured errors. Compiled module cache persistence, general
-WASIX process spawning, and Bash/coreutils execution are later browser runtime
-layers. Raw WASI execution exposes narrow `wasix_32v1.proc_exec`,
+extracted WebC volume spans plus generated command shims for loaded catalog
+paths. Unsupported runners and missing atom artifacts still fail with
+structured errors. Compiled module cache persistence, general WASIX process
+spawning, and broad Bash/git execution are later browser runtime layers. Raw
+WASI execution exposes narrow `wasix_32v1.proc_exec`,
 `proc_exec2`, and `proc_exec3` adapters that escape the synchronous WebAssembly
 import frame, then await the existing child-command bridge so the current module
 can be replaced by a cataloged packaged command with cwd/stdin/stdout/stderr
@@ -338,7 +342,10 @@ support. Browser-safe networking belongs on explicit HTTP, WebSocket, gateway,
 or tool-adapter packages above this low-level import surface.
 The same low-level namespace now handles `getcwd`/`chdir` against the browser
 virtual cwd, mirrors `path_open2` through the current fd/path model with
-extended fd flag bookkeeping, reports `getpid` as the single browser process,
+package-root absolute path lookup, exposes virtual `/workspace` and `/tmp`
+directories below the package-root `/` preopen for package tools reached
+through shell PATH, maintains extended fd flag bookkeeping, reports `getpid` as
+the single browser process,
 returns an empty signal-disposition set, and implements `fd_dup`, `fd_dup2`,
 `fd_pipe`, and `pipe` with descriptor-local rights, shared file offsets,
 duplicated stdio handles, duplicated preopen directories, deterministic
@@ -499,10 +506,11 @@ Worker-backed raw WASI fixtures can also exercise the internal child-command
 RPC to resolve cataloged packaged commands through the host-side command worker.
 The current WASIX process/catalog proof covers replacement-style exec variants,
 env/PATH overlays, exit status propagation, deterministic parent/snapshot
-answers, asyncify vfork child completion, and a serialized copied-memory child
-exec subset; it is not process spawn, full fork/store cloning, general waitpid,
-Bash PATH package visibility, git, native process spawning, or arbitrary
-uploaded JavaScript.
+answers, asyncify vfork child completion, a serialized copied-memory child
+exec subset, and the first Bash PATH package visibility proof through generated
+package-root command shims; it is not process spawn, full fork/store cloning,
+general waitpid, broad shell semantics, git, native process spawning, or
+arbitrary uploaded JavaScript.
 The current thread/event classification exposes single-thread id/parallelism
 and zero-duration sleep, while opt-in unsupported-call diagnostics report the
 remaining thread/event, dynamic, network, clock, and process-control gaps,

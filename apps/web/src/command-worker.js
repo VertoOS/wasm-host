@@ -18,6 +18,10 @@ import { createBrowserWorkspaceStore } from "./workspace.js";
 
 const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_HTTP_TRANSPORT = "direct";
+const BROWSER_TOOL_FIXTURE_TYPE = "browser-tool-fixture";
+const BROWSER_TOOL_INSPECT_COMMAND = "tool-inspect";
+const BROWSER_TOOL_DEFAULT_PATH = "/workspace/tools/input.txt";
+const BROWSER_TOOL_MODE_ENV = "BROWSER_TOOL_MODE";
 const CANCELLED_EXIT_CODE = 130;
 const TIMEOUT_EXIT_CODE = 124;
 
@@ -43,6 +47,9 @@ export class BrowserCommandWorkerRuntime {
     this.executors = options.executors ?? {
       "codex-browser": createCodexBrowserRequestBuilderExecutor(
         options.codexBrowser,
+      ),
+      [BROWSER_TOOL_FIXTURE_TYPE]: createBrowserToolFixtureExecutor(
+        options.browserToolFixture,
       ),
       "http-smoke": createHttpSmokeCommandExecutor(options.httpSmoke),
       smoke: createSmokeCommandExecutor(options.smoke),
@@ -439,7 +446,10 @@ export class BrowserCommandWorkerRuntime {
   }
 
   workspaceStoreForPackage(packageRecord) {
-    return packageRecord.type === "codex-browser"
+    return (
+      packageRecord.type === "codex-browser" ||
+      packageRecord.type === BROWSER_TOOL_FIXTURE_TYPE
+    )
       ? this.workspaceStore
       : undefined;
   }
@@ -516,6 +526,62 @@ export function createHttpSmokeCommandExecutor(options = {}) {
       }
       await output.writeStdout(response.body);
       return { exitCode: 0 };
+    },
+  };
+}
+
+export function createBrowserToolFixtureExecutor(options = {}) {
+  return {
+    async run(request, output) {
+      if (!request.package.commands.includes(request.command)) {
+        throw new BrowserCommandWorkerError(
+          "command_not_found",
+          `browser command not found: ${request.command}`,
+          "command_resolution",
+          { exitCode: 127 },
+        );
+      }
+      if (request.command !== BROWSER_TOOL_INSPECT_COMMAND) {
+        throw new BrowserCommandWorkerError(
+          "command_not_found",
+          `unsupported browser tool fixture command: ${request.command}`,
+          "command_resolution",
+          { exitCode: 127 },
+        );
+      }
+      const workspace = browserToolWorkspaceStore(request, options);
+      const path = browserToolPath(request, options);
+      throwIfAborted(request.signal);
+      const stdin = await readCommandInputText(request.stdin, request.signal);
+      let file;
+      try {
+        file = await workspace.readFile(path);
+      } catch (error) {
+        throw browserToolWorkspaceError(error);
+      }
+      const bytes = toUint8Array(
+        file,
+        "browser tool fixture workspace reads must be bytes",
+      );
+      throwIfAborted(request.signal);
+      const workspaceText = new TextDecoder().decode(bytes);
+      const summary = {
+        args: request.args,
+        command: request.command,
+        cwd: request.cwd,
+        env: {
+          [BROWSER_TOOL_MODE_ENV]: request.env[BROWSER_TOOL_MODE_ENV] ?? null,
+        },
+        stdin,
+        workspace: {
+          bytes: bytes.byteLength,
+          path,
+          text: workspaceText,
+        },
+      };
+      await output.writeStderr("browser-tool-fixture: inspected workspace\n");
+      await output.writeStdout(`${JSON.stringify(summary)}\n`);
+      return { exitCode: 0, tool: summary };
     },
   };
 }
@@ -1165,6 +1231,50 @@ function httpSmokeUrl(request, options) {
     );
   }
   return url;
+}
+
+function browserToolWorkspaceStore(request, options) {
+  const store = request.workspaceStore ?? options.workspaceStore;
+  if (typeof store?.readFile !== "function") {
+    throw new BrowserCommandWorkerError(
+      "unsupported_package",
+      "browser tool fixture requires a workspace store",
+      "startup",
+    );
+  }
+  return store;
+}
+
+function browserToolPath(request, options) {
+  return nonEmptyString(
+    request.args[0] ??
+      request.env.BROWSER_TOOL_PATH ??
+      options.path ??
+      BROWSER_TOOL_DEFAULT_PATH,
+    "startup",
+  );
+}
+
+async function readCommandInputText(stdin, signal) {
+  const chunks = [];
+  for await (const chunk of stdin) {
+    throwIfAborted(signal);
+    chunks.push(toUint8Array(chunk, "command stdin chunks must be bytes"));
+  }
+  throwIfAborted(signal);
+  return new TextDecoder().decode(concatBytes(chunks));
+}
+
+function browserToolWorkspaceError(error) {
+  if (typeof error?.kind === "string") {
+    return new BrowserCommandWorkerError(
+      error.kind,
+      `browser tool fixture workspace read failed: ${error.message}`,
+      error.stage ?? "workspace",
+      { exitCode: 1 },
+    );
+  }
+  return error;
 }
 
 function isSuccessfulHttpStatus(status) {

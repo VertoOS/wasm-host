@@ -56,6 +56,22 @@ const READ_FILE_WASM = base64ToBytes(
   "AGFzbQEAAAABLwdgAn9/AX9gA39/fwF/YAl/f39/f35+f38Bf2AEf39/fwF/YAF/AX9gAX8AYAAAAqoCCBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDmZkX3ByZXN0YXRfZ2V0AAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRNmZF9wcmVzdGF0X2Rpcl9uYW1lAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwYXRoX29wZW4AAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxD2ZkX2ZpbGVzdGF0X2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAADFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfY2xvc2UABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQABQMDAgUGBQMBAAEGPAp/AEEAC38AQcAAC38AQaABC38AQbABC38AQbQBC38AQbgBC38AQcABC38AQYACC38AQYAEC38AQaAECwcTAgZtZW1vcnkCAAZfc3RhcnQACQqxBAIGACAAEAcLpwQBAn9BAyMAEAAhACAABEBBChAICyMALQAAQQBHBEBBCxAICyMAQQRqKAIAQQpHBEBBDBAIC0EDIwZBChABIQAgAARAQQ0QCAsjBi0AAEEvRwRAQQ4QCAsjBkEJai0AAEHlAEcEQEEPEAgLQQMQBSEAIABBCEcEQEEQEAgLIwIjBzYCACMCQQRqQSA2AgBBAyMCQQEjAxAEIQAgAEEfRwRAQREQCAsjBUHjADYCAEEDQQAjCUELQQBCAkIAQQAjBRACIQAgAEEsRwRAQRQQCAsjBSgCAEHjAEcEQEEVEAgLQQlBACMIQQlBAEICQgBBACMFEAIhACAAQQhHBEBBFhAIC0EBQQAjCEEJQQBCAkIAQQAjBRACIQAgAEHMAEcEQEEXEAgLQQNBACMIQQlBAUICQgBBACMFEAIhACAAQcwARwRAQRgQCAtBA0EAIwhBCUEAQgJCAEEAIwUQAiEAIAAEQEEeEAgLIwUoAgAhASABQQNNBEBBHxAICyABIwEQAyEAIAAEQEEgEAgLIwFBEGotAABBBEcEQEEhEAgLIwFBIGopAwBCDVIEQEEiEAgLIwIjBzYCACMCQQRqQSA2AgAgASMCQQEjAxAEIQAgAARAQSgQCAsjAygCAEENRwRAQSkQCAsgARAFIQAgAARAQSoQCAsgASMCQQEjAxAEIQAgAEEIRwRAQSsQCAsjAiMHNgIAIwJBBGpBDTYCAEEBIwJBASMEEAYaCwshAgBBgAQLCWhlbGxvLnR4dABBoAQLC21pc3NpbmcudHh0",
 );
 
+const PACKAGE_ROOT_READ_WASM = base64ToBytes(
+  "AGFzbQEAAAABHQRgCX9/f39/fn5/fwF/YAR/f39/AX9gAX8AYAAAAooBBBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXBhdGhfb3BlbgAAFndhc2lfc25hcHNob3RfcHJldmlldzEHZmRfcmVhZAABFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwIBAwUDAQABBxMCBm1lbW9yeQIABl9zdGFydAAECmcBZQEBf0EFQQBBgAhBD0EAQgJCAEEAQRAQACIABEAgABADC0EAQYAQNgIAQQRBwAA2AgBBECgCAEEAQQFBCBABIgAEQCAAEAMLQRhBgBA2AgBBHEEIKAIANgIAQQFBGEEBQSAQAhoLCxYBAEGACAsPZXRjL21lc3NhZ2UudHh0",
+);
+
+const PACKAGE_ROOT_STAT_WASM = base64ToBytes(
+  "AGFzbQEAAAABGQRgBX9/f39/AX9gBH9/f38Bf2ABfwBgAAACcQMWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRFwYXRoX2ZpbGVzdGF0X2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAACAwIBAwUDAQABBxMCBm1lbW9yeQIABl9zdGFydAADClkBVwEBf0EFQQBBgAhBD0GAARAAIgAEQCAAEAILQZABLQAAQQRHBEBB2gAQAgtBoAEpAwBCDFIEQEHbABACC0EAQYAQNgIAQQRBCDYCAEEBQQBBAUEQEAEaCwskAgBBgAgLD2V0Yy9tZXNzYWdlLnR4dABBgBALCHN0YXQtb2sK",
+);
+
+const PACKAGE_ROOT_READDIR_WASM = base64ToBytes(
+  "AGFzbQEAAAABJgVgCX9/f39/fn5/fwF/YAV/f39+fwF/YAR/f39/AX9gAX8AYAAAAo0BBBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXBhdGhfb3BlbgAAFndhc2lfc25hcHNob3RfcHJldmlldzEKZmRfcmVhZGRpcgABFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAADAwIBBAUDAQABBxMCBm1lbW9yeQIABl9zdGFydAAECmEBXwEBf0EFQQBBgAhBA0ECQoDAkQFCroGAAUEAQRAQACIABEAgABADC0EQKAIAQYAQQYABQgBBCBABIgAEQCAAEAMLQQBBgBA2AgBBBEEIKAIANgIAQQFBAEEBQSAQAhoLCwoBAEGACAsDZXRj",
+);
+
+const PACKAGE_ROOT_WRITE_REJECT_WASM = base64ToBytes(
+  "AGFzbQEAAAABHQRgCX9/f39/fn5/fwF/YAR/f39/AX9gAX8AYAAAAmkDFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQABFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAIDAgEDBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAMKiwEBiAEBAX9BBUEAQYAIQQ9BCELAAEIAQQBBEBAAIQAgAEHMAEcEQEHjABACC0EEQQBBkAhBC0EJQsAAQgBBAEEQEAAiAARAIAAQAgtBAEGAEDYCAEEEQQM2AgBBECgCAEEAQQFBGBABIgAEQCAAEAILQSBBhBA2AgBBJEEMNgIAQQFBIEEBQSgQARoLC0IEAEGACAsPZXRjL21lc3NhZ2UudHh0AEGQCAsLc2NyYXRjaC50eHQAQYAQCwN0bXAAQYQQCwxyZWFkb25seS1vawo=",
+);
+
 const PATH_FILESTAT_WASM = base64ToBytes(
   "AGFzbQEAAAABMwdgBX9/f39/AX9gCX9/f39/fn5/fwF/YAF/AX9gBH9/f38Bf2ABfwBgBX9/f35/AGAAAAK2AQUWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRFwYXRoX2ZpbGVzdGF0X2dldAAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF9jbG9zZQACFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUAAxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAAEAwQDBAUGBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAcKtwMDBwAgABAEAAs/AEEDQQAgACABQcAAEABBAEcEQCAEEAULQdAALQAAIAJHBEAgBEEBahAFC0HgACkDACADUgRAIARBAmoQBQsL7AIBAX9BgAhBAUEDQgBBChAGQQNBAEGBCEEAQcAAEABBLEcEQEENEAULQYEIQRBBBEINQRAQBkEDQQFBgQhBEEHAABAAQQBHBEBBExAFC0EDQQBBkQhBC0HAABAAQSxHBEBBFBAFC0EDQQBBnQhBDEHAABAAQcwARwRAQRUQBQtBA0EAQaoIQRtBwAAQAEHMAEcEQEEWEAULQQNBAkGBCEEQQcAAEABBHEcEQEEXEAULQeMAQQBBgQhBEEHAABAAQQhHBEBBGBAFC0EAQQBBgQhBEEHAABAAQQJHBEBBGRAFC0EDQQBBgQhBEEEAQgJCAEEAQSAQAUEARwRAQRoQBQtBICgCACEAIABBAEGBCEEQQcAAEABBAkcEQEEbEAULIAAQAkEARwRAQRwQBQsgAEEAQYEIQRBBwAAQAEEIRwRAQR0QBQtBgAFByAg2AgBBhAFBETYCAEEBQYABQQFBiAEQA0EARwRAQR4QBQsLC3kGAEGACAsBLgBBgQgLEG5lc3RlZC9oZWxsby50eHQAQZEICwttaXNzaW5nLnR4dABBnQgLDC4uL2hlbGxvLnR4dABBqggLGy93b3Jrc3BhY2UvbmVzdGVkL2hlbGxvLnR4dABByAgLEXBhdGgtZmlsZXN0YXQtb2sK",
 );
@@ -467,6 +483,99 @@ test("raw WASI executor reads packaged files through a workspace preopen", async
   assert.deepEqual(result, { exitCode: 0 });
   assert.equal(packageRecord.metadata.fileCount, 1);
   assert.equal(output.stdout, "from package\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor reads read-only package root files", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: PACKAGE_ROOT_READ_WASM,
+    command: "read-root",
+    id: "read-root",
+    rootFiles: {
+      "etc/message.txt": "from-volume\n",
+    },
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "read-root" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(packageRecord.metadata.rootFileCount, 1);
+  assert.equal(output.stdout, "from-volume\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor stats read-only package root files", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: PACKAGE_ROOT_STAT_WASM,
+    command: "stat-root",
+    id: "stat-root",
+    rootFiles: {
+      "etc/message.txt": "from-volume\n",
+    },
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "stat-root" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "stat-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor lists read-only package root directories", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: PACKAGE_ROOT_READDIR_WASM,
+    command: "readdir-root",
+    id: "readdir-root",
+    rootFiles: {
+      "etc/message.txt": "from-volume\n",
+    },
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "readdir-root" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.match(output.stdout, /message\.txt/);
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor rejects writes to package root but keeps tmp writable", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: PACKAGE_ROOT_WRITE_REJECT_WASM,
+    command: "write-root",
+    id: "write-root",
+    rootFiles: {
+      "etc/message.txt": "from-volume\n",
+    },
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "write-root" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "readonly-ok\n");
   assert.equal(output.stderr, "");
 });
 

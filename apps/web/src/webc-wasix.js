@@ -15,6 +15,12 @@ export const WEBC_WASIX_ATOM_CACHE_UNAVAILABLE_KIND =
   "webc_wasix_atom_cache_unavailable";
 export const WEBC_WASIX_ATOM_CACHE_MISSING_KIND =
   "webc_wasix_atom_cache_missing";
+export const WEBC_WASIX_PACKAGE_BYTES_UNAVAILABLE_KIND =
+  "webc_wasix_package_bytes_unavailable";
+export const WEBC_WASIX_PACKAGE_BYTES_MISSING_KIND =
+  "webc_wasix_package_bytes_missing";
+export const WEBC_WASIX_VOLUME_SPAN_INVALID_KIND =
+  "webc_wasix_volume_span_invalid";
 
 const UNSUPPORTED_CAPABILITY_EXIT_CODE = 126;
 const COMMAND_NOT_FOUND_EXIT_CODE = 127;
@@ -44,6 +50,7 @@ export function createWebcWasixExecutor(options = {}) {
       }
       const atom = webcAtomArtifact(request, atomName);
       const atomBytes = await readAtomBytes(atom, options);
+      const rootFiles = await readWebcRootFiles(request, options);
       const execName = nonEmptyString(command.execName ?? request.command);
       const packageRecord = await loadRawWasiModulePackage({
         artifactKind: "wasi-module",
@@ -56,6 +63,7 @@ export function createWebcWasixExecutor(options = {}) {
           sourcePackage: request.package.metadata?.packageName ?? request.package.id,
           webcCommand: request.command,
         },
+        rootFiles,
       });
       return rawWasiExecutor.run(
         {
@@ -138,6 +146,129 @@ async function readAtomBytes(atom, options) {
     );
   }
   return toUint8Array(bytes);
+}
+
+async function readWebcRootFiles(request, options) {
+  const mounts = webcVolumeMounts(request);
+  if (mounts.length === 0) {
+    return [];
+  }
+  const packageBytes = await readPackageBytes(request, options);
+  const files = [];
+  for (const mount of mounts) {
+    for (const file of Object.values(mount.volume.files ?? {})) {
+      files.push({
+        bytes: bytesFromSpan(packageBytes, file.span, file.path),
+        path: mountedPackageRootPath(file.path, mount),
+      });
+    }
+  }
+  return files;
+}
+
+function webcVolumeMounts(request) {
+  const mappings = request.package?.metadata?.filesystem ?? [];
+  const volumes = request.package?.metadata?.webcArtifacts?.volumes ?? {};
+  const mounts = [];
+  for (const mapping of mappings) {
+    if (mapping.from) {
+      continue;
+    }
+    const volume = volumes[mapping.volumeName];
+    if (volume) {
+      mounts.push({ mapping, volume });
+    }
+  }
+  return mounts;
+}
+
+async function readPackageBytes(request, options) {
+  if (request.package?.bytes != null) {
+    return toUint8Array(request.package.bytes);
+  }
+  const cacheKey = request.package?.metadata?.cacheKeys?.packageBytes;
+  const cache = options.cache;
+  if (typeof cache?.getPackageBytes !== "function") {
+    throw webcWasixError(
+      WEBC_WASIX_PACKAGE_BYTES_UNAVAILABLE_KIND,
+      "browser WebC package byte cache is unavailable",
+      "package_load",
+    );
+  }
+  const bytes = await cache.getPackageBytes(cacheKey);
+  if (bytes == null) {
+    throw webcWasixError(
+      WEBC_WASIX_PACKAGE_BYTES_MISSING_KIND,
+      `browser WebC package bytes are missing from cache: ${String(cacheKey ?? "")}`,
+      "package_load",
+    );
+  }
+  return toUint8Array(bytes);
+}
+
+function bytesFromSpan(packageBytes, spanValue, path) {
+  const offset = Number(spanValue?.offset);
+  const length = Number(spanValue?.length);
+  const end = offset + length;
+  if (
+    !Number.isSafeInteger(offset) ||
+    !Number.isSafeInteger(length) ||
+    offset < 0 ||
+    length < 0 ||
+    end > packageBytes.byteLength
+  ) {
+    throw webcWasixError(
+      WEBC_WASIX_VOLUME_SPAN_INVALID_KIND,
+      `browser WebC volume file span is invalid for ${path}`,
+      "package_load",
+    );
+  }
+  return packageBytes.subarray(offset, end);
+}
+
+function mountedPackageRootPath(filePath, mount) {
+  const mapping = mount.mapping;
+  let path = trimSlashes(filePath);
+  path = stripPathPrefix(path, trimSlashes(mount.volume.name));
+  path = stripPathPrefix(path, trimSlashes(mapping.hostPath));
+  path = joinPackageRootPath(trimSlashes(mapping.mountPath), path);
+  if (!path) {
+    throw webcWasixError(
+      WEBC_WASIX_VOLUME_SPAN_INVALID_KIND,
+      `browser WebC volume file path is invalid for ${filePath}`,
+      "package_load",
+    );
+  }
+  return path;
+}
+
+function stripPathPrefix(path, prefix) {
+  if (!prefix) {
+    return path;
+  }
+  if (path === prefix) {
+    return "";
+  }
+  return path.startsWith(`${prefix}/`) ? path.slice(prefix.length + 1) : path;
+}
+
+function joinPackageRootPath(mountPath, path) {
+  const joined = [mountPath, path].filter(Boolean).join("/");
+  const segments = [];
+  for (const segment of joined.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === ".." || segment.includes("\0")) {
+      return null;
+    }
+    segments.push(segment);
+  }
+  return segments.join("/");
+}
+
+function trimSlashes(value) {
+  return String(value ?? "").replace(/^\/+|\/+$/g, "");
 }
 
 function webcWasixRuntimeUnavailable(options) {

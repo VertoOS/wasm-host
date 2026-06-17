@@ -134,11 +134,11 @@ Current scope:
   persists package summaries, package bytes, and extracted atom bytes in
   IndexedDB when available. Wasm package sources are mapped onto the raw WASI
   module executor; WebC WASI-runner commands can resolve cached atom bytes and
-  delegate executable atoms through that same Preview1 runtime. Memory cache
-  remains the fallback and test-injectable cache. It does not mount extracted
-  volumes into a runtime filesystem, provide a WebC package catalog or PATH
-  command resolver, implement WASIX process spawning, manage cache eviction, or
-  wire workspace persistence into full package execution yet.
+  delegate executable atoms through that same Preview1 runtime with read-only
+  package-root files from extracted WebC volume spans. Memory cache remains the
+  fallback and test-injectable cache. It does not provide a WebC package catalog
+  or PATH command resolver, implement WASIX process spawning, manage cache
+  eviction, or wire workspace persistence into full package execution yet.
 - `src/artifact-manifest.js` consumes the interim Codex artifact manifest
   shapes. It validates the raw `wasi-module` `codex --version` contract and
   the `codex-browser` request-builder contract, normalizes them into command

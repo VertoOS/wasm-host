@@ -245,7 +245,9 @@ Current scope:
   tools reached through that root. `path_open2`,
   `fd_fdflags_get`/`fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
   `getpid`, empty signal-disposition queries, and non-interactive
-  `tty_get`/`tty_set` state are also wired for low-level compatibility. Clock
+  `tty_get`/`tty_set` state are also wired for low-level compatibility.
+  `tty_get` reports browser command terminal columns/rows when supplied while
+  preserving deterministic pixel defaults and disabled TTY mode flags. Clock
   mutation, dynamic linking, and advanced process variants remain explicit
   deterministic unsupported capability gaps.
   WASIX `thread_id`, `thread_parallelism`, and zero-duration `thread_sleep`

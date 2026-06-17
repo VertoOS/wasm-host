@@ -461,6 +461,7 @@ export async function runRawWasiModule(request, output, options = {}) {
     output,
     signal: request.signal,
     stdin,
+    terminal: request.terminal ?? options.terminal,
     workspace,
   });
 
@@ -575,6 +576,7 @@ async function runCopiedForkChild({
     output,
     signal: request.signal,
     stdin: parentWasi.remainingStdinBytes(),
+    terminal: parentWasi.terminal,
     workspace,
   });
   childWasi.processes.set(fork.childPid, {
@@ -1062,6 +1064,8 @@ class WasiPreview1Runtime {
     this.getInstance = options.getInstance;
     this.memory = null;
     this.output = options.output;
+    this.terminal = normalizeWasiTerminal(options.terminal);
+    this.ttyState = wasixTtyStateForTerminal(this.terminal);
     this.wasix = new WasixRuntime(this);
     this.workspace = options.workspace;
     this.files = this.workspace.files;
@@ -4898,7 +4902,7 @@ class WasixRuntime {
     if (!this.host.canReadWrite(ptr, WASIX_TTY_STATE_SIZE)) {
       return ERRNO_FAULT;
     }
-    writeWasixTtyState(this.host, ptr, DEFAULT_WASIX_TTY_STATE);
+    writeWasixTtyState(this.host, ptr, this.host.ttyState);
     return ERRNO_SUCCESS;
   }
 
@@ -5531,6 +5535,59 @@ function writeWasixTtyState(host, ptr, state) {
   host.writeU8(ptr + 21, 0);
   host.writeU8(ptr + 22, 0);
   host.writeU8(ptr + 23, 0);
+}
+
+function normalizeWasiTerminal(value) {
+  const terminal = value ?? {};
+  const columns = terminalDimension(
+    terminal.columns ?? terminal.cols,
+    DEFAULT_WASIX_TTY_STATE.cols,
+    "columns",
+  );
+  const rows = terminalDimension(
+    terminal.rows,
+    DEFAULT_WASIX_TTY_STATE.rows,
+    "rows",
+  );
+  return {
+    columns,
+    height: terminalDimension(
+      terminal.height,
+      DEFAULT_WASIX_TTY_STATE.height,
+      "height",
+    ),
+    rows,
+    width: terminalDimension(
+      terminal.width,
+      DEFAULT_WASIX_TTY_STATE.width,
+      "width",
+    ),
+  };
+}
+
+function wasixTtyStateForTerminal(terminal) {
+  return {
+    ...DEFAULT_WASIX_TTY_STATE,
+    cols: terminal.columns,
+    height: terminal.height,
+    rows: terminal.rows,
+    width: terminal.width,
+  };
+}
+
+function terminalDimension(value, defaultValue, field) {
+  if (value == null) {
+    return defaultValue;
+  }
+  const dimension = Number(value);
+  if (!Number.isSafeInteger(dimension) || dimension <= 0) {
+    throw new BrowserWasiModuleError(
+      "invalid_request",
+      `raw WASI terminal ${field} must be a positive integer`,
+      "runtime",
+    );
+  }
+  return dimension;
 }
 
 function writeWasixOptionPid(host, ptr, tag, pid) {
@@ -6591,7 +6648,10 @@ async function workerRunRequest(request) {
     env: { ...(request.env ?? {}) },
     package: request.package,
     stdinBytes,
-    terminal: { ...(request.terminal ?? {}) },
+    terminal:
+      request.terminal == null
+        ? undefined
+        : normalizeWasiTerminal(request.terminal),
     workspaceSnapshot: request.workspaceSnapshot
       ? cloneWorkspaceSnapshot(request.workspaceSnapshot)
       : undefined,

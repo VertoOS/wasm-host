@@ -3,6 +3,22 @@
 Browser UI and browser-host adapter work goes here while the runtime contract is
 still changing.
 
+Architecture boundary:
+
+- `apps/web` owns low-level browser host protocols and deterministic fixtures:
+  worker lifecycle, HTTP bridge, workspace, package loading, terminal stdio,
+  raw WASI smoke execution, and narrow browser protocol fixtures.
+- Do not add first-class MCP, plugin, OAuth, provider, or connector runtimes
+  under `apps/web/src`, `apps/web/test`, or `apps/web/e2e`. Build those as
+  separate packages or adapters over protocol-neutral browser tools.
+- The current app-server files are explicit allowlist exceptions because they
+  exercise a small browser-owned JSON-RPC protocol fixture. They are not the
+  full native app-server engine, persistent session runtime, or provider-backed
+  product integration.
+- `npm run check` runs `scripts/check-architecture.js`; it blocks
+  first-class high-level file names and bare package imports. Update its
+  allowlist only for narrow protocol fixtures with a documented reason.
+
 Current scope:
 
 - `index.html`, `src/app.js`, and `src/app.css` provide the first browser app

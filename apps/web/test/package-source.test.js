@@ -13,6 +13,10 @@ import {
   CODEX_VERSION_SMOKE_WASM,
   codexVersionSmokeManifest,
 } from "../fixtures/codex-version-smoke-core.js";
+import {
+  webcCommandManifest,
+  webcV2Bytes,
+} from "../fixtures/webc-metadata-fixture.js";
 import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import {
   parsePackageArgs,
@@ -60,6 +64,33 @@ test("resolveBrowserPackageSource normalizes uploaded package bytes for worker l
     cwd: "/workspace",
   });
   assert.equal(source.metadata.sourceLabel, "test package.webc");
+});
+
+test("resolveBrowserPackageSource uses discovered WebC commands when command is omitted", async () => {
+  const source = await resolveBrowserPackageSource({
+    argsText: "-lc pwd",
+    file: file("bash.webc", webcV2Bytes(webcCommandManifest())),
+    kind: "package-file",
+    packageId: "bash-pkg",
+  });
+
+  assert.equal(source.commandLabel, "bash -lc pwd");
+  assert.equal(source.loadMessage.id, "load-bash-pkg");
+  assert.equal(source.loadMessage.package.id, "bash-pkg");
+  assert.equal(source.loadMessage.package.entrypoint, "bash");
+  assert.equal(source.loadMessage.package.type, "webc-package");
+  assert.deepEqual(source.loadMessage.package.commands, ["bash", "ls"]);
+  assert.deepEqual(source.runMessage, {
+    type: "command.run",
+    id: "run-bash-pkg-bash",
+    packageId: "bash-pkg",
+    command: "bash",
+    args: ["-lc", "pwd"],
+    env: {},
+    cwd: "/workspace",
+  });
+  assert.equal(source.metadata.command, "bash");
+  assert.equal(source.metadata.sourceLabel, "bash.webc");
 });
 
 test("resolveBrowserPackageSource runs uploaded raw WASI modules", async () => {

@@ -275,17 +275,18 @@ separate runtime and packaging concerns.
 The initial browser package loading surface lives in
 `apps/web/src/package-loader.js`. It accepts explicit package bytes or a
 Fetch-backed URL, validates WebC (`\0webc`) and Wasm (`\0asm`) magic bytes,
-hashes content with SHA-256, verifies optional expected hashes, and derives
-browser-safe cache paths under `wasm-host/v1/packages/sha256/` and
-`wasm-host/v1/modules/sha256/`. The loader normalizes command names,
-entrypoints, artifact kind, source metadata, content hash, and cache metadata
-into a `command.load` package shape for the command lifecycle runtime. This is
-the package input/cache boundary plus the first dispatch boundary:
-`apps/web/src/webc-wasix.js` now receives loaded WebC commands and returns a
-structured unimplemented WebC/WASIX runtime error instead of falling through to
-unsupported package routing. Full WebC metadata parsing, compiled module cache
-persistence, filesystem mounts, and actual WebC/Wasm execution are later
-browser runtime layers.
+parses WebC v2/v3 manifest metadata for package identity, commands, WASI
+command hints, and filesystem mappings, hashes content with SHA-256, verifies
+optional expected hashes, and derives browser-safe cache paths under
+`wasm-host/v1/packages/sha256/` and `wasm-host/v1/modules/sha256/`. The loader
+normalizes command names, entrypoints, artifact kind, source metadata, content
+hash, and cache metadata into a `command.load` package shape for the command
+lifecycle runtime. This is the package input/cache boundary plus the first
+dispatch boundary: `apps/web/src/webc-wasix.js` now receives loaded WebC
+commands and returns a structured unimplemented WebC/WASIX runtime error
+instead of falling through to unsupported package routing. WebC atom/rootfs
+extraction, compiled module cache persistence, filesystem mounts, and actual
+WebC/Wasm execution are later browser runtime layers.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory

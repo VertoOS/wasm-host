@@ -1,3 +1,8 @@
+import {
+  WebcMetadataError,
+  extractWebcPackageMetadata,
+} from "./webc-metadata.js";
+
 const WEBC_MAGIC = new Uint8Array([0x00, 0x77, 0x65, 0x62, 0x63]);
 const WASM_MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
 const WEBC_ARTIFACT_KIND = "webc-package";
@@ -61,9 +66,12 @@ export class BrowserPackageLoader {
     const sha256 = await sha256Hex(bytes);
     verifyExpectedSha256(input.expectedSha256, sha256);
     const cacheKeys = packageCacheKeys({ format, sha256 });
+    const discoveredMetadata =
+      format === "webc" ? discoverWebcMetadata(bytes, input) : null;
     const metadata = normalizePackageMetadata(input, {
       byteLength: bytes.byteLength,
       cacheKeys,
+      discoveredMetadata,
       artifactKind: normalizeArtifactKind(
         input.artifactKind ??
           (input.executorType === CODEX_BROWSER_ARTIFACT_KIND
@@ -333,16 +341,26 @@ export function packageCacheKeys(options = {}) {
 }
 
 function normalizePackageMetadata(input, context) {
-  const id = nonEmptyString(input.id ?? input.packageId ?? DEFAULT_PACKAGE_ID);
-  const commands = normalizeCommands(input);
-  const defaultCommand = normalizeDefaultCommand(input, commands);
+  const discovered = context.discoveredMetadata;
+  const id = nonEmptyString(
+    input.id ??
+      input.packageId ??
+      discovered?.packageName ??
+      discovered?.package?.name ??
+      DEFAULT_PACKAGE_ID,
+  );
+  const commands = normalizeCommands(input, discovered);
+  const defaultCommand = normalizeDefaultCommand(input, commands, discovered);
+  const discoveredEntrypoint = commands.includes(discovered?.entrypoint)
+    ? discovered.entrypoint
+    : null;
   const entrypoint = nonEmptyString(
     input.entrypoint ??
       (context.artifactKind === RAW_WASI_ARTIFACT_KIND
         ? RAW_WASI_ENTRYPOINT
         : context.artifactKind === CODEX_BROWSER_ARTIFACT_KIND
           ? CODEX_BROWSER_ENTRYPOINT
-        : defaultCommand),
+        : discoveredEntrypoint ?? defaultCommand),
   );
   const executorType =
     context.artifactKind === RAW_WASI_ARTIFACT_KIND
@@ -356,6 +374,18 @@ function normalizePackageMetadata(input, context) {
     executorType: nonEmptyString(executorType),
     id,
     metadata: {
+      ...(discovered
+        ? {
+            atoms: discovered.atoms,
+            commandMetadata: discovered.commandMetadata,
+            filesystem: discovered.filesystem,
+            manifest: discovered.manifest,
+            package: discovered.package,
+            packageName: discovered.packageName,
+            packageVersion: discovered.packageVersion,
+            webcVersion: discovered.version,
+          }
+        : {}),
       ...(input.metadata ?? {}),
       artifactKind: context.artifactKind,
       byteLength: context.byteLength,
@@ -369,6 +399,23 @@ function normalizePackageMetadata(input, context) {
     },
     source: context.source,
   };
+}
+
+function discoverWebcMetadata(bytes, input) {
+  try {
+    return extractWebcPackageMetadata(bytes);
+  } catch (error) {
+    if (hasExplicitCommands(input)) {
+      return null;
+    }
+    if (error instanceof WebcMetadataError) {
+      throw new BrowserPackageLoaderError(
+        "invalid_package",
+        `browser WebC metadata could not be parsed: ${error.message}`,
+      );
+    }
+    throw error;
+  }
 }
 
 function openPackageCacheDatabase(options) {
@@ -432,8 +479,12 @@ function indexedDbError(error, action) {
   );
 }
 
-function normalizeCommands(input) {
-  const commands = input.commands ?? (input.command ? [input.command] : null);
+function normalizeCommands(input, discovered) {
+  const commands =
+    input.commands ??
+    (input.command ? [input.command] : null) ??
+    discovered?.commands ??
+    null;
   if (!Array.isArray(commands) || commands.length === 0) {
     throw new BrowserPackageLoaderError(
       "invalid_package",
@@ -443,8 +494,9 @@ function normalizeCommands(input) {
   return commands.map(normalizeCommandName);
 }
 
-function normalizeDefaultCommand(input, commands) {
-  const defaultCommand = input.defaultCommand ?? commands[0];
+function normalizeDefaultCommand(input, commands, discovered) {
+  const defaultCommand =
+    input.defaultCommand ?? discovered?.defaultCommand ?? commands[0];
   const normalized = nonEmptyString(defaultCommand);
   if (!commands.includes(normalized)) {
     throw new BrowserPackageLoaderError(
@@ -464,6 +516,14 @@ function normalizeCommandName(value) {
     );
   }
   return command;
+}
+
+function hasExplicitCommands(input) {
+  return (
+    Array.isArray(input.commands) ||
+    input.command != null ||
+    input.defaultCommand != null
+  );
 }
 
 function packageSummary(record) {

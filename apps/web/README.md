@@ -127,14 +127,16 @@ Current scope:
   smoke starts this entrypoint from a real module worker.
 - `src/package-loader.js` implements the first browser package loading surface
   for explicit bytes and Fetch-backed artifacts. It validates WebC/Wasm magic
-  bytes, verifies optional sha256 pins, normalizes command metadata for
-  `command.load`, derives IndexedDB-safe package/module cache paths from
-  content hashes, and persists package summaries, package bytes, and module
-  artifacts in IndexedDB when available. Wasm package sources are mapped onto
-  the raw WASI module executor; WebC sources keep their selected executor type.
-  Memory cache remains the fallback and test-injectable cache. It does not parse
-  full WebC metadata, execute WebC/WASIX packages, manage cache eviction, or
-  wire workspace persistence into full package execution yet.
+  bytes, parses WebC v2/v3 manifest metadata for package identity, commands,
+  WASI command hints, and filesystem mappings, verifies optional sha256 pins,
+  normalizes command metadata for `command.load`, derives IndexedDB-safe
+  package/module cache paths from content hashes, and persists package
+  summaries, package bytes, and module artifacts in IndexedDB when available.
+  Wasm package sources are mapped onto the raw WASI module executor; WebC
+  sources keep their selected executor type. Memory cache remains the fallback
+  and test-injectable cache. It does not extract WebC atom/rootfs bytes, execute
+  WebC/WASIX packages, manage cache eviction, or wire workspace persistence into
+  full package execution yet.
 - `src/artifact-manifest.js` consumes the interim Codex artifact manifest
   shapes. It validates the raw `wasi-module` `codex --version` contract and
   the `codex-browser` request-builder contract, normalizes them into command

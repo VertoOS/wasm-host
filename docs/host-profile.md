@@ -380,9 +380,12 @@ capability errors for native-only methods. The real-browser e2e harness drives
 this fixture through a dependency-free loopback socket and JSON-RPC client, so
 the test path uses ordered text frames, request correlation, notification
 delivery, malformed-frame handling, and close behavior without a native
-WebSocket bridge. It is not yet a real network WebSocket replacement for the
-Codex browser demo, a persistent session store, or the full native app-server
-engine.
+WebSocket bridge. A small browser session controller sits on top of that
+transport to own initialize, account read, fake login cancellation, thread
+reuse, mocked turn completion, pending turn interrupt, close state, and a
+notification transcript for tests. It is not yet a real network WebSocket
+replacement for the Codex browser demo, a persistent session store, or the full
+native app-server engine.
 
 The browser profile also has a deterministic packaged tool fixture. The command
 worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,

@@ -249,10 +249,10 @@ async function runBashCoreutilsSmokePage(page) {
     timeoutMs: BASH_COREUTILS_STATUS_TIMEOUT_MS,
   });
   assert.equal(status.status, "passed", status.error?.message);
-  assert.equal(status.result.blocked, true);
-  assert.equal(status.result.blockerIssue, 212);
+  assert.equal(status.result.blocked, false);
+  assert.equal(status.result.blockerIssue, null);
   assert.equal(status.result.stdout, "/workspace\nBASH_BROWSER_OK\n");
-  assert.match(status.result.stderr, /bash: line 1: ls: command not found/);
+  assert.equal(status.result.stderr, "");
   assert.equal(
     status.result.artifacts.bash.sha256,
     "059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1",
@@ -285,7 +285,7 @@ async function runBashCoreutilsSmokePage(page) {
       ([group, name]) => group === "process" && name === "proc_join",
     ),
   );
-  return `PASS browser Bash/coreutils WebC blocker e2e: issue #${status.result.blockerIssue}`;
+  return "PASS browser Bash/coreutils WebC e2e";
 }
 
 async function runTerminalShellPage(page) {

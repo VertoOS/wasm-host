@@ -927,7 +927,7 @@ async function writableWorkspaceMountFromSnapshot(snapshot, options = {}) {
 }
 
 function readOnlyPackageRootMount(files = []) {
-  const dirs = new Set([""]);
+  const dirs = new Set(["", "workspace", "tmp"]);
   const records = new Map();
   for (const file of files ?? []) {
     records.set(file.path, {
@@ -1732,9 +1732,9 @@ class WasiPreview1Runtime {
     while (offset < length) {
       this.throwIfAborted();
       const chunkLength = Math.min(RANDOM_GET_CHUNK_SIZE, length - offset);
-      random.getRandomValues(
-        bytes.subarray(start + offset, start + offset + chunkLength),
-      );
+      const chunk = new Uint8Array(chunkLength);
+      random.getRandomValues(chunk);
+      bytes.set(chunk, start + offset);
       offset += chunkLength;
     }
     return ERRNO_SUCCESS;
@@ -2838,6 +2838,30 @@ class WasiPreview1Runtime {
     if (readOnlyWorkspaceBase == null) {
       return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
     }
+    const path = resolveScratchPath(
+      readOnlyWorkspaceBase,
+      this.readString(pathPtr, pathLen),
+      { lookup: true },
+    );
+    if (path.errno != null) {
+      return path.errno;
+    }
+    if ((oflags & WASI_OFLAGS_DIRECTORY) !== 0) {
+      if (
+        (oflags &
+          (WASI_OFLAGS_CREAT | WASI_OFLAGS_EXCL | WASI_OFLAGS_TRUNC)) !== 0 ||
+        (fdflags & WASI_FDFLAGS_APPEND) !== 0
+      ) {
+        return ERRNO_NOTCAPABLE;
+      }
+      return this.openReadOnlyWorkspaceDirectory(
+        path.value,
+        BigInt(rightsBase),
+        rightsInheriting,
+        fdflags,
+        openedFdPtr,
+      );
+    }
     if (
       (oflags &
         (WASI_OFLAGS_CREAT |
@@ -2849,14 +2873,6 @@ class WasiPreview1Runtime {
       requestsWriteRights(rightsInheriting)
     ) {
       return ERRNO_NOTCAPABLE;
-    }
-    const path = resolveScratchPath(
-      readOnlyWorkspaceBase,
-      this.readString(pathPtr, pathLen),
-      { lookup: true },
-    );
-    if (path.errno != null) {
-      return path.errno;
     }
     if (!path.value) {
       return ERRNO_NOTCAPABLE;
@@ -2922,11 +2938,45 @@ class WasiPreview1Runtime {
     openedFdPtr,
   ) {
     const requestedRights = BigInt(rightsBase);
-    const path = resolveScratchPath(
-      basePath,
-      this.readString(pathPtr, pathLen),
-      { lookup: true },
-    );
+    const pathText = this.readString(pathPtr, pathLen);
+    const virtualPath = rootVirtualMountPath(basePath, pathText);
+    if (virtualPath?.errno != null) {
+      return virtualPath.errno;
+    }
+    if (virtualPath?.mount === "workspace") {
+      if ((oflags & WASI_OFLAGS_DIRECTORY) === 0) {
+        return ERRNO_NOTCAPABLE;
+      }
+      if (!this.workspace.writable) {
+        return this.openReadOnlyWorkspaceDirectory(
+          virtualPath.path,
+          requestedRights,
+          rightsInheriting,
+          fdflags,
+          openedFdPtr,
+        );
+      }
+      return this.openWorkspaceDirectory(
+        virtualPath.path,
+        requestedRights,
+        rightsInheriting,
+        fdflags,
+        openedFdPtr,
+      );
+    }
+    if (virtualPath?.mount === "scratch") {
+      if ((oflags & WASI_OFLAGS_DIRECTORY) === 0) {
+        return ERRNO_NOTCAPABLE;
+      }
+      return this.openScratchDirectory(
+        virtualPath.path,
+        requestedRights,
+        rightsInheriting,
+        fdflags,
+        openedFdPtr,
+      );
+    }
+    const path = resolvePackageRootPath(basePath, pathText);
     if (path.errno != null) {
       return path.errno;
     }
@@ -3260,7 +3310,8 @@ class WasiPreview1Runtime {
       return ERRNO_NOTDIR;
     }
     if (
-      !this.workspaceDirs.has(path) &&
+      path !== "" &&
+      !(this.workspaceDirs?.has(path) ?? false) &&
       !pathHasChildren(this.files, this.workspaceDirs, path)
     ) {
       return ERRNO_NOENT;
@@ -3276,6 +3327,45 @@ class WasiPreview1Runtime {
       offset: 0,
       path,
       rights: requestedRights,
+    });
+    this.writeU32(openedFdPtr, openedFd);
+    return ERRNO_SUCCESS;
+  }
+
+  openReadOnlyWorkspaceDirectory(
+    path,
+    requestedRights,
+    rightsInheriting,
+    fdflags,
+    openedFdPtr,
+  ) {
+    if (fdflags !== 0) {
+      return ERRNO_INVAL;
+    }
+    if (this.files.has(path)) {
+      return ERRNO_NOTDIR;
+    }
+    if (
+      path !== "" &&
+      !(this.workspaceDirs?.has(path) ?? false) &&
+      !pathHasChildren(this.files, this.workspaceDirs, path)
+    ) {
+      return ERRNO_NOENT;
+    }
+
+    const openedFd = this.nextFileFd;
+    this.nextFileFd += 1;
+    this.openFiles.set(openedFd, {
+      fdflags,
+      inheriting: BigInt(rightsInheriting) & WASI_REGULAR_FILE_RIGHTS,
+      kind: "directory",
+      mount: "workspace",
+      offset: 0,
+      path,
+      rights:
+        requestedRights === 0n
+          ? WASI_WORKSPACE_RIGHTS
+          : requestedRights & WASI_WORKSPACE_RIGHTS,
     });
     this.writeU32(openedFdPtr, openedFd);
     return ERRNO_SUCCESS;
@@ -3717,7 +3807,23 @@ class WasiPreview1Runtime {
     if (pathText === "") {
       return { errno: ERRNO_NOENT };
     }
-    const path = resolveScratchPath(base, pathText, { lookup: true });
+    const virtualPath = rootVirtualMountPath(base, pathText);
+    if (virtualPath?.errno != null) {
+      return virtualPath;
+    }
+    if (virtualPath?.mount === "workspace") {
+      if (virtualPath.path === "") {
+        return { filetype: WASI_FILETYPE_DIRECTORY, size: 0 };
+      }
+      return statPath(this.files, this.workspaceDirs, virtualPath.path);
+    }
+    if (virtualPath?.mount === "scratch") {
+      if (virtualPath.path === "") {
+        return { filetype: WASI_FILETYPE_DIRECTORY, size: 0 };
+      }
+      return statPath(this.scratchFiles, this.scratchDirs, virtualPath.path);
+    }
+    const path = resolvePackageRootPath(base, pathText);
     if (path.errno != null) {
       return path;
     }
@@ -4039,7 +4145,7 @@ class WasiPreview1Runtime {
   resolvePathForFd(fd, pathValue) {
     const packageRootBase = this.packageRootBasePath(fd);
     if (packageRootBase != null) {
-      return resolveScratchPath(packageRootBase, pathValue, { lookup: true });
+      return resolvePackageRootPath(packageRootBase, pathValue);
     }
     const workspaceBase = this.workspaceBasePath(fd);
     if (workspaceBase != null) {
@@ -4602,8 +4708,9 @@ class WasixRuntime {
     }
     const stderr = "inherit";
     const stdout = "inherit";
+    const args = wasixLineList(this.readString(argsPtr, argsLen));
     const request = {
-      args: wasixLineList(this.readString(argsPtr, argsLen)),
+      args,
       command,
       cwd: this.host.cwd,
       env,
@@ -4611,6 +4718,7 @@ class WasixRuntime {
       stderr,
       stdin: this.host.remainingStdinBytes(),
       stdout,
+      wasixExecArgv0: true,
     };
     if (this.host.diagnostics.unsupportedWasixCalls) {
       request.diagnostics = this.host.diagnostics;
@@ -5476,6 +5584,44 @@ function resolveScratchPath(basePath, pathValue, options = {}) {
   };
 }
 
+function resolvePackageRootPath(basePath, pathValue) {
+  let path = String(pathValue ?? "");
+  if (basePath === "" && path.startsWith("/")) {
+    path = path.replace(/^\/+/, "");
+  }
+  return resolveScratchPath(basePath, path, { lookup: true });
+}
+
+function rootVirtualMountPath(basePath, pathValue) {
+  if (basePath !== "") {
+    return null;
+  }
+  let path = String(pathValue ?? "");
+  if (path.startsWith("/")) {
+    path = path.replace(/^\/+/, "");
+  }
+  const normalized = normalizeWasiLookupPath(path);
+  if (normalized == null) {
+    return { errno: ERRNO_NOTCAPABLE };
+  }
+  if (normalized === "workspace" || normalized.startsWith("workspace/")) {
+    return {
+      mount: "workspace",
+      path:
+        normalized === "workspace"
+          ? ""
+          : normalized.slice("workspace/".length),
+    };
+  }
+  if (normalized === "tmp" || normalized.startsWith("tmp/")) {
+    return {
+      mount: "scratch",
+      path: normalized === "tmp" ? "" : normalized.slice("tmp/".length),
+    };
+  }
+  return null;
+}
+
 function statPath(files, dirs, path) {
   if (
     (dirs?.has(path) ?? false) ||
@@ -6251,6 +6397,9 @@ function workerChildCommandRequest(value = {}) {
   }
   if (value.timeoutMs != null) {
     request.timeoutMs = Number(value.timeoutMs);
+  }
+  if (value.wasixExecArgv0 === true) {
+    request.wasixExecArgv0 = true;
   }
   return request;
 }

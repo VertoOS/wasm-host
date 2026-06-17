@@ -37,21 +37,24 @@ bash -lc 'pwd; ls /workspace; echo BASH_BROWSER_OK'
 Current result:
 
 - `bash` starts and prints `/workspace`.
-- `ls /workspace` is invoked by the script but Bash reports
-  `bash: line 1: ls: command not found`.
-- `bash` continues after that failure, prints `BASH_BROWSER_OK`, and exits
-  `0`, so the browser worker now gets past the fork/restore path used by this
-  non-interactive Bash script.
+- `ls /workspace` is resolved through Bash's own PATH lookup, dispatched to the
+  loaded `wasmer/coreutils` package, and succeeds against the browser
+  `/workspace` mount.
+- The command exits `0` with stdout exactly
+  `/workspace\nBASH_BROWSER_OK\n` and empty stderr.
 - The runtime handles `stack_checkpoint` as a browser-safe zero probe for
   non-asyncify modules, supports asyncify checkpoint/restore for modules with
   exported stack bounds or a host-owned high-memory fallback buffer, supports
   asyncify `proc_fork(copy_memory=false)` vfork children, and supports a
   serialized `proc_fork(copy_memory=true)` child-exec subset.
-- The browser smoke is therefore marked blocked on
-  [#212](https://github.com/VertoOS/wasm-host/issues/212): loaded package
-  commands such as coreutils `ls` are not yet visible to Bash's PATH lookup.
-  The previous runtime blocker diagnostics for `proc_fork`, `stack_restore`,
-  and `proc_join` are no longer present in this smoke.
+- [#212](https://github.com/VertoOS/wasm-host/issues/212) added the package
+  command visibility slice: WebC/WASIX executor requests receive the loaded
+  command catalog, generated command shims are overlaid into package-root
+  files, the package-root `/` preopen resolves absolute package paths, and
+  virtual `/workspace` and `/tmp` directories are visible from that root.
+- The previous runtime blocker diagnostics for `proc_fork`, `stack_restore`,
+  `proc_join`, and Bash PATH command lookup are no longer present in this
+  smoke.
 
 ## Secondary Artifact Checked
 
@@ -122,7 +125,7 @@ is implementation depth inside grouped browser capability buckets.
 | Networking/ports | `sock_connect`, `sock_open`, `sock_send_to` | `port_*`, `resolve`, `sock_*` WASIX networking set | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Dynamic/closures/linking | `callback_signal` | `call_dynamic`, `callback_signal`, `closure_*`, `dl_invalid_handle`, `dlopen`, `dlsym`, `reflect_signature` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Clock mutation | none | `clock_time_set` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
-| Browser smoke | target command reaches Bash, runs the script, then cannot resolve `ls` through Bash PATH | target command reaches Bash, runs the script, then cannot resolve `ls` through Bash PATH | [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204), [#211](https://github.com/VertoOS/wasm-host/issues/211), [#212](https://github.com/VertoOS/wasm-host/issues/212) |
+| Browser smoke | target command reaches Bash, resolves `ls` through Bash PATH, and exits `0` with empty stderr | target command reaches Bash, resolves `ls` through Bash PATH, and exits `0` with empty stderr | [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204), [#211](https://github.com/VertoOS/wasm-host/issues/211), [#212](https://github.com/VertoOS/wasm-host/issues/212) |
 
 ## Current Interpretation
 
@@ -163,11 +166,19 @@ full Bash process-control support because unexported store globals, live FD
 inheritance, concurrent children, broad blocking wait, spawn, signals, and
 worker-thread semantics remain out of scope.
 
-After [#211](https://github.com/VertoOS/wasm-host/issues/211), the first Bash
-smoke gets past fork/restore and reaches the next browser package-catalog
-boundary: Bash cannot find `ls` even though coreutils is loaded in the command
-worker catalog. That follow-up is tracked by
-[#212](https://github.com/VertoOS/wasm-host/issues/212).
+[#212](https://github.com/VertoOS/wasm-host/issues/212) completes the first
+browser package-catalog visibility slice for this smoke. The command worker now
+passes its loaded command catalog into WebC/WASIX executor requests, the
+WebC/WASIX boundary overlays generated command shims into package-root files
+without overriding real package files, and the raw WASI package-root `/` preopen
+resolves absolute guest paths such as `/bin/ls`. That lets Bash's internal PATH
+probe find `ls`; `proc_exec3` then reaches the existing catalog child-command
+bridge, which runs coreutils with the duplicated WASIX argv0 stripped before
+raw execution.
+
+This does not claim full Bash, git, spawn, signal, interactive TTY, broad fork,
+or worker-thread support. It proves the first non-interactive browser
+Bash/coreutils package smoke can run through real WebC artifacts in Chromium.
 
 The audit did not find any reason to add first-class MCP, plugin, provider,
 connector, or OAuth modules under `apps/web`. Those remain adapter-package

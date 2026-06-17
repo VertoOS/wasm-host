@@ -513,9 +513,11 @@ test("raw WASI executor supports clock and random imports", async () => {
     id: "clock-random",
   });
   const randomChunks = [];
+  const randomBuffers = [];
   const originalGetRandomValues = globalThis.crypto.getRandomValues;
   globalThis.crypto.getRandomValues = (array) => {
     randomChunks.push(array.byteLength);
+    randomBuffers.push(array.buffer);
     array.fill(randomChunks.length);
     return array;
   };
@@ -538,6 +540,10 @@ test("raw WASI executor supports clock and random imports", async () => {
 
   assert.deepEqual(result, { exitCode: 0 });
   assert.deepEqual(randomChunks, [65536, 4464]);
+  assert.equal(
+    randomBuffers.every((buffer) => buffer instanceof ArrayBuffer),
+    true,
+  );
   assert.equal(output.stdout, "clock-random-ok\n");
   assert.equal(output.stderr, "");
 });
@@ -1810,6 +1816,7 @@ test("raw WASI executor exposes WASIX proc_exec through child commands", async (
       stderr: "inherit",
       stdin: "parent stdin\n",
       stdout: "inherit",
+      wasixExecArgv0: true,
     },
   );
   assert.equal(output.stdout, "");
@@ -1910,6 +1917,7 @@ test("raw WASI executor maps WASIX proc_exec2 env overlays to child commands", a
       stderr: "inherit",
       stdin: "exec2 stdin\n",
       stdout: "inherit",
+      wasixExecArgv0: true,
     },
   );
   assert.deepEqual(result, { exitCode: 9 });
@@ -1958,6 +1966,7 @@ test("raw WASI executor maps WASIX proc_exec3 PATH search to child commands", as
       stderr: "inherit",
       stdin: "exec3 stdin\n",
       stdout: "inherit",
+      wasixExecArgv0: true,
     },
   );
   assert.deepEqual(result, { exitCode: 11 });
@@ -2010,6 +2019,7 @@ test("raw WASI executor maps WASIX proc_exec3 default PATH search", async () => 
       stderr: "inherit",
       stdin: "default path stdin\n",
       stdout: "inherit",
+      wasixExecArgv0: true,
     },
   );
   assert.deepEqual(result, { exitCode: 13 });
@@ -2512,6 +2522,7 @@ test("raw WASI executor resumes WASIX vfork parents after proc_exec3", async () 
       stderr: "inherit",
       stdin: "vfork stdin\n",
       stdout: "inherit",
+      wasixExecArgv0: true,
     },
   );
   assert.deepEqual(result, { exitCode: 0 });
@@ -2558,6 +2569,7 @@ test("raw WASI executor isolates copied-memory fork child exec", async () => {
       stderr: "inherit",
       stdin: "copy fork stdin\n",
       stdout: "inherit",
+      wasixExecArgv0: true,
     },
   );
   assert.deepEqual(result, { exitCode: 0 });
@@ -2604,6 +2616,7 @@ test("raw WASI executor provides a host asyncify buffer without stack bounds exp
       stderr: "inherit",
       stdin: "fallback fork stdin\n",
       stdout: "inherit",
+      wasixExecArgv0: true,
     },
   );
   assert.deepEqual(result, { exitCode: 0 });

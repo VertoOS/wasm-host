@@ -246,7 +246,8 @@ surface low-level command shims in their virtual package root for guest shells
 that perform their own PATH probes. Executor requests also receive a low-level
 child packaged-command helper that resolves another loaded command through the
 same package/catalog rules, carries cwd/env/args/stdin, can pipe or inherit
-stdout/stderr, and follows parent timeout/cancel signals. This is not arbitrary
+stdout/stderr, can return a cloneable workspace snapshot for WebC/WASIX child
+commands, and follows parent timeout/cancel signals. This is not arbitrary
 native process spawn. The first
 built-in `smoke` executor is only a lifecycle fixture for worker-boundary
 tests. The deterministic `browser-tool-fixture` executor is the first packaged
@@ -301,9 +302,13 @@ input/cache boundary plus the first dispatch boundary:
 command atom metadata, reads cached atom bytes, and delegates executable atoms
 to the browser raw WASI Preview1 runtime with read-only package-root files from
 extracted WebC volume spans plus generated command shims for loaded catalog
-paths. Unsupported runners and missing atom artifacts still fail with
-structured errors. Compiled module cache persistence, general WASIX process
-spawning, and broad Bash/git execution are later browser runtime layers. Raw
+paths. It also snapshots the host-owned browser workspace into executable atom
+runs and imports mutated snapshots returned by child packaged commands so the
+current Bash/coreutils smoke can create, redirect, read, list, and remove files
+under `/workspace`. Unsupported runners and missing atom artifacts still fail
+with structured errors. Compiled module cache persistence, general WASIX
+process spawning, and broad Bash/git execution are later browser runtime
+layers. Raw
 WASI execution exposes narrow `wasix_32v1.proc_exec`,
 `proc_exec2`, and `proc_exec3` adapters that escape the synchronous WebAssembly
 import frame, then await the existing child-command bridge so the current module
@@ -344,8 +349,11 @@ The same low-level namespace now handles `getcwd`/`chdir` against the browser
 virtual cwd, mirrors `path_open2` through the current fd/path model with
 package-root absolute path lookup, exposes virtual `/workspace` and `/tmp`
 directories below the package-root `/` preopen for package tools reached
-through shell PATH, maintains extended fd flag bookkeeping, reports `getpid` as
-the single browser process,
+through shell PATH, maps relative writable operations after `cd /workspace` to
+the workspace while preserving package-root read fallback, accepts writable
+mounted-path spellings including `/workspace%`, supports workspace-backed stdio
+renumbering for shell redirects, maintains extended fd flag bookkeeping,
+reports `getpid` as the single browser process,
 returns an empty signal-disposition set, and implements `fd_dup`, `fd_dup2`,
 `fd_pipe`, and `pipe` with descriptor-local rights, shared file offsets,
 duplicated stdio handles, duplicated preopen directories, deterministic
@@ -363,7 +371,10 @@ available. Memory storage is the fallback. This is the first workspace state
 boundary only: raw WASI fixture runs can mount an injected store by snapshotting
 before `_start` and flushing mutations after exit, and the `codex-browser`
 `workspace-edit` fixture and `browser-tool-fixture` executor can use the
-host-owned store directly.
+host-owned store directly. WebC/WASIX command runs reuse the same deterministic
+snapshot shape across worker and child-command boundaries for the current
+Bash/coreutils workspace file smoke; live workspace store instances still stay
+outside worker payloads.
 OPFS-backed large-file storage, user-granted directories, app-server
 integration, and full Codex file-edit turn wiring remain later browser runtime
 layers.
@@ -419,8 +430,9 @@ until the browser host has a real worker-thread runtime.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, can optionally back `/workspace` with an injected browser workspace
-store for fixture read/write/create/remove/rename operations, and provides a
-volatile in-memory `/tmp` scratch preopen for narrow directory
+store or cloneable workspace snapshot for read/write/create/remove/rename
+operations, imports worker-mutated snapshots back into the caller, and provides
+a volatile in-memory `/tmp` scratch preopen for narrow directory
 create/list/rename/remove and file
 advise/allocate/create/write/positioned-write/readback/positioned-read/stat,
 rights-reduction/renumber/rename, fd/path set-times/truncate/sync/unlink
@@ -508,9 +520,12 @@ The current WASIX process/catalog proof covers replacement-style exec variants,
 env/PATH overlays, exit status propagation, deterministic parent/snapshot
 answers, asyncify vfork child completion, a serialized copied-memory child
 exec subset, and the first Bash PATH package visibility proof through generated
-package-root command shims; it is not process spawn, full fork/store cloning,
-general waitpid, broad shell semantics, git, native process spawning, or
-arbitrary uploaded JavaScript.
+package-root command shims. The current Bash/coreutils workspace proof adds
+snapshot handoff for child command mutations, workspace path aliases, package
+root fallback, and workspace-backed stdio redirection for `mkdir`, shell
+redirects, `cat`, `ls`, `rm`, and `rm -r`; it is not process spawn, full
+fork/store cloning, general waitpid, broad shell semantics, git, native process
+spawning, or arbitrary uploaded JavaScript.
 The current thread/event classification exposes single-thread id/parallelism
 and zero-duration sleep, while opt-in unsupported-call diagnostics report the
 remaining thread/event, dynamic, network, clock, and process-control gaps,

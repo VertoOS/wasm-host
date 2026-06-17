@@ -1,5 +1,24 @@
+import { createDefaultBrowserWorkspaceStore } from "../src/workspace.js";
+
 const decoder = new TextDecoder();
-const TARGET_SHELL_SCRIPT = "pwd; ls /workspace; echo BASH_BROWSER_OK";
+const PATH_SHELL_SCRIPT = "pwd; ls /workspace; echo BASH_BROWSER_OK";
+const WORKSPACE_SHELL_SCRIPT = [
+  "set -eu",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "rm -rf issue-215-smoke",
+  "mkdir issue-215-smoke",
+  "printf 'alpha\\nbeta\\n' > issue-215-smoke/input.txt",
+  "cat issue-215-smoke/input.txt",
+  "ls issue-215-smoke",
+  "rm issue-215-smoke/input.txt",
+  "ls issue-215-smoke",
+  "rm -r issue-215-smoke",
+  "printf 'ISSUE_215_WORKSPACE_OK\\n'",
+].join("; ");
+const PATH_EXPECTED_STDOUT = "/workspace\nBASH_BROWSER_OK\n";
+const WORKSPACE_EXPECTED_STDOUT =
+  "alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n";
 
 const BASH_ARTIFACT = {
   name: "wasmer/bash",
@@ -16,6 +35,7 @@ const COREUTILS_ARTIFACT = {
 };
 
 export async function runBashCoreutilsSmoke() {
+  await resetBrowserWorkspace();
   const worker = new Worker(
     new URL("../src/command-worker-entry.js", import.meta.url),
     { name: "bash-coreutils-smoke", type: "module" },
@@ -35,42 +55,89 @@ export async function runBashCoreutilsSmoke() {
     assert(coreutilsLoad.commands.includes("ls"), "ls command should load");
     assert(coreutilsLoad.commands.includes("pwd"), "pwd command should load");
     assert(coreutilsLoad.commands.includes("echo"), "echo command should load");
+    assert(coreutilsLoad.commands.includes("cat"), "cat command should load");
+    assert(coreutilsLoad.commands.includes("mkdir"), "mkdir command should load");
+    assert(coreutilsLoad.commands.includes("rm"), "rm command should load");
 
-    const run = await dispatchAndCollect(
+    const pathRun = await dispatchAndCollect(
       worker,
       {
         type: "command.run",
-        id: "run-bash-coreutils-target",
+        id: "run-bash-coreutils-path",
         packageId: "bash",
         command: "bash",
-        args: ["-lc", TARGET_SHELL_SCRIPT],
+        args: ["-lc", PATH_SHELL_SCRIPT],
         diagnostics: { unsupportedWasixCalls: true },
         env: { PATH: "/bin:/usr/bin" },
         timeoutMs: 30000,
       },
     );
-    assert(run.complete, "target command should complete");
+    assert(pathRun.complete, "PATH command should complete");
 
-    const stdout = chunksText(run.stdout);
-    const stderr = chunksText(run.stderr);
-    const diagnostics =
-      run.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
+    const pathStdout = chunksText(pathRun.stdout);
+    const pathStderr = chunksText(pathRun.stderr);
+    const pathDiagnostics =
+      pathRun.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
 
-    assertEqual(stdout, "/workspace\nBASH_BROWSER_OK\n");
-    assertEqual(stderr, "");
-    assertEqual(run.complete.result?.exitCode, 0);
-    assertEqual(run.complete.result?.failureStage, null);
-    assertEqual(diagnosticCount(diagnostics, "process", "proc_fork"), 0);
-    assertEqual(diagnosticCount(diagnostics, "process", "proc_join"), 0);
+    assertEqual(pathStdout, PATH_EXPECTED_STDOUT);
+    assertEqual(pathStderr, "");
+    assertEqual(pathRun.complete.result?.exitCode, 0);
+    assertEqual(pathRun.complete.result?.failureStage, null);
+    assertEqual(diagnosticCount(pathDiagnostics, "process", "proc_fork"), 0);
+    assertEqual(diagnosticCount(pathDiagnostics, "process", "proc_join"), 0);
     assertEqual(
-      diagnosticCount(diagnostics, "thread-event", "stack_restore"),
+      diagnosticCount(pathDiagnostics, "thread-event", "stack_restore"),
       0,
     );
     assertEqual(
-      diagnosticCount(diagnostics, "thread-event", "stack_checkpoint"),
+      diagnosticCount(pathDiagnostics, "thread-event", "stack_checkpoint"),
       0,
     );
-    assert(stdout.includes("BASH_BROWSER_OK"), "Bash should reach the marker");
+    assert(
+      pathStdout.includes("BASH_BROWSER_OK"),
+      "Bash should reach the PATH marker",
+    );
+
+    const workspaceRun = await dispatchAndCollect(
+      worker,
+      {
+        type: "command.run",
+        id: "run-bash-coreutils-workspace",
+        packageId: "bash",
+        command: "bash",
+        args: ["-lc", WORKSPACE_SHELL_SCRIPT],
+        diagnostics: { unsupportedWasixCalls: true },
+        env: { PATH: "/bin:/usr/bin" },
+        timeoutMs: 30000,
+      },
+    );
+    assert(workspaceRun.complete, "workspace command should complete");
+
+    const workspaceStdout = chunksText(workspaceRun.stdout);
+    const workspaceStderr = chunksText(workspaceRun.stderr);
+    const workspaceDiagnostics =
+      workspaceRun.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
+
+    assertEqual(workspaceStdout, WORKSPACE_EXPECTED_STDOUT);
+    assertEqual(workspaceStderr, "");
+    assertEqual(workspaceRun.complete.result?.exitCode, 0);
+    assertEqual(workspaceRun.complete.result?.failureStage, null);
+    assertEqual(
+      diagnosticCount(workspaceDiagnostics, "process", "proc_fork"),
+      0,
+    );
+    assertEqual(
+      diagnosticCount(workspaceDiagnostics, "process", "proc_join"),
+      0,
+    );
+    assertEqual(
+      diagnosticCount(workspaceDiagnostics, "thread-event", "stack_restore"),
+      0,
+    );
+    assert(
+      workspaceStdout.includes("ISSUE_215_WORKSPACE_OK"),
+      "Bash should reach the workspace marker",
+    );
 
     return {
       artifacts: {
@@ -79,19 +146,50 @@ export async function runBashCoreutilsSmoke() {
       },
       blocked: false,
       blockerIssue: null,
-      diagnostics,
+      diagnostics: pathDiagnostics,
       loadedCommands: {
         bash: bashLoad.commands,
         coreutils: coreutilsLoad.commands,
       },
-      result: run.complete.result,
-      stderr,
-      stdout,
-      targetCommand: ["bash", "-lc", TARGET_SHELL_SCRIPT],
+      result: pathRun.complete.result,
+      stages: [
+        {
+          exitCode: pathRun.complete.result?.exitCode,
+          name: "path-command",
+          status: "passed",
+          stdoutBytes: byteLength(pathStdout),
+        },
+        {
+          exitCode: workspaceRun.complete.result?.exitCode,
+          name: "workspace-files",
+          status: "passed",
+          stdoutBytes: byteLength(workspaceStdout),
+        },
+      ],
+      stderr: pathStderr,
+      stdout: pathStdout,
+      targetCommand: ["bash", "-lc", PATH_SHELL_SCRIPT],
+      workspaceWorkflow: {
+        diagnostics: workspaceDiagnostics,
+        result: workspaceRun.complete.result,
+        stderr: workspaceStderr,
+        stdout: workspaceStdout,
+        targetCommand: ["bash", "-lc", WORKSPACE_SHELL_SCRIPT],
+      },
     };
   } finally {
     worker.terminate();
   }
+}
+
+async function resetBrowserWorkspace() {
+  const workspace = createDefaultBrowserWorkspaceStore();
+  await workspace.importSnapshot({
+    directories: [],
+    files: [],
+    root: "/workspace",
+    version: 1,
+  });
 }
 
 async function loadWebc(worker, id, artifact) {
@@ -192,6 +290,10 @@ function diagnosticCount(diagnostics, group, name) {
     (item) => item.group === group && item.name === name,
   );
   return entry?.count ?? 0;
+}
+
+function byteLength(value) {
+  return new TextEncoder().encode(value).byteLength;
 }
 
 function assert(condition, message) {

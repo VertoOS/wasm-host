@@ -28,10 +28,18 @@ Both registry records were resolved through the Wasmer GraphQL
 ## Browser Smoke Status
 
 The browser e2e at `apps/web/e2e/bash-coreutils-smoke.js` loads both pinned
-WebC URLs above, verifies their SHA-256 values, and runs:
+WebC URLs above, verifies their SHA-256 values, and runs two stages. The first
+keeps the original PATH/package visibility target:
 
 ```sh
 bash -lc 'pwd; ls /workspace; echo BASH_BROWSER_OK'
+```
+
+The second proves a grouped workspace file workflow through Bash and packaged
+coreutils:
+
+```sh
+bash -lc 'set -eu; export LC_ALL=C; cd /workspace; rm -rf issue-215-smoke; mkdir issue-215-smoke; printf "alpha\nbeta\n" > issue-215-smoke/input.txt; cat issue-215-smoke/input.txt; ls issue-215-smoke; rm issue-215-smoke/input.txt; ls issue-215-smoke; rm -r issue-215-smoke; printf "ISSUE_215_WORKSPACE_OK\n"'
 ```
 
 Current result:
@@ -40,8 +48,11 @@ Current result:
 - `ls /workspace` is resolved through Bash's own PATH lookup, dispatched to the
   loaded `wasmer/coreutils` package, and succeeds against the browser
   `/workspace` mount.
-- The command exits `0` with stdout exactly
+- The path-command stage exits `0` with stdout exactly
   `/workspace\nBASH_BROWSER_OK\n` and empty stderr.
+- The workspace-files stage exits `0` with stdout exactly
+  `alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n` and empty stderr after
+  exercising `mkdir`, shell redirection, `cat`, `ls`, `rm`, and `rm -r`.
 - The runtime handles `stack_checkpoint` as a browser-safe zero probe for
   non-asyncify modules, supports asyncify checkpoint/restore for modules with
   exported stack bounds or a host-owned high-memory fallback buffer, supports
@@ -52,6 +63,14 @@ Current result:
   command catalog, generated command shims are overlaid into package-root
   files, the package-root `/` preopen resolves absolute package paths, and
   virtual `/workspace` and `/tmp` directories are visible from that root.
+- [#215](https://github.com/VertoOS/wasm-host/issues/215) adds the workspace
+  file workflow slice: WebC/WASIX command runs snapshot the host-owned browser
+  workspace into raw WASI workers, `proc_exec` child command results import
+  their mutated snapshots back into the parent and command-worker store,
+  writable mounted-path resolution accepts `/workspace`, `/workspace/...`, and
+  WASIX `%` spellings, package-root cwd fallback maps relative operations after
+  `cd /workspace` onto the workspace without hiding read-only package files,
+  and workspace files can replace stdio descriptors for Bash redirection.
 - The previous runtime blocker diagnostics for `proc_fork`, `stack_restore`,
   `proc_join`, and Bash PATH command lookup are no longer present in this
   smoke.
@@ -125,7 +144,7 @@ is implementation depth inside grouped browser capability buckets.
 | Networking/ports | `sock_connect`, `sock_open`, `sock_send_to` | `port_*`, `resolve`, `sock_*` WASIX networking set | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Dynamic/closures/linking | `callback_signal` | `call_dynamic`, `callback_signal`, `closure_*`, `dl_invalid_handle`, `dlopen`, `dlsym`, `reflect_signature` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Clock mutation | none | `clock_time_set` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
-| Browser smoke | target command reaches Bash, resolves `ls` through Bash PATH, and exits `0` with empty stderr | target command reaches Bash, resolves `ls` through Bash PATH, and exits `0` with empty stderr | [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204), [#211](https://github.com/VertoOS/wasm-host/issues/211), [#212](https://github.com/VertoOS/wasm-host/issues/212) |
+| Browser smoke | target command reaches Bash, resolves `ls` through Bash PATH, runs a workspace file workflow through packaged coreutils, and exits `0` with empty stderr | target command reaches Bash, resolves `ls` through Bash PATH, runs `mkdir`/redirection/`cat`/`rm`/`rm -r` against `/workspace`, and exits `0` with empty stderr | [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204), [#211](https://github.com/VertoOS/wasm-host/issues/211), [#212](https://github.com/VertoOS/wasm-host/issues/212), [#215](https://github.com/VertoOS/wasm-host/issues/215) |
 
 ## Current Interpretation
 
@@ -175,6 +194,15 @@ resolves absolute guest paths such as `/bin/ls`. That lets Bash's internal PATH
 probe find `ls`; `proc_exec3` then reaches the existing catalog child-command
 bridge, which runs coreutils with the duplicated WASIX argv0 stripped before
 raw execution.
+
+[#215](https://github.com/VertoOS/wasm-host/issues/215) keeps the syscall work
+grouped by user-visible workflow. It extends the same Bash/coreutils smoke with
+workspace snapshot handoff across worker and child-command boundaries,
+writable mounted-path aliases for `/workspace` and `/workspace%`, package-root
+fallback that still lets WebC volume files be read, and stdio descriptor
+renumbering for workspace-backed shell redirects. The smoke now covers
+`mkdir`, redirect writes, `cat`, `ls`, `rm`, and recursive remove through real
+packaged commands in a browser page.
 
 This does not claim full Bash, git, spawn, signal, interactive TTY, broad fork,
 or worker-thread support. It proves the first non-interactive browser

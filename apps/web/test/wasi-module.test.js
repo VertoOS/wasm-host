@@ -164,6 +164,14 @@ const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAAKCQEHAANADAALCw==",
 );
 
+const WASIX_PROC_SPAWN_WASM = base64ToBytes(
+  "AGFzbQEAAAABIQRgDX9/f39/f39/f39/f38Bf2AEf39/fwF/YAF/AGAAAAJeAwp3YXNpeF8zMnYxCnByb2Nfc3Bhd24AABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAgMCAQMFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAwpPAU0BAX9BgAhBBUEAQZAIQRRBAEEAQQBBAEEAQbgIQRBB6AgQACEAIAAEQCAAEAILQfgIQdAINgIAQfwIQQ82AgBBAUH4CEEBQYQJEAEaCwtRBABBgAgLBXNtb2tlAEGQCAsULS1mcm9tLXdhc2l4Ci0tY2hpbGQAQbgICxAvd29ya3NwYWNlL3dhc2l4AEHQCAsPcGFyZW50LXNwYXduZWQK",
+);
+
+const WASIX_PROC_EXEC_WASM = base64ToBytes(
+  "AGFzbQEAAAABCwJgBH9/f38AYAAAAhgBCndhc2l4XzMydjEJcHJvY19leGVjAAADAgEBBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAEKEQEPAEGACEEFQZAIQRQQAAALCyYCAEGACAsFc21va2UAQZAICxQtLWZyb20td2FzaXgKLS1jaGlsZA==",
+);
+
 test("loadRawWasiModulePackage validates explicit raw WASI module bytes", async () => {
   const expectedSha256 = await sha256Hex(ARGV_ECHO_WASM);
   const record = await loadRawWasiModulePackage({
@@ -1651,6 +1659,303 @@ test("raw WASI worker child command RPC settles on parent abort", async () => {
     return true;
   });
   assert.equal(worker.terminated, true);
+});
+
+test("raw WASI executor exposes WASIX proc_exec through child commands", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC_WASM,
+    command: "parent",
+    id: "parent",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      args: [],
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return {
+            command: request.command,
+            exitCode: 7,
+            packageId: "smoke-child",
+            stderr: encoder.encode("child stderr\n"),
+            stderrBytes: 13,
+            stdout: encoder.encode("child stdout\n"),
+            stdoutBytes: 13,
+          };
+        },
+      },
+      command: "parent",
+      cwd: "/workspace/parent",
+      env: { FROM_PARENT: "1", PATH: "/bin" },
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: encoder.encode("parent stdin\n"),
+    },
+    output,
+  );
+
+  assert.deepEqual(
+    { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
+    {
+    args: ["--from-wasix", "--child"],
+    command: "smoke",
+    cwd: "/workspace/parent",
+    env: { FROM_PARENT: "1", PATH: "/bin" },
+    packageId: null,
+    stderr: "inherit",
+    stdin: "parent stdin\n",
+    stdout: "inherit",
+    },
+  );
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+  assert.deepEqual(result, { exitCode: 7 });
+});
+
+test("command worker runs WASIX proc_exec through the raw WASI worker bridge", async () => {
+  const port = recordingPort();
+  const seen = [];
+  const runtime = createBrowserCommandWorkerRuntime({
+    executors: {
+      child: {
+        async run(request, output) {
+          seen.push({
+            args: request.args,
+            command: request.command,
+            cwd: request.cwd,
+            env: request.env,
+            packageId: request.package.id,
+            stdin: await asyncChunksText(request.stdin),
+          });
+          await output.writeStdout("child stdout\n");
+          await output.writeStderr("child stderr\n");
+          return { exitCode: 5 };
+        },
+      },
+      "wasi-module": createRawWasiModuleExecutor({
+        createWorker: createNodeWasiWorker,
+      }),
+    },
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["smoke"], id: "smoke-child", type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "parent",
+      id: "wasix-parent",
+      wasiModule: { bytes: WASIX_PROC_EXEC_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-wasix-exec",
+    packageId: "wasix-parent",
+    command: "parent",
+    env: { FROM_PARENT: "1", PATH: "/bin" },
+    stdin: "exec stdin\n",
+  });
+
+  assert.deepEqual(seen, [
+    {
+      args: ["--from-wasix", "--child"],
+      command: "smoke",
+      cwd: "/workspace",
+      env: { FROM_PARENT: "1", PATH: "/bin" },
+      packageId: "smoke-child",
+      stdin: "exec stdin\n",
+    },
+  ]);
+  assert.equal(stdoutText(port.messages), "child stdout\n");
+  assert.equal(stderrText(port.messages), "child stderr\n");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-wasix-exec",
+    result: {
+      cancelled: false,
+      exitCode: 5,
+      failureStage: null,
+      stderrBytes: 13,
+      stdoutBytes: 13,
+      timedOut: false,
+    },
+  });
+});
+
+test("command worker reports WASIX proc_exec catalog misses", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    wasiModule: { createWorker: createNodeWasiWorker },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "parent",
+      id: "wasix-parent",
+      wasiModule: { bytes: WASIX_PROC_EXEC_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-wasix-missing-exec",
+    packageId: "wasix-parent",
+    command: "parent",
+  });
+
+  assert.equal(stdoutText(port.messages), "");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-wasix-missing-exec",
+    error: {
+      kind: "command_not_found",
+      message: "browser command not found in package catalog: smoke",
+      stage: "command_resolution",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 127,
+      failureStage: "command_resolution",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
+test("raw WASI executor reports missing WASIX proc_exec bridge explicitly", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC_WASM,
+    command: "exec-parent",
+    id: "exec-parent",
+  });
+
+  await assert.rejects(
+    () =>
+      executor.run(
+        { ...baseRunRequest(packageRecord), command: "exec-parent" },
+        output,
+      ),
+    (error) => {
+      assert.equal(error.kind, "unsupported");
+      assert.equal(
+        error.message,
+        "WASIX proc_exec child command bridge is unavailable",
+      );
+      assert.equal(error.exitCode, 126);
+      return true;
+    },
+  );
+});
+
+test("raw WASI executor keeps unsupported WASIX proc_spawn explicit", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_SPAWN_WASM,
+    command: "spawn-parent",
+    id: "spawn-parent",
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "spawn-parent" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 58 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("command worker times out WASIX proc_exec child commands", async () => {
+  const port = recordingPort();
+  let childAbortKind = null;
+  const childStarted = deferred();
+  const runtime = createBrowserCommandWorkerRuntime({
+    executors: {
+      child: {
+        async run(request) {
+          childStarted.resolve();
+          try {
+            await rejectOnAbort(request.signal);
+          } catch (error) {
+            childAbortKind = error.kind;
+            throw error;
+          }
+          return { exitCode: 0 };
+        },
+      },
+      "wasi-module": createRawWasiModuleExecutor({
+        createWorker: createNodeWasiWorker,
+      }),
+    },
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["smoke"], id: "smoke-child", type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "parent",
+      id: "wasix-parent",
+      wasiModule: { bytes: WASIX_PROC_EXEC_WASM },
+    },
+  });
+  const run = runtime.handleMessage({
+    type: "command.run",
+    id: "run-wasix-timeout",
+    packageId: "wasix-parent",
+    command: "parent",
+    timeoutMs: 200,
+  });
+  await withTimeout(
+    childStarted.promise,
+    1000,
+    "WASIX proc_exec child did not start",
+  );
+  await withTimeout(run, 1000, "WASIX proc_exec timeout run did not finish");
+
+  assert.equal(childAbortKind, "timeout");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-wasix-timeout",
+    error: {
+      kind: "timeout",
+      message: "browser command exceeded wall time limit",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 124,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: true,
+    },
+  });
 });
 
 test("raw WASI worker executor rejects live workspace stores", async () => {
@@ -3246,6 +3551,25 @@ async function* asyncByteChunks(chunks) {
   for (const chunk of chunks) {
     yield typeof chunk === "string" ? encoder.encode(chunk) : chunk;
   }
+}
+
+async function asyncChunksText(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
+  }
+  return decoder.decode(concatBytes(chunks));
+}
+
+function rejectOnAbort(signal) {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), {
+      once: true,
+    });
+  });
 }
 
 function workerEventName(type) {

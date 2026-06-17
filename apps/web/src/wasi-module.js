@@ -8,6 +8,7 @@ const DEFAULT_PACKAGE_ID = "default";
 const DEFAULT_ENTRYPOINT = "_start";
 const RAW_WASI_ARTIFACT_KIND = "wasi-module";
 const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
+const WASIX_IMPORT_MODULE = "wasix_32v1";
 
 const ERRNO_SUCCESS = 0;
 const ERRNO_ACCESS = 2;
@@ -171,6 +172,8 @@ export class BrowserWasiModuleError extends Error {
     this.kind = kind;
     this.stage = stage;
     this.exitCode = options.exitCode ?? null;
+    this.cancelled = options.cancelled === true;
+    this.timedOut = options.timedOut === true;
   }
 }
 
@@ -291,6 +294,7 @@ export async function runRawWasiModule(request, output, options = {}) {
   const wasi = new WasiPreview1Runtime({
     args: [request.command, ...request.args],
     childCommands: request.childCommands,
+    cwd: request.cwd,
     env: request.env,
     getInstance: () => instance,
     output,
@@ -300,9 +304,10 @@ export async function runRawWasiModule(request, output, options = {}) {
   });
 
   try {
-    const instantiated = await globalThis.WebAssembly.instantiate(bytes, {
-      [WASI_IMPORT_MODULE]: wasi.imports(),
-    });
+    const instantiated = await globalThis.WebAssembly.instantiate(
+      bytes,
+      wasi.importObject(),
+    );
     instance = instantiated.instance ?? instantiated;
     const memory = exportedMemory(instance);
     wasi.setMemory(memory);
@@ -323,6 +328,10 @@ export async function runRawWasiModule(request, output, options = {}) {
   } catch (error) {
     if (error instanceof WasiProcExit) {
       return await workspaceResult({ exitCode: error.exitCode }, workspace);
+    }
+    if (error instanceof WasixProcExec) {
+      const result = await wasi.runProcessExec(error.request);
+      return await workspaceResult(result, workspace);
     }
     if (error instanceof BrowserWasiModuleError) {
       throw error;
@@ -696,12 +705,15 @@ function validateWorkspaceStore(store) {
 
 class WasiPreview1Runtime {
   constructor(options) {
+    this.envObject = normalizeEnvObject(options.env ?? {});
     this.args = normalizeStringList(options.args ?? []);
     this.childCommands = options.childCommands ?? null;
-    this.env = normalizeEnv(options.env ?? {});
+    this.cwd = String(options.cwd ?? WORKSPACE_PREOPEN_PATH);
+    this.env = envEntries(this.envObject);
     this.getInstance = options.getInstance;
     this.memory = null;
     this.output = options.output;
+    this.processes = new WasixProcessRuntime(this);
     this.workspace = options.workspace;
     this.files = this.workspace.files;
     this.packageRoot = this.workspace.packageRoot ?? readOnlyPackageRootMount();
@@ -721,6 +733,27 @@ class WasiPreview1Runtime {
 
   setMemory(memory) {
     this.memory = memory;
+  }
+
+  importObject() {
+    const imports = {
+      [WASI_IMPORT_MODULE]: this.imports(),
+    };
+    imports[WASIX_IMPORT_MODULE] = this.processes.imports();
+    return imports;
+  }
+
+  async runProcessExec(request) {
+    if (typeof this.childCommands?.run !== "function") {
+      throw new BrowserWasiModuleError(
+        "unsupported",
+        "WASIX proc_exec child command bridge is unavailable",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    const result = await this.childCommands.run(request);
+    return { exitCode: Number(result?.exitCode ?? 0) };
   }
 
   imports() {
@@ -2851,6 +2884,10 @@ class WasiPreview1Runtime {
     return decodeText(this.bytes().slice(ptr, ptr + (length >>> 0)));
   }
 
+  remainingStdinBytes() {
+    return this.stdin.slice(this.stdinOffset);
+  }
+
   writeFilestat(ptr, filetype, size) {
     this.writeU64(ptr, 0n);
     this.writeU64(ptr + 8, 0n);
@@ -3103,6 +3140,68 @@ class WasiPreview1Runtime {
     }
     return this.fdStat(fd) ? ERRNO_NOTSUP : ERRNO_BADF;
   }
+}
+
+class WasixProcessRuntime {
+  constructor(host) {
+    this.host = host;
+  }
+
+  imports() {
+    return {
+      proc_exec: (namePtr, nameLen, argsPtr, argsLen) =>
+        this.procExec(namePtr, nameLen, argsPtr, argsLen),
+      proc_fork: (_copyMemory, _pidPtr) => ERRNO_NOTSUP,
+      proc_id: (pidPtr) => this.procId(pidPtr),
+      proc_join: (_pidPtr, _flags, _statusPtr) => ERRNO_NOTSUP,
+      proc_parent: (_pidPtr) => ERRNO_NOTSUP,
+      proc_signal: (_pid, _signal) => ERRNO_NOTSUP,
+      proc_spawn: () => ERRNO_NOTSUP,
+    };
+  }
+
+  procExec(namePtr, nameLen, argsPtr, argsLen) {
+    this.host.throwIfAborted();
+    const command = this.readString(namePtr, nameLen).trim();
+    if (!command) {
+      throw new BrowserWasiModuleError(
+        "invalid_request",
+        "WASIX proc_exec command is required",
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    const stderr = "inherit";
+    const stdout = "inherit";
+    throw new WasixProcExec({
+      args: wasixLineList(this.readString(argsPtr, argsLen)),
+      command,
+      cwd: this.host.cwd,
+      env: this.host.envObject,
+      packageId: null,
+      stderr,
+      stdin: this.host.remainingStdinBytes(),
+      stdout,
+    });
+  }
+
+  procId(pidPtr) {
+    this.host.throwIfAborted();
+    this.host.writeU32(pidPtr, 1);
+    return ERRNO_SUCCESS;
+  }
+
+  readString(ptr, length) {
+    return this.host.readString(ptr, length);
+  }
+}
+
+function wasixLineList(value) {
+  const text = String(value ?? "");
+  if (!text) {
+    return [];
+  }
+  return text.split("\n").filter((item) => item.length > 0);
 }
 
 function isSupportedClock(clockId) {
@@ -3483,6 +3582,14 @@ class WasiProcExit extends Error {
   }
 }
 
+class WasixProcExec extends Error {
+  constructor(request) {
+    super("WASIX proc_exec");
+    this.name = "WasixProcExec";
+    this.request = request;
+  }
+}
+
 function isRawWasiModulePackage(value) {
   return (
     value?.artifactKind === RAW_WASI_ARTIFACT_KIND ||
@@ -3654,7 +3761,7 @@ function normalizeStringList(value) {
   return [...value];
 }
 
-function normalizeEnv(value) {
+function normalizeEnvObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new BrowserWasiModuleError(
       "invalid_request",
@@ -3662,6 +3769,15 @@ function normalizeEnv(value) {
       "startup",
     );
   }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, envValue]) => [
+      String(key),
+      String(envValue),
+    ]),
+  );
+}
+
+function envEntries(value) {
   return Object.entries(value).map(([key, envValue]) => `${key}=${envValue}`);
 }
 
@@ -3950,17 +4066,21 @@ function postMessageToChildCommandWorker(worker, message) {
 function workerErrorPayload(error) {
   if (error instanceof BrowserWasiModuleError || typeof error?.kind === "string") {
     return {
+      cancelled: error.cancelled === true,
       exitCode: error.exitCode ?? null,
       kind: error.kind,
       message: error.message ?? "raw WASI module execution failed",
       stage: error.stage ?? "runtime",
+      timedOut: error.timedOut === true,
     };
   }
   return {
+    cancelled: false,
     exitCode: null,
     kind: "runtime",
     message: error?.message ?? "raw WASI module execution failed",
     stage: "runtime",
+    timedOut: false,
   };
 }
 
@@ -3969,7 +4089,11 @@ function workerErrorFromPayload(error = {}) {
     error.kind ?? "runtime",
     error.message ?? "raw WASI module execution failed",
     error.stage ?? "runtime",
-    { exitCode: error.exitCode },
+    {
+      cancelled: error.cancelled,
+      exitCode: error.exitCode,
+      timedOut: error.timedOut,
+    },
   );
 }
 

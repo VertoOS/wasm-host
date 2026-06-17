@@ -192,6 +192,10 @@ const WASIX_PROC_EXEC3_WASM = base64ToBytes(
   "AGFzbQEAAAABFQNgCX9/f39/f39/fwF/YAF/AGAAAAI8Agp3YXNpeF8zMnYxCnByb2NfZXhlYzMAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAABAwIBAgUDAQABBxMCBm1lbW9yeQIABl9zdGFydAACCiIBIABBgARBAkGQBEEVQcAEQQ1BAUHgBEEEEAAaQeMAEAELC0EEAEGABAsCbHMAQZAECxUtLWZyb20tZXhlYzMKLS1jaGlsZAoAQcAECw1GUk9NX0VYRUMzPTEKAEHgBAsEL2Jpbg==",
 );
 
+const WASIX_PROC_EXEC3_PIPE_STDIN_WASM = base64ToBytes(
+  "AGFzbQEAAAABJAVgAn9/AX9gBH9/f38Bf2ABfwF/YAl/f39/f39/f38Bf2AAAAJzBQp3YXNpeF8zMnYxB2ZkX3BpcGUAAAp3YXNpeF8zMnYxCGZkX3dyaXRlAAEKd2FzaXhfMzJ2MQhmZF9jbG9zZQACCndhc2l4XzMydjELZmRfcmVudW1iZXIAAAp3YXNpeF8zMnYxCnByb2NfZXhlYzMAAwMCAQQFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQABQpSAVAAQQBBBBAAGkEQQYAINgIAQRRBETYCAEEEKAIAQRBBAUEYEAEaQQQoAgAQAhpBACgCAEEAEAMaQZgIQQNBAEEAQaAIQQpBAUGsCEEEEAQaCws7BABBgAgLEWNoaWxkLXBpcGUtc3RkaW4KAEGYCAsDY2F0AEGgCAsKUEFUSD0vYmluCgBBrAgLBC9iaW4=",
+);
+
 const WASIX_PROC_EXEC3_DEFAULT_PATH_WASM = base64ToBytes(
   "AGFzbQEAAAABFQNgCX9/f39/f39/fwF/YAF/AGAAAAI8Agp3YXNpeF8zMnYxCnByb2NfZXhlYzMAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAABAwIBAgUDAQABBxMCBm1lbW9yeQIABl9zdGFydAACCiMBIQEBf0GACEECQZAIQRRBuAhBD0EBQQBBABAAIQAgABABCws4AwBBgAgLAmxzAEGQCAsULS1mcm9tLWRlZmF1bHQtcGF0aAoAQbgICw9GUk9NX0RFRkFVTFQ9MQo=",
 );
@@ -2046,6 +2050,55 @@ test("raw WASI executor maps WASIX proc_exec3 PATH search to child commands", as
     },
   );
   assert.deepEqual(result, { exitCode: 11 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor maps pipe-backed stdin to WASIX proc_exec3 children", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC3_PIPE_STDIN_WASM,
+    command: "parent",
+    id: "parent",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      args: [],
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return { exitCode: 0 };
+        },
+      },
+      command: "parent",
+      cwd: "/workspace/parent",
+      env: { PATH: "/nowhere" },
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: encoder.encode("original stdin\n"),
+    },
+    output,
+  );
+
+  assert.deepEqual(
+    { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
+    {
+      args: [],
+      command: "cat",
+      cwd: "/workspace/parent",
+      env: { PATH: "/bin" },
+      packageId: null,
+      stderr: "inherit",
+      stdin: "child-pipe-stdin\n",
+      stdout: "inherit",
+      wasixExecArgv0: true,
+    },
+  );
+  assert.deepEqual(result, { exitCode: 0 });
   assert.equal(output.stdout, "");
   assert.equal(output.stderr, "");
 });

@@ -73,6 +73,23 @@ const BASH_WORKSPACE_SCRIPT_RUN_COMMAND = [
   "rm -rf issue-219-script",
   "printf 'ISSUE_219_SCRIPT_DONE\\n'",
 ].join("; ");
+const BASH_PIPELINE_READ_COMMAND = [
+  "set -eu",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "rm -rf issue-223-pipe",
+  "mkdir issue-223-pipe",
+  "printf 'alpha\\nbeta\\n' > issue-223-pipe/input.txt",
+  "printf 'PIPE_BUILTIN:'",
+  "printf 'left right\\n' | cat",
+  "printf 'PIPE_PACKAGED:'",
+  "cat issue-223-pipe/input.txt | cat",
+  "printf 'read-left read-right\\n' > issue-223-pipe/read.txt",
+  "read first second < issue-223-pipe/read.txt",
+  "printf 'READ:%s:%s\\n' \"$first\" \"$second\"",
+  "rm -rf issue-223-pipe",
+  "printf 'ISSUE_223_PIPE_READ_OK\\n'",
+].join("; ");
 
 async function runBrowserE2e() {
   const skip = skipReason();
@@ -289,12 +306,14 @@ async function runBashCoreutilsSmokePage(page) {
       ["workspace-files", "passed"],
       ["workspace-script-create", "passed"],
       ["workspace-script-run", "passed"],
+      ["pipeline-read", "passed"],
     ],
   );
   assert.equal(status.result.stages[0].exitCode, 0);
   assert.equal(status.result.stages[1].exitCode, 0);
   assert.equal(status.result.stages[2].exitCode, 0);
   assert.equal(status.result.stages[3].exitCode, 0);
+  assert.equal(status.result.stages[4].exitCode, 0);
   assert.equal(
     status.result.workspaceWorkflow.stdout,
     "alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n",
@@ -326,6 +345,20 @@ async function runBashCoreutilsSmokePage(page) {
   assert.equal(status.result.workspaceScript.run.stderr, "");
   assert.equal(status.result.workspaceScript.run.result.exitCode, 0);
   assert.equal(status.result.workspaceScript.run.result.failureStage, null);
+  assert.equal(
+    status.result.pipelineRead.stdout,
+    [
+      "PIPE_BUILTIN:left right",
+      "PIPE_PACKAGED:alpha",
+      "beta",
+      "READ:read-left:read-right",
+      "ISSUE_223_PIPE_READ_OK",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(status.result.pipelineRead.stderr, "");
+  assert.equal(status.result.pipelineRead.result.exitCode, 0);
+  assert.equal(status.result.pipelineRead.result.failureStage, null);
   assert.equal(
     status.result.artifacts.bash.sha256,
     "059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1",
@@ -367,90 +400,70 @@ async function runBashCoreutilsSmokePage(page) {
     "-lc",
     BASH_WORKSPACE_SCRIPT_RUN_COMMAND,
   ]);
+  assert.deepEqual(status.result.pipelineRead.targetCommand, [
+    "bash",
+    "-lc",
+    BASH_PIPELINE_READ_COMMAND,
+  ]);
   const diagnostics = status.result.diagnostics.map((entry) => [
     entry.group,
     entry.name,
   ]);
-  assert.ok(
-    !diagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_fork",
-    ),
-  );
-  assert.ok(
-    !diagnostics.some(
-      ([group, name]) => group === "thread-event" && name === "stack_restore",
-    ),
-  );
-  assert.ok(
-    !diagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_join",
-    ),
-  );
+  assertNoUnexpectedBashDiagnostics(diagnostics);
   const workspaceDiagnostics =
     status.result.workspaceWorkflow.diagnostics.map((entry) => [
       entry.group,
       entry.name,
     ]);
-  assert.ok(
-    !workspaceDiagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_fork",
-    ),
-  );
-  assert.ok(
-    !workspaceDiagnostics.some(
-      ([group, name]) => group === "thread-event" && name === "stack_restore",
-    ),
-  );
-  assert.ok(
-    !workspaceDiagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_join",
-    ),
-  );
+  assertNoUnexpectedBashDiagnostics(workspaceDiagnostics);
   const scriptCreateDiagnostics =
     status.result.workspaceScript.create.diagnostics.map((entry) => [
       entry.group,
       entry.name,
     ]);
-  assert.ok(
-    !scriptCreateDiagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_fork",
-    ),
-  );
-  assert.ok(
-    !scriptCreateDiagnostics.some(
-      ([group, name]) => group === "thread-event" && name === "stack_restore",
-    ),
-  );
-  assert.ok(
-    !scriptCreateDiagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_join",
-    ),
-  );
+  assertNoUnexpectedBashDiagnostics(scriptCreateDiagnostics);
   const scriptRunDiagnostics =
     status.result.workspaceScript.run.diagnostics.map((entry) => [
       entry.group,
       entry.name,
     ]);
-  assert.ok(
-    !scriptRunDiagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_fork",
-    ),
-  );
-  assert.ok(
-    !scriptRunDiagnostics.some(
-      ([group, name]) => group === "thread-event" && name === "stack_restore",
-    ),
-  );
-  assert.ok(
-    !scriptRunDiagnostics.some(
-      ([group, name]) => group === "process" && name === "proc_join",
-    ),
-  );
+  assertNoUnexpectedBashDiagnostics(scriptRunDiagnostics);
+  const pipelineReadDiagnostics =
+    status.result.pipelineRead.diagnostics.map((entry) => [
+      entry.group,
+      entry.name,
+    ]);
+  assertNoUnexpectedBashDiagnostics(pipelineReadDiagnostics);
   return [
     "PASS browser Bash/coreutils WebC e2e",
     "PASS browser Bash/coreutils workspace e2e",
     "PASS browser Bash/coreutils workspace script e2e",
+    "PASS browser Bash/coreutils pipeline/read e2e",
   ].join("\n");
+}
+
+function assertNoUnexpectedBashDiagnostics(diagnostics) {
+  assert.ok(
+    !diagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_fork",
+    ),
+  );
+  assert.ok(
+    !diagnostics.some(
+      ([group, name]) => group === "thread-event" && name === "stack_restore",
+    ),
+  );
+  assert.ok(
+    !diagnostics.some(
+      ([group, name]) =>
+        group === "thread-event" && name === "stack_checkpoint",
+    ),
+  );
+  assert.ok(
+    !diagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_join",
+    ),
+  );
 }
 
 async function runTerminalShellPage(page) {

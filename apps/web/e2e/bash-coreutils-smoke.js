@@ -45,6 +45,23 @@ const SCRIPT_RUN_SHELL_SCRIPT = [
   "rm -rf issue-219-script",
   "printf 'ISSUE_219_SCRIPT_DONE\\n'",
 ].join("; ");
+const PIPELINE_READ_SHELL_SCRIPT = [
+  "set -eu",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "rm -rf issue-223-pipe",
+  "mkdir issue-223-pipe",
+  "printf 'alpha\\nbeta\\n' > issue-223-pipe/input.txt",
+  "printf 'PIPE_BUILTIN:'",
+  "printf 'left right\\n' | cat",
+  "printf 'PIPE_PACKAGED:'",
+  "cat issue-223-pipe/input.txt | cat",
+  "printf 'read-left read-right\\n' > issue-223-pipe/read.txt",
+  "read first second < issue-223-pipe/read.txt",
+  "printf 'READ:%s:%s\\n' \"$first\" \"$second\"",
+  "rm -rf issue-223-pipe",
+  "printf 'ISSUE_223_PIPE_READ_OK\\n'",
+].join("; ");
 const PATH_EXPECTED_STDOUT = "/workspace\nBASH_BROWSER_OK\n";
 const WORKSPACE_EXPECTED_STDOUT =
   "alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n";
@@ -58,6 +75,12 @@ const SCRIPT_RUN_EXPECTED_STDOUT =
   "output.txt\n" +
   "run.sh\n" +
   "ISSUE_219_SCRIPT_DONE\n";
+const PIPELINE_READ_EXPECTED_STDOUT =
+  "PIPE_BUILTIN:left right\n" +
+  "PIPE_PACKAGED:alpha\n" +
+  "beta\n" +
+  "READ:read-left:read-right\n" +
+  "ISSUE_223_PIPE_READ_OK\n";
 
 const BASH_ARTIFACT = {
   name: "wasmer/bash",
@@ -230,6 +253,32 @@ export async function runBashCoreutilsSmoke() {
     assertEqual(scriptRun.complete.result?.failureStage, null);
     assertNoUnexpectedProcessDiagnostics(scriptRunDiagnostics);
 
+    const pipelineReadRun = await dispatchAndCollect(
+      worker,
+      {
+        type: "command.run",
+        id: "run-bash-coreutils-pipeline-read",
+        packageId: "bash",
+        command: "bash",
+        args: ["-lc", PIPELINE_READ_SHELL_SCRIPT],
+        diagnostics: { unsupportedWasixCalls: true },
+        env: { PATH: "/bin:/usr/bin" },
+        timeoutMs: 30000,
+      },
+    );
+    assert(pipelineReadRun.complete, "pipeline/read command should complete");
+
+    const pipelineReadStdout = chunksText(pipelineReadRun.stdout);
+    const pipelineReadStderr = chunksText(pipelineReadRun.stderr);
+    const pipelineReadDiagnostics =
+      pipelineReadRun.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
+
+    assertEqual(pipelineReadStdout, PIPELINE_READ_EXPECTED_STDOUT);
+    assertEqual(pipelineReadStderr, "");
+    assertEqual(pipelineReadRun.complete.result?.exitCode, 0);
+    assertEqual(pipelineReadRun.complete.result?.failureStage, null);
+    assertNoUnexpectedProcessDiagnostics(pipelineReadDiagnostics);
+
     return {
       artifacts: {
         bash: BASH_ARTIFACT,
@@ -268,6 +317,12 @@ export async function runBashCoreutilsSmoke() {
           status: "passed",
           stdoutBytes: byteLength(scriptRunStdout),
         },
+        {
+          exitCode: pipelineReadRun.complete.result?.exitCode,
+          name: "pipeline-read",
+          status: "passed",
+          stdoutBytes: byteLength(pipelineReadStdout),
+        },
       ],
       stderr: pathStderr,
       stdout: pathStdout,
@@ -294,6 +349,13 @@ export async function runBashCoreutilsSmoke() {
           stdout: scriptRunStdout,
           targetCommand: ["bash", "-lc", SCRIPT_RUN_SHELL_SCRIPT],
         },
+      },
+      pipelineRead: {
+        diagnostics: pipelineReadDiagnostics,
+        result: pipelineReadRun.complete.result,
+        stderr: pipelineReadStderr,
+        stdout: pipelineReadStdout,
+        targetCommand: ["bash", "-lc", PIPELINE_READ_SHELL_SCRIPT],
       },
     };
   } finally {

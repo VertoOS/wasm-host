@@ -1572,6 +1572,60 @@ class WasiPreview1Runtime {
     return file && !isOpenStdio(file) ? "pipe" : "inherit";
   }
 
+  processExecInputBytes(fd) {
+    const file = this.openFiles.get(fd);
+    if (isOpenPipe(file)) {
+      return this.readPipeInputBytes(file, "WASIX proc_exec stdin");
+    }
+    if (isOpenStdio(file)) {
+      if (file.stdioFd !== STDIN_FD) {
+        throw new BrowserWasiModuleError(
+          "runtime",
+          "WASIX proc_exec stdin target is not readable",
+          "runtime",
+          { exitCode: 126 },
+        );
+      }
+      return this.remainingStdinBytes();
+    }
+    if (file) {
+      return this.readOpenFileInputBytes(file, "WASIX proc_exec stdin");
+    }
+    if (fd === STDIN_FD) {
+      return this.remainingStdinBytes();
+    }
+    return new Uint8Array();
+  }
+
+  readPipeInputBytes(file, context) {
+    if (file.direction !== "read" || (file.rights & WASI_RIGHT_FD_READ) === 0n) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        `${context} target pipe is not readable`,
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    const bytes = file.pipe.bytes.slice();
+    file.pipe.bytes = new Uint8Array();
+    return bytes;
+  }
+
+  readOpenFileInputBytes(file, context) {
+    if (!canReadFile(file) || !file.record) {
+      throw new BrowserWasiModuleError(
+        "runtime",
+        `${context} target fd is not readable`,
+        "runtime",
+        { exitCode: 126 },
+      );
+    }
+    const offset = Number(file.offset ?? 0);
+    const bytes = file.record.bytes.slice(offset);
+    file.offset = file.record.bytes.byteLength;
+    return bytes;
+  }
+
   inheritOpenFilesFrom(parent) {
     this.closeAllOpenFiles();
     this.openFiles = parent.duplicateOpenFilesForFork();
@@ -5178,7 +5232,7 @@ class WasixRuntime {
       env,
       packageId: null,
       stderr,
-      stdin: this.host.remainingStdinBytes(),
+      stdin: this.host.processExecInputBytes(STDIN_FD),
       stdout,
       wasixExecArgv0: true,
     };

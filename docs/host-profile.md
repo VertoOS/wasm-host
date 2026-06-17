@@ -305,9 +305,9 @@ extracted WebC volume spans plus generated command shims for loaded catalog
 paths. It also snapshots the host-owned browser workspace into executable atom
 runs and imports mutated snapshots returned by child packaged commands so the
 current Bash/coreutils smoke can create, redirect, read, list, remove files,
-execute persisted scripts, and capture command substitutions under
-`/workspace`. Unsupported runners and missing atom artifacts still fail with
-structured errors. Compiled module cache persistence, general WASIX
+execute persisted scripts, capture command substitutions, and run pipeline/read
+checks under `/workspace`. Unsupported runners and missing atom artifacts still
+fail with structured errors. Compiled module cache persistence, general WASIX
 process spawning, and broad Bash/git execution are later browser runtime
 layers. Raw
 WASI execution exposes narrow `wasix_32v1.proc_exec`,
@@ -378,8 +378,9 @@ before `_start` and flushing mutations after exit, and the `codex-browser`
 `workspace-edit` fixture and `browser-tool-fixture` executor can use the
 host-owned store directly. WebC/WASIX command runs reuse the same deterministic
 snapshot shape across worker and child-command boundaries for the current
-Bash/coreutils workspace file, script execution, and command substitution
-smoke; live workspace store instances still stay outside worker payloads.
+Bash/coreutils workspace file, script execution, command substitution, and
+pipeline/read smoke; live workspace store instances still stay outside worker
+payloads.
 OPFS-backed large-file storage, user-granted directories, app-server
 integration, and full Codex file-edit turn wiring remain later browser runtime
 layers.
@@ -531,7 +532,10 @@ Bash/coreutils workspace proof adds snapshot handoff for child command
 mutations, workspace path aliases, package root fallback, workspace-backed
 stdio redirection for `mkdir`, shell redirects, `cat`, `ls`, `rm`, and
 `rm -r`, persisted workspace script execution, and command substitution capture
-for builtin and packaged child output; it is not process spawn, full
+for builtin and packaged child output. The pipeline/read proof adds small
+in-memory pipe flows from builtin and packaged command output into packaged
+`cat`, pipe/file-backed fd `0` capture for packaged child stdin, plus
+redirected Bash `read`; it is not process spawn, full
 fork/store cloning, general waitpid, broad shell semantics, git, native process
 spawning, or arbitrary uploaded JavaScript.
 The current thread/event classification exposes single-thread id/parallelism

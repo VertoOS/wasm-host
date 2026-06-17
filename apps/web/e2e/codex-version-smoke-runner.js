@@ -90,6 +90,20 @@ const BASH_PIPELINE_READ_COMMAND = [
   "rm -rf issue-223-pipe",
   "printf 'ISSUE_223_PIPE_READ_OK\\n'",
 ].join("; ");
+const BASH_STATUS_STDERR_COMMAND = [
+  "set -u",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "rm -rf issue-225-status",
+  "mkdir issue-225-status",
+  "cat issue-225-status/missing.txt 2> issue-225-status/stderr.txt",
+  "cat_status=$?",
+  "printf 'CAT_STATUS:%s\\n' \"$cat_status\"",
+  "printf 'STDERR_CAPTURE:'",
+  "cat issue-225-status/stderr.txt",
+  "rm -rf issue-225-status",
+  "printf 'ISSUE_225_STATUS_STDERR_OK\\n'",
+].join("; ");
 
 async function runBrowserE2e() {
   const skip = skipReason();
@@ -307,6 +321,7 @@ async function runBashCoreutilsSmokePage(page) {
       ["workspace-script-create", "passed"],
       ["workspace-script-run", "passed"],
       ["pipeline-read", "passed"],
+      ["status-stderr", "passed"],
     ],
   );
   assert.equal(status.result.stages[0].exitCode, 0);
@@ -314,6 +329,7 @@ async function runBashCoreutilsSmokePage(page) {
   assert.equal(status.result.stages[2].exitCode, 0);
   assert.equal(status.result.stages[3].exitCode, 0);
   assert.equal(status.result.stages[4].exitCode, 0);
+  assert.equal(status.result.stages[5].exitCode, 0);
   assert.equal(
     status.result.workspaceWorkflow.stdout,
     "alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n",
@@ -360,6 +376,18 @@ async function runBashCoreutilsSmokePage(page) {
   assert.equal(status.result.pipelineRead.result.exitCode, 0);
   assert.equal(status.result.pipelineRead.result.failureStage, null);
   assert.equal(
+    status.result.statusStderr.stdout,
+    [
+      "CAT_STATUS:1",
+      "STDERR_CAPTURE:cat: issue-225-status/missing.txt: No such file or directory (os error 44)",
+      "ISSUE_225_STATUS_STDERR_OK",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(status.result.statusStderr.stderr, "");
+  assert.equal(status.result.statusStderr.result.exitCode, 0);
+  assert.equal(status.result.statusStderr.result.failureStage, null);
+  assert.equal(
     status.result.artifacts.bash.sha256,
     "059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1",
   );
@@ -405,6 +433,11 @@ async function runBashCoreutilsSmokePage(page) {
     "-lc",
     BASH_PIPELINE_READ_COMMAND,
   ]);
+  assert.deepEqual(status.result.statusStderr.targetCommand, [
+    "bash",
+    "-lc",
+    BASH_STATUS_STDERR_COMMAND,
+  ]);
   const diagnostics = status.result.diagnostics.map((entry) => [
     entry.group,
     entry.name,
@@ -434,11 +467,18 @@ async function runBashCoreutilsSmokePage(page) {
       entry.name,
     ]);
   assertNoUnexpectedBashDiagnostics(pipelineReadDiagnostics);
+  const statusStderrDiagnostics =
+    status.result.statusStderr.diagnostics.map((entry) => [
+      entry.group,
+      entry.name,
+    ]);
+  assertNoUnexpectedBashDiagnostics(statusStderrDiagnostics);
   return [
     "PASS browser Bash/coreutils WebC e2e",
     "PASS browser Bash/coreutils workspace e2e",
     "PASS browser Bash/coreutils workspace script e2e",
     "PASS browser Bash/coreutils pipeline/read e2e",
+    "PASS browser Bash/coreutils status/stderr e2e",
   ].join("\n");
 }
 

@@ -306,7 +306,8 @@ paths. It also snapshots the host-owned browser workspace into executable atom
 runs and imports mutated snapshots returned by child packaged commands so the
 current Bash/coreutils smoke can create, redirect, read, list, remove files,
 execute persisted scripts, capture command substitutions, and run pipeline/read
-checks under `/workspace`. Unsupported runners and missing atom artifacts still
+and status/stderr checks under `/workspace`. Unsupported runners and missing
+atom artifacts still
 fail with structured errors. Compiled module cache persistence, general WASIX
 process spawning, and broad Bash/git execution are later browser runtime
 layers. Raw
@@ -323,7 +324,8 @@ linear-memory snapshot plus exported mutable globals and inherited pipe-backed
 fds. In both cases the child can finish through `proc_exit2` or the existing
 `proc_exec*` child-command bridge, the parent resumes with the child pid, and
 completed children can be reaped as `JoinStatus::ExitNormal` through
-`proc_join`. Supported Preview1
+`proc_join`. The browser encoding follows Wasmer's `u16` normal exit code union
+offset so Bash reads child failures correctly. Supported Preview1
 imports are mirrored through `wasix_32v1` when the 32-bit import ABI matches the
 current browser handlers. `proc_spawn`, signal, and raise-interval imports
 still return deterministic unsupported capability errors because general
@@ -379,8 +381,8 @@ before `_start` and flushing mutations after exit, and the `codex-browser`
 host-owned store directly. WebC/WASIX command runs reuse the same deterministic
 snapshot shape across worker and child-command boundaries for the current
 Bash/coreutils workspace file, script execution, command substitution, and
-pipeline/read smoke; live workspace store instances still stay outside worker
-payloads.
+pipeline/read and status/stderr smoke; live workspace store instances still
+stay outside worker payloads.
 OPFS-backed large-file storage, user-granted directories, app-server
 integration, and full Codex file-edit turn wiring remain later browser runtime
 layers.
@@ -535,7 +537,8 @@ stdio redirection for `mkdir`, shell redirects, `cat`, `ls`, `rm`, and
 for builtin and packaged child output. The pipeline/read proof adds small
 in-memory pipe flows from builtin and packaged command output into packaged
 `cat`, pipe/file-backed fd `0` capture for packaged child stdin, plus
-redirected Bash `read`; it is not process spawn, full
+redirected Bash `read`. The status/stderr proof adds nonzero packaged child
+status propagation and redirected stderr capture; it is not process spawn, full
 fork/store cloning, general waitpid, broad shell semantics, git, native process
 spawning, or arbitrary uploaded JavaScript.
 The current thread/event classification exposes single-thread id/parallelism

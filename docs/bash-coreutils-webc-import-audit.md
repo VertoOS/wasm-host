@@ -72,6 +72,9 @@ Current result:
   and using Bash `read` with redirected workspace input. The packaged pipeline
   path depends on `proc_exec*` child requests deriving stdin from pipe/file
   backed fd `0`, not only from the original command stdin.
+- The status/stderr stage exits `0` with deterministic stdout after a failing
+  packaged `cat` returns status `1` to Bash, redirects child stderr into a
+  workspace file, and leaves terminal stderr empty.
 - The runtime handles `stack_checkpoint` as a browser-safe zero probe for
   non-asyncify modules, supports asyncify checkpoint/restore for modules with
   exported stack bounds or a host-owned high-memory fallback buffer, supports
@@ -163,7 +166,7 @@ is implementation depth inside grouped browser capability buckets.
 | Networking/ports | `sock_connect`, `sock_open`, `sock_send_to` | `port_*`, `resolve`, `sock_*` WASIX networking set | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Dynamic/closures/linking | `callback_signal` | `call_dynamic`, `callback_signal`, `closure_*`, `dl_invalid_handle`, `dlopen`, `dlsym`, `reflect_signature` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
 | Clock mutation | none | `clock_time_set` | [#197](https://github.com/VertoOS/wasm-host/issues/197) |
-| Browser smoke | target command reaches Bash, resolves `ls` through Bash PATH, runs workspace file, persisted script, command-substitution, and pipeline/read workflows through packaged coreutils, and exits `0` with empty stderr | target command reaches Bash, resolves `ls` through Bash PATH, runs `mkdir`/redirection/`cat`/`rm`/`rm -r` against `/workspace`, captures command substitution output, pipes builtin and packaged command output into packaged `cat`, runs redirected Bash `read`, and exits `0` with empty stderr | [#223](https://github.com/VertoOS/wasm-host/issues/223), [#220](https://github.com/VertoOS/wasm-host/issues/220), [#219](https://github.com/VertoOS/wasm-host/issues/219), [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204), [#211](https://github.com/VertoOS/wasm-host/issues/211), [#212](https://github.com/VertoOS/wasm-host/issues/212), [#215](https://github.com/VertoOS/wasm-host/issues/215) |
+| Browser smoke | target command reaches Bash, resolves `ls` through Bash PATH, runs workspace file, persisted script, command-substitution, pipeline/read, and status/stderr workflows through packaged coreutils, and exits `0` with empty stderr | target command reaches Bash, resolves `ls` through Bash PATH, runs `mkdir`/redirection/`cat`/`rm`/`rm -r` against `/workspace`, captures command substitution output, pipes builtin and packaged command output into packaged `cat`, runs redirected Bash `read`, propagates failing packaged command status into Bash `$?`, captures redirected child stderr in a workspace file, and exits `0` with empty terminal stderr | [#225](https://github.com/VertoOS/wasm-host/issues/225), [#223](https://github.com/VertoOS/wasm-host/issues/223), [#220](https://github.com/VertoOS/wasm-host/issues/220), [#219](https://github.com/VertoOS/wasm-host/issues/219), [#198](https://github.com/VertoOS/wasm-host/issues/198), [#204](https://github.com/VertoOS/wasm-host/issues/204), [#211](https://github.com/VertoOS/wasm-host/issues/211), [#212](https://github.com/VertoOS/wasm-host/issues/212), [#215](https://github.com/VertoOS/wasm-host/issues/215) |
 
 ## Current Interpretation
 
@@ -222,6 +225,11 @@ fallback that still lets WebC volume files be read, and stdio descriptor
 renumbering for workspace-backed shell redirects. The smoke now covers
 `mkdir`, redirect writes, `cat`, `ls`, `rm`, and recursive remove through real
 packaged commands in a browser page.
+
+[#225](https://github.com/VertoOS/wasm-host/issues/225) adds the status/stderr
+workflow. It keeps the failing packaged `cat` stderr redirected into a
+workspace file and fixes completed-child `JoinStatus::ExitNormal` encoding so
+Bash reads the normal `u16` exit code at the Wasmer ABI union offset.
 
 This does not claim full Bash, git, spawn, signal, interactive TTY, broad fork,
 or worker-thread support. It proves the first non-interactive browser

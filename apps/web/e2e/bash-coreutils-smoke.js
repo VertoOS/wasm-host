@@ -62,6 +62,20 @@ const PIPELINE_READ_SHELL_SCRIPT = [
   "rm -rf issue-223-pipe",
   "printf 'ISSUE_223_PIPE_READ_OK\\n'",
 ].join("; ");
+const STATUS_STDERR_SHELL_SCRIPT = [
+  "set -u",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "rm -rf issue-225-status",
+  "mkdir issue-225-status",
+  "cat issue-225-status/missing.txt 2> issue-225-status/stderr.txt",
+  "cat_status=$?",
+  "printf 'CAT_STATUS:%s\\n' \"$cat_status\"",
+  "printf 'STDERR_CAPTURE:'",
+  "cat issue-225-status/stderr.txt",
+  "rm -rf issue-225-status",
+  "printf 'ISSUE_225_STATUS_STDERR_OK\\n'",
+].join("; ");
 const PATH_EXPECTED_STDOUT = "/workspace\nBASH_BROWSER_OK\n";
 const WORKSPACE_EXPECTED_STDOUT =
   "alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n";
@@ -81,6 +95,10 @@ const PIPELINE_READ_EXPECTED_STDOUT =
   "beta\n" +
   "READ:read-left:read-right\n" +
   "ISSUE_223_PIPE_READ_OK\n";
+const STATUS_STDERR_EXPECTED_STDOUT =
+  "CAT_STATUS:1\n" +
+  "STDERR_CAPTURE:cat: issue-225-status/missing.txt: No such file or directory (os error 44)\n" +
+  "ISSUE_225_STATUS_STDERR_OK\n";
 
 const BASH_ARTIFACT = {
   name: "wasmer/bash",
@@ -279,6 +297,32 @@ export async function runBashCoreutilsSmoke() {
     assertEqual(pipelineReadRun.complete.result?.failureStage, null);
     assertNoUnexpectedProcessDiagnostics(pipelineReadDiagnostics);
 
+    const statusStderrRun = await dispatchAndCollect(
+      worker,
+      {
+        type: "command.run",
+        id: "run-bash-coreutils-status-stderr",
+        packageId: "bash",
+        command: "bash",
+        args: ["-lc", STATUS_STDERR_SHELL_SCRIPT],
+        diagnostics: { unsupportedWasixCalls: true },
+        env: { PATH: "/bin:/usr/bin" },
+        timeoutMs: 30000,
+      },
+    );
+    assert(statusStderrRun.complete, "status/stderr command should complete");
+
+    const statusStderrStdout = chunksText(statusStderrRun.stdout);
+    const statusStderrStderr = chunksText(statusStderrRun.stderr);
+    const statusStderrDiagnostics =
+      statusStderrRun.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
+
+    assertEqual(statusStderrStdout, STATUS_STDERR_EXPECTED_STDOUT);
+    assertEqual(statusStderrStderr, "");
+    assertEqual(statusStderrRun.complete.result?.exitCode, 0);
+    assertEqual(statusStderrRun.complete.result?.failureStage, null);
+    assertNoUnexpectedProcessDiagnostics(statusStderrDiagnostics);
+
     return {
       artifacts: {
         bash: BASH_ARTIFACT,
@@ -323,6 +367,12 @@ export async function runBashCoreutilsSmoke() {
           status: "passed",
           stdoutBytes: byteLength(pipelineReadStdout),
         },
+        {
+          exitCode: statusStderrRun.complete.result?.exitCode,
+          name: "status-stderr",
+          status: "passed",
+          stdoutBytes: byteLength(statusStderrStdout),
+        },
       ],
       stderr: pathStderr,
       stdout: pathStdout,
@@ -356,6 +406,13 @@ export async function runBashCoreutilsSmoke() {
         stderr: pipelineReadStderr,
         stdout: pipelineReadStdout,
         targetCommand: ["bash", "-lc", PIPELINE_READ_SHELL_SCRIPT],
+      },
+      statusStderr: {
+        diagnostics: statusStderrDiagnostics,
+        result: statusStderrRun.complete.result,
+        stderr: statusStderrStderr,
+        stdout: statusStderrStdout,
+        targetCommand: ["bash", "-lc", STATUS_STDERR_SHELL_SCRIPT],
       },
     };
   } finally {

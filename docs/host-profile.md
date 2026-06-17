@@ -67,7 +67,7 @@ silently depend on capabilities the browser cannot match.
 | Notifications | Native notification APIs | Browser Notification API | Optional capability; do not make core execution depend on it. |
 | External editor | Native process launch | Not available directly | Replace with in-browser editor or host bridge. |
 | Secrets/keychain | Env, keychain, or file | host-provided token/session storage | Never require secrets in argv; expose secret providers. |
-| MCP/local services | Stdio/local process possible | WASM MCP server, HTTP/WebSocket MCP, or remote bridge | Model every server as a capability-backed transport. |
+| Tool adapters and local services | Stdio/local process possible | Packaged command, WASM, HTTP/WebSocket, or remote bridge | Model every tool adapter as a capability-backed transport; keep MCP as an adapter layer. |
 
 ## Unsupported Native Features
 
@@ -368,7 +368,7 @@ real browser page/worker boundary. The browser profile also has a deterministic
 fake device-flow auth broker for start/status, host-side completion,
 cancellation, and logout tests. It is intentionally not modeled as raw WASI and
 does not imply real provider credentials, refresh, full Codex CLI, real
-app-server, tool, or MCP support.
+app-server, full tool, or plugin/MCP adapter support.
 
 The browser profile also has a deterministic app-server JSON-RPC fixture in
 `apps/web/src/app-server.js`. It accepts browser-owned app-server messages for
@@ -388,12 +388,14 @@ through an injectable WebSocket-compatible constructor for browser UI-facing
 tests. It is not yet a real network WebSocket replacement for the Codex browser
 demo, a persistent session store, or the full native app-server engine.
 
-The browser profile also has a deterministic MCP/tool transport fixture for
-browser-owned tools. The fixture can list and call a loopback tool, enforce
-bounded tool result sizes, and reject native-only stdio or local-process MCP
-server configs with structured browser capability errors. It is not the full
-MCP SDK, plugin package runtime, OAuth/login integration, or an HTTP/WebSocket
-gateway transport yet.
+Browser tool integrations should use a protocol-neutral adapter boundary before
+MCP or plugins become visible runtime layers. That boundary needs explicit tool
+specs, namespaces, JSON-schema inputs, call ids, turn ids, structured results,
+approval and cancellation semantics, bounded output, and declared workspace
+effects. MCP stdio and local-process server launch remain unsupported browser
+capabilities; future MCP/plugin support should translate browser-safe packaged
+command, WASM, HTTP, WebSocket, or gateway transports onto the shared tool
+protocol.
 
 The browser profile also has a deterministic packaged tool fixture. The command
 worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,

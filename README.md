@@ -58,10 +58,9 @@ until the boundaries are stable enough to split.
   session controller for initialize, account read, device login cancel, thread
   reuse, mocked turn completion, turn interrupt, ordered notifications, and
   structured unsupported capability errors.
-- The browser adapter package has a deterministic browser MCP/tool transport
-  fixture for listing and calling a browser-owned tool with bounded results and
-  structured unsupported capability errors for native-only stdio/local-process
-  server configs.
+- Browser MCP/plugin work should target the protocol-neutral browser tool
+  boundary first; MCP remains an adapter layer rather than a first-class
+  browser runtime primitive.
   The raw WASI executor can mount an injected store for writable `/workspace`
   fixture runs and flush mutations back as snapshots after the module exits.
 - The browser adapter package can consume the interim Codex artifact manifest

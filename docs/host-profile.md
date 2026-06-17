@@ -280,9 +280,12 @@ browser-safe cache paths under `wasm-host/v1/packages/sha256/` and
 `wasm-host/v1/modules/sha256/`. The loader normalizes command names,
 entrypoints, artifact kind, source metadata, content hash, and cache metadata
 into a `command.load` package shape for the command lifecycle runtime. This is
-only the package input/cache boundary: full WebC metadata parsing, compiled
-module cache persistence, filesystem mounts, and actual WebC/Wasm execution are
-later browser runtime layers.
+the package input/cache boundary plus the first dispatch boundary:
+`apps/web/src/webc-wasix.js` now receives loaded WebC commands and returns a
+structured unimplemented WebC/WASIX runtime error instead of falling through to
+unsupported package routing. Full WebC metadata parsing, compiled module cache
+persistence, filesystem mounts, and actual WebC/Wasm execution are later
+browser runtime layers.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory

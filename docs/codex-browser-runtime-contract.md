@@ -28,6 +28,9 @@ does not prove full Codex parity.
 - A package loader boundary for explicit bytes, Fetch-backed artifacts, WebC or
   Wasm magic-byte validation, SHA-256 pinning, and browser-safe cache path
   derivation.
+- A first WebC/WASIX executor boundary that routes loaded WebC packages to a
+  dedicated browser runtime layer and returns a structured unimplemented error
+  until real WebC/WASIX execution is wired.
 - An interim Codex artifact manifest consumer for the raw `wasi-module`
   `codex --version` contract.
 - A raw WASI Preview1 module executor that wires the tracked import surface used
@@ -110,7 +113,7 @@ services.
 | Capability | Current state | Target contract | Issue |
 | --- | --- | --- | --- |
 | Version smoke | Raw WASI Preview1 `codex --version` runs through the browser worker and e2e page. | Keep this as the lowest conformance level and regression test. | [#37](https://github.com/VertoOS/wasm-host/issues/37) |
-| Artifact shape | Interim raw WASI manifest exists for the version smoke; Codex also has a `wasm32-unknown-unknown` request-builder bundle. | Publish browser-runnable Codex artifact contracts, including the near-term request-builder bundle and the later full-runtime package with manifest metadata, exports/imports, commands, hashes, and capability declarations. | [#122](https://github.com/VertoOS/wasm-host/issues/122), [#109](https://github.com/VertoOS/wasm-host/issues/109) |
+| Artifact shape | Interim raw WASI manifest exists for the version smoke; Codex also has a `wasm32-unknown-unknown` request-builder bundle. Loaded WebC packages now route to a browser WebC/WASIX executor boundary, but that runtime still reports structured unimplemented errors. | Publish browser-runnable Codex artifact contracts, including the near-term request-builder bundle and the later full-runtime package with manifest metadata, exports/imports, commands, hashes, and capability declarations. | [#164](https://github.com/VertoOS/wasm-host/issues/164), [#122](https://github.com/VertoOS/wasm-host/issues/122), [#109](https://github.com/VertoOS/wasm-host/issues/109) |
 | WASI/WASIX imports | Browser raw WASI runner wires the tracked Preview1 smoke imports. It is not a general WASIX runtime. | Inventory full Codex import requirements and implement or explicitly reject each unsupported import with stable errors. | [#110](https://github.com/VertoOS/wasm-host/issues/110), [#3](https://github.com/VertoOS/wasm-host/issues/3) |
 | Auth and secrets | A minimal host-owned bearer secret seam can inject a token into mocked `codex-browser model-request` dispatch from an opaque `CODEX_MODEL_BEARER_SECRET_REF`. A deterministic fake device-flow broker can start, report status, be completed externally, cancel, and logout without exposing raw tokens. Real provider HTTP, refresh, persistence, storage policy, and browser UI are not wired yet. | Host-owned device login and secret provider with redaction, storage policy, cancellation, and no secret-bearing argv or logs. | [#111](https://github.com/VertoOS/wasm-host/issues/111) |
 | Model HTTP | The `codex-browser model-request` path can send a mocked model request through the host HTTP bridge, pass through non-SSE fixture bodies, and decode mocked Responses SSE text deltas from bridge-delivered chunks. Real provider traffic, low-latency direct Fetch response streaming, and broader event/tool-call semantics are not integrated yet. | Route model traffic through host Fetch or gateway, with streaming events, cancellation, response limits, and secret-safe errors. | [#112](https://github.com/VertoOS/wasm-host/issues/112), [#7](https://github.com/VertoOS/wasm-host/issues/7) |

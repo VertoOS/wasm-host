@@ -40,8 +40,13 @@ Current scope:
   built-in `browser-tool-fixture` executor proves packaged tool command
   dispatch with cwd/env/stdin, terminal transcript capture, and host-owned
   workspace reads; the `wasi-module` executor supports the interim raw WASI
-  preview1 `codex --version` smoke, while real WebC package execution still
-  depends on package loading and runtime wiring.
+  preview1 `codex --version` smoke; and the `webc-package`/`webc-wasix`
+  executor boundary accepts loaded WebC packages before returning a structured
+  unimplemented runtime error.
+- `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
+  It validates command dispatch for WebC packages and reports that real runtime
+  execution is not implemented yet, giving the later Bash/coreutils work a
+  stable package type instead of falling through to unsupported package routing.
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
   artifact. It validates the expected exports, calls `codex_version` and

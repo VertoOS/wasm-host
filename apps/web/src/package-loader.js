@@ -97,10 +97,12 @@ export class BrowserPackageLoader {
       format,
       id: metadata.id,
       metadata: metadata.metadata,
+      ...(metadata.moduleArtifacts ? { moduleArtifacts: metadata.moduleArtifacts } : {}),
       sha256,
       source: metadata.source,
     };
     await this.cache.putPackage(record);
+    await putModuleArtifacts(this.cache, metadata.moduleArtifacts);
     return record;
   }
 
@@ -351,6 +353,10 @@ function normalizePackageMetadata(input, context) {
   );
   const commands = normalizeCommands(input, discovered);
   const defaultCommand = normalizeDefaultCommand(input, commands, discovered);
+  const moduleArtifacts = normalizeWebcModuleArtifacts(
+    discovered?.webcArtifacts,
+    context.cacheKeys,
+  );
   const discoveredEntrypoint = commands.includes(discovered?.entrypoint)
     ? discovered.entrypoint
     : null;
@@ -383,6 +389,7 @@ function normalizePackageMetadata(input, context) {
             package: discovered.package,
             packageName: discovered.packageName,
             packageVersion: discovered.packageVersion,
+            webcArtifacts: moduleArtifacts.summary,
             webcVersion: discovered.version,
           }
         : {}),
@@ -397,6 +404,7 @@ function normalizePackageMetadata(input, context) {
       sha256: context.sha256,
       source: context.source,
     },
+    moduleArtifacts: moduleArtifacts.entries,
     source: context.source,
   };
 }
@@ -405,7 +413,7 @@ function discoverWebcMetadata(bytes, input) {
   try {
     return extractWebcPackageMetadata(bytes);
   } catch (error) {
-    if (hasExplicitCommands(input)) {
+    if (hasExplicitCommands(input) && canUseExplicitWebcMetadataFallback(error)) {
       return null;
     }
     if (error instanceof WebcMetadataError) {
@@ -416,6 +424,16 @@ function discoverWebcMetadata(bytes, input) {
     }
     throw error;
   }
+}
+
+function canUseExplicitWebcMetadataFallback(error) {
+  return (
+    error instanceof WebcMetadataError &&
+    (error.message === "missing WebC version header" ||
+      error.message.startsWith("unsupported WebC version ") ||
+      error.message === "missing WebC manifest section" ||
+      error.message === "truncated WebC metadata")
+  );
 }
 
 function openPackageCacheDatabase(options) {
@@ -523,6 +541,77 @@ function hasExplicitCommands(input) {
     Array.isArray(input.commands) ||
     input.command != null ||
     input.defaultCommand != null
+  );
+}
+
+function normalizeWebcModuleArtifacts(artifacts, cacheKeys) {
+  if (!artifacts) {
+    return {
+      entries: null,
+      summary: null,
+    };
+  }
+  const entries = [];
+  const atoms = {};
+  const volumes = {};
+  for (const [name, atom] of Object.entries(artifacts?.atoms?.files ?? {})) {
+    const cacheKey = `${cacheKeys.moduleArtifactsPrefix}atoms/${encodeArtifactSegment(name)}`;
+    atoms[name] = artifactSummary({
+      byteLength: atom.byteLength,
+      cacheKey,
+      checksumSha256: atom.checksumSha256,
+      name,
+      span: atom.span,
+    });
+    entries.push({
+      ...atoms[name],
+      bytes: atom.bytes,
+      kind: "webc-atom",
+    });
+  }
+  for (const [name, volume] of Object.entries(artifacts?.volumes ?? {})) {
+    const files = {};
+    for (const [path, file] of Object.entries(volume.files ?? {})) {
+      files[path] = artifactSummary({
+        byteLength: file.byteLength,
+        checksumSha256: file.checksumSha256,
+        path,
+        span: file.span,
+      });
+    }
+    volumes[name] = {
+      dataSpan: volume.dataSpan,
+      files,
+      hash: volume.hash,
+      headerSpan: volume.headerSpan,
+      name,
+      payloadSpan: volume.payloadSpan,
+    };
+  }
+  return {
+    entries,
+    summary: {
+      atoms,
+      volumes,
+    },
+  };
+}
+
+async function putModuleArtifacts(cache, moduleArtifacts) {
+  for (const artifact of moduleArtifacts ?? []) {
+    await cache.putModuleArtifact(artifact.cacheKey, artifact.bytes);
+  }
+}
+
+function artifactSummary(input) {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined),
+  );
+}
+
+function encodeArtifactSegment(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
   );
 }
 

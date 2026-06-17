@@ -108,13 +108,12 @@ async function resolvePackageFileSource(input, options) {
   const file = requiredFile(input.file, "select a package file");
   const bytes = await fileBytes(file);
   const packageId = packageIdFromInput(input, fileNamePackageId(file.name));
-  const command = nonEmptyString(input.command, "package command is required");
+  const command = optionalString(input.command);
   const record = await loadPackageSafely(
     () =>
       packageLoader(options).loadBytes({
         bytes,
-        command,
-        defaultCommand: command,
+        ...(command ? { command, defaultCommand: command } : {}),
         executorType: optionalString(input.executorType),
         id: packageId,
         source: {
@@ -129,13 +128,12 @@ async function resolvePackageFileSource(input, options) {
 
 async function resolvePackageUrlSource(input, options) {
   const url = nonEmptyString(input.url, "package URL is required");
-  const command = nonEmptyString(input.command, "package command is required");
+  const command = optionalString(input.command);
   const packageId = packageIdFromInput(input, "url-package");
   const record = await loadPackageSafely(
     () =>
       packageLoader(options).loadUrl({
-        command,
-        defaultCommand: command,
+        ...(command ? { command, defaultCommand: command } : {}),
         executorType: optionalString(input.executorType),
         id: packageId,
         url,
@@ -207,7 +205,10 @@ async function resolveManifestFixture(manifest, input, options) {
 
 function shellOptionsFromPackageRecord(record, input) {
   const args = argsFromInput(input);
-  const command = nonEmptyString(input.command, "package command is required");
+  const command = nonEmptyString(
+    input.command ?? record.defaultCommand,
+    "package command is required",
+  );
   const loadMessage = {
     type: "command.load",
     id: `load-${record.id}`,

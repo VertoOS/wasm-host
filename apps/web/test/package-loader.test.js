@@ -9,6 +9,11 @@ import {
   CODEX_VERSION_SMOKE_STDOUT,
   CODEX_VERSION_SMOKE_WASM,
 } from "../fixtures/codex-version-smoke-core.js";
+import {
+  webcCommandManifest,
+  webcV2Bytes,
+  webcV3Bytes,
+} from "../fixtures/webc-metadata-fixture.js";
 import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import {
   IndexedDbPackageCache,
@@ -94,6 +99,127 @@ test("BrowserPackageLoader loads explicit WebC bytes and normalizes command pack
   });
 });
 
+test("BrowserPackageLoader discovers command metadata from WebC manifests", async () => {
+  const cache = new MemoryPackageCache();
+  const loader = createBrowserPackageLoader({ cache });
+  const bytes = webcV2Bytes(webcCommandManifest());
+
+  const record = await loader.loadBytes({ bytes });
+
+  assert.equal(record.id, "wasmer/bash");
+  assert.equal(record.format, "webc");
+  assert.equal(record.executorType, "webc-package");
+  assert.equal(record.defaultCommand, "bash");
+  assert.equal(record.entrypoint, "bash");
+  assert.deepEqual(record.commands, ["bash", "ls"]);
+  assert.equal(record.metadata.webcVersion, "002");
+  assert.equal(record.metadata.packageName, "wasmer/bash");
+  assert.equal(record.metadata.packageVersion, "1.0.25");
+  assert.deepEqual(record.metadata.filesystem, [
+    {
+      from: null,
+      hostPath: "rootfs",
+      mountPath: "/",
+      volumeName: "/rootfs",
+    },
+  ]);
+  assert.deepEqual(record.metadata.commandMetadata.bash, {
+    annotations: {
+      atom: { name: "bash-atom" },
+      wasi: {
+        atom: "bash-atom",
+        cwd: "/workspace",
+        env: ["PATH=/bin"],
+        exec_name: "bash",
+        main_args: ["-l"],
+      },
+    },
+    atom: "bash-atom",
+    cwd: "/workspace",
+    dependency: null,
+    env: ["PATH=/bin"],
+    execName: "bash",
+    mainArgs: ["-l"],
+    runner: "https://webc.org/runner/wasi",
+  });
+  assert.deepEqual(await cache.getPackage("wasmer/bash"), {
+    artifactKind: "webc-package",
+    byteLength: record.byteLength,
+    cache: record.cache,
+    cacheKeys: record.cacheKeys,
+    commands: ["bash", "ls"],
+    contentSha256: record.sha256,
+    defaultCommand: "bash",
+    entrypoint: "bash",
+    executorType: "webc-package",
+    format: "webc",
+    id: "wasmer/bash",
+    metadata: record.metadata,
+    sha256: record.sha256,
+    source: { kind: "bytes", label: "explicit-bytes" },
+  });
+
+  assert.deepEqual(commandPackageFromRecord(record).metadata.commandMetadata.ls, {
+    annotations: {
+      atom: { name: "coreutils" },
+      wasi: {
+        atom: "coreutils",
+        exec_name: "ls",
+      },
+    },
+    atom: "coreutils",
+    cwd: null,
+    dependency: null,
+    env: [],
+    execName: "ls",
+    mainArgs: [],
+    runner: "https://webc.org/runner/wasi",
+  });
+});
+
+test("BrowserPackageLoader lets explicit package metadata override WebC discovery", async () => {
+  const loader = createBrowserPackageLoader();
+  const record = await loader.loadBytes({
+    bytes: webcV3Bytes(webcCommandManifest()),
+    commands: ["manual"],
+    defaultCommand: "manual",
+    id: "manual-pkg",
+    metadata: { name: "manual fixture" },
+  });
+
+  assert.equal(record.id, "manual-pkg");
+  assert.deepEqual(record.commands, ["manual"]);
+  assert.equal(record.defaultCommand, "manual");
+  assert.equal(record.entrypoint, "manual");
+  assert.equal(record.metadata.name, "manual fixture");
+  assert.equal(record.metadata.packageName, "wasmer/bash");
+  assert.equal(record.metadata.webcVersion, "003");
+});
+
+test("BrowserPackageLoader rejects WebC bytes without discoverable commands", async () => {
+  const loader = createBrowserPackageLoader();
+
+  await assert.rejects(
+    loader.loadBytes({
+      bytes: webcV2Bytes({
+        package: {
+          wapm: {
+            name: "library-only",
+          },
+        },
+      }),
+    }),
+    (error) => {
+      assert.equal(error.kind, "invalid_package");
+      assert.equal(
+        error.message,
+        "browser WebC metadata could not be parsed: WebC manifest commands must be a map",
+      );
+      return true;
+    },
+  );
+});
+
 test("BrowserPackageLoader command load message feeds the command lifecycle worker", async () => {
   const loader = createBrowserPackageLoader();
   const port = recordingPort();
@@ -155,6 +281,62 @@ test("command lifecycle worker loads package bytes through BrowserPackageLoader"
   assert.match(port.messages[0].contentSha256, /^[a-f0-9]{64}$/);
   assert.equal(port.messages[0].cache.backend, "indexeddb");
   assert.equal(chunksText(stdoutChunks(port.messages)), "BROWSER_SMOKE_OK\n");
+});
+
+test("command lifecycle worker loads WebC metadata commands through BrowserPackageLoader", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-discovered-webc",
+    package: {
+      bytes: webcV2Bytes(webcCommandManifest()),
+      id: "discovered-webc",
+      source: { kind: "bytes", label: "bash.webc" },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-discovered-webc",
+    packageId: "discovered-webc",
+    command: "bash",
+  });
+
+  const loaded = port.messages.find(
+    (message) => message.id === "load-discovered-webc",
+  );
+  assert.equal(loaded.artifactKind, "webc-package");
+  assert.equal(loaded.entrypoint, "bash");
+  assert.deepEqual(loaded.commands, ["bash", "ls"]);
+  assert.deepEqual(port.messages.find((message) => message.id === "run-discovered-webc"), {
+    args: [],
+    command: "bash",
+    cwd: "/workspace",
+    id: "run-discovered-webc",
+    packageId: "discovered-webc",
+    type: "command.started",
+  });
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-discovered-webc",
+    error: {
+      kind: "webc_wasix_runtime_unimplemented",
+      message: "browser WebC/WASIX runtime execution is not implemented yet",
+      stage: "runtime",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 126,
+      failureStage: "runtime",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
 });
 
 test("command lifecycle worker loads raw WASI bytes through BrowserPackageLoader", async () => {

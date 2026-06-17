@@ -31,6 +31,23 @@ const FIRST_FILE_FD = 5;
 const PACKAGE_ROOT_PREOPEN_PATH = "/";
 const WASI_CLOCK_REALTIME = 0;
 const WASI_CLOCK_MONOTONIC = 1;
+const WASI_EVENTTYPE_CLOCK = 0;
+const WASI_EVENTTYPE_FD_READ = 1;
+const WASI_EVENTTYPE_FD_WRITE = 2;
+const WASI_SUBSCRIPTION_SIZE = 48;
+const WASI_SUBSCRIPTION_USERDATA_OFFSET = 0;
+const WASI_SUBSCRIPTION_TYPE_OFFSET = 8;
+const WASI_SUBSCRIPTION_CLOCK_ID_OFFSET = 16;
+const WASI_SUBSCRIPTION_CLOCK_FLAGS_OFFSET = 40;
+const WASI_SUBSCRIPTION_FD_OFFSET = 16;
+const WASI_SUBSCRIPTION_CLOCK_ABSTIME = 1;
+const WASI_EVENT_SIZE = 32;
+const WASI_EVENT_USERDATA_OFFSET = 0;
+const WASI_EVENT_ERROR_OFFSET = 8;
+const WASI_EVENT_TYPE_OFFSET = 10;
+const WASI_EVENT_FD_NBYTES_OFFSET = 16;
+const WASI_EVENT_FD_FLAGS_OFFSET = 24;
+const WASI_EVENT_FD_READWRITE_HANGUP = 1;
 const WASI_FILETYPE_CHARACTER_DEVICE = 2;
 const WASI_FILETYPE_DIRECTORY = 3;
 const WASI_FILETYPE_REGULAR_FILE = 4;
@@ -2769,6 +2786,18 @@ class WasiPreview1Runtime {
     return this.view().getUint32(ptr, true);
   }
 
+  readU8(ptr) {
+    return this.view().getUint8(ptr);
+  }
+
+  readU16(ptr) {
+    return this.view().getUint16(ptr, true);
+  }
+
+  readU64(ptr) {
+    return this.view().getBigUint64(ptr, true);
+  }
+
   writeU8(ptr, value) {
     this.view().setUint8(ptr, value);
   }
@@ -2807,9 +2836,161 @@ class WasiPreview1Runtime {
     throwIfAborted(this.signal);
   }
 
-  pollOneoff(_subscriptionsPtr, _eventsPtr, subscriptionsLen, _eventsUsedPtr) {
+  pollOneoff(subscriptionsPtr, eventsPtr, subscriptionsLen, eventsUsedPtr) {
     this.throwIfAborted();
-    return subscriptionsLen === 0 ? ERRNO_INVAL : ERRNO_NOTSUP;
+    const subscriptionCount = subscriptionsLen >>> 0;
+    if (subscriptionCount === 0) {
+      return ERRNO_INVAL;
+    }
+    const memoryLength = this.bytes().byteLength;
+    if (
+      checkedMemoryRange(
+        subscriptionsPtr >>> 0,
+        subscriptionCount * WASI_SUBSCRIPTION_SIZE,
+        memoryLength,
+      ) == null ||
+      checkedMemoryRange(
+        eventsPtr >>> 0,
+        subscriptionCount * WASI_EVENT_SIZE,
+        memoryLength,
+      ) == null ||
+      checkedMemoryRange(eventsUsedPtr >>> 0, 4, memoryLength) == null
+    ) {
+      return ERRNO_FAULT;
+    }
+
+    const events = [];
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      const subscriptionPtr =
+        (subscriptionsPtr >>> 0) + index * WASI_SUBSCRIPTION_SIZE;
+      const event = this.pollEvent(subscriptionPtr);
+      if (event.errno != null) {
+        return event.errno;
+      }
+      events.push(event);
+    }
+    for (let index = 0; index < events.length; index += 1) {
+      this.writePollEvent(
+        (eventsPtr >>> 0) + index * WASI_EVENT_SIZE,
+        events[index],
+      );
+    }
+    this.writeU32(eventsUsedPtr, subscriptionCount);
+    return ERRNO_SUCCESS;
+  }
+
+  pollEvent(subscriptionPtr) {
+    const userdata = this.readU64(
+      subscriptionPtr + WASI_SUBSCRIPTION_USERDATA_OFFSET,
+    );
+    const type = this.readU8(subscriptionPtr + WASI_SUBSCRIPTION_TYPE_OFFSET);
+    if (type === WASI_EVENTTYPE_CLOCK) {
+      return this.pollClockEvent(subscriptionPtr, userdata);
+    }
+    if (type === WASI_EVENTTYPE_FD_READ) {
+      return this.pollFdReadEvent(subscriptionPtr, userdata);
+    }
+    if (type === WASI_EVENTTYPE_FD_WRITE) {
+      return this.pollFdWriteEvent(subscriptionPtr, userdata);
+    }
+    return { errno: ERRNO_INVAL };
+  }
+
+  pollClockEvent(subscriptionPtr, userdata) {
+    const clockId = this.readU32(
+      subscriptionPtr + WASI_SUBSCRIPTION_CLOCK_ID_OFFSET,
+    );
+    const flags = this.readU16(
+      subscriptionPtr + WASI_SUBSCRIPTION_CLOCK_FLAGS_OFFSET,
+    );
+    const error =
+      isSupportedClock(clockId) &&
+      (flags & ~WASI_SUBSCRIPTION_CLOCK_ABSTIME) === 0
+        ? ERRNO_SUCCESS
+        : ERRNO_INVAL;
+    return { error, type: WASI_EVENTTYPE_CLOCK, userdata };
+  }
+
+  pollFdReadEvent(subscriptionPtr, userdata) {
+    const fd = this.readU32(subscriptionPtr + WASI_SUBSCRIPTION_FD_OFFSET);
+    const readiness = this.fdReadReadiness(fd);
+    return {
+      error: readiness.error,
+      flags: readiness.flags,
+      nbytes: readiness.nbytes,
+      type: WASI_EVENTTYPE_FD_READ,
+      userdata,
+    };
+  }
+
+  pollFdWriteEvent(subscriptionPtr, userdata) {
+    const fd = this.readU32(subscriptionPtr + WASI_SUBSCRIPTION_FD_OFFSET);
+    const readiness = this.fdWriteReadiness(fd);
+    return {
+      error: readiness.error,
+      flags: readiness.flags,
+      nbytes: readiness.nbytes,
+      type: WASI_EVENTTYPE_FD_WRITE,
+      userdata,
+    };
+  }
+
+  fdReadReadiness(fd) {
+    const file = this.openFiles.get(fd);
+    if (fd === STDIN_FD) {
+      const remaining = Math.max(0, this.stdin.byteLength - this.stdinOffset);
+      return {
+        error: ERRNO_SUCCESS,
+        flags: remaining === 0 ? WASI_EVENT_FD_READWRITE_HANGUP : 0,
+        nbytes: BigInt(remaining),
+      };
+    }
+    if (
+      fd === WORKSPACE_FD ||
+      fd === TMP_FD ||
+      fd === this.packageRootFd ||
+      isOpenDirectory(file)
+    ) {
+      return { error: ERRNO_ISDIR };
+    }
+    if (!file) {
+      return { error: ERRNO_BADF };
+    }
+    if (!canReadFile(file)) {
+      return { error: ERRNO_NOTCAPABLE };
+    }
+    const remaining = Math.max(0, file.record.bytes.byteLength - file.offset);
+    return {
+      error: ERRNO_SUCCESS,
+      flags: remaining === 0 ? WASI_EVENT_FD_READWRITE_HANGUP : 0,
+      nbytes: BigInt(remaining),
+    };
+  }
+
+  fdWriteReadiness(fd) {
+    const file = this.openFiles.get(fd);
+    if (fd === STDOUT_FD || fd === STDERR_FD) {
+      return { error: ERRNO_SUCCESS };
+    }
+    if (!file) {
+      return { error: ERRNO_BADF };
+    }
+    if (!canWriteFile(file)) {
+      return { error: ERRNO_NOTCAPABLE };
+    }
+    return { error: ERRNO_SUCCESS };
+  }
+
+  writePollEvent(eventPtr, event) {
+    this.writeU64(eventPtr + WASI_EVENT_USERDATA_OFFSET, event.userdata);
+    this.writeU16(eventPtr + WASI_EVENT_ERROR_OFFSET, event.error);
+    this.writeU8(eventPtr + WASI_EVENT_TYPE_OFFSET, event.type);
+    this.writeU8(eventPtr + 11, 0);
+    this.writeU32(eventPtr + 12, 0);
+    this.writeU64(eventPtr + WASI_EVENT_FD_NBYTES_OFFSET, event.nbytes ?? 0n);
+    this.writeU16(eventPtr + WASI_EVENT_FD_FLAGS_OFFSET, event.flags ?? 0);
+    this.writeU16(eventPtr + 26, 0);
+    this.writeU32(eventPtr + 28, 0);
   }
 
   procRaise(_signal) {

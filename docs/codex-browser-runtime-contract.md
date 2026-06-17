@@ -34,8 +34,9 @@ does not prove full Codex parity.
 - An interim Codex artifact manifest consumer for the raw `wasi-module`
   `codex --version` contract.
 - A raw WASI Preview1 module executor that wires the tracked import surface used
-  by the version smoke, including deterministic unsupported or no-op handlers
-  for link, symlink, readlink, poll, signal, and socket imports.
+  by the version smoke, including deterministic immediate `poll_oneoff`
+  readiness snapshots plus unsupported or no-op handlers for the eight
+  remaining shallow link, symlink, readlink, signal, and socket imports.
 - A first browser workspace store with canonical `/workspace` paths, in-memory
   file and directory operations, deterministic snapshot import/export, and
   IndexedDB-backed snapshot persistence when browser storage is available.

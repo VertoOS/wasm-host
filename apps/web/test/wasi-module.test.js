@@ -136,8 +136,12 @@ const PATH_FILESTAT_SET_TIMES_WASM = base64ToBytes(
   "AGFzbQEAAAABNAdgCX9/f39/fn5/fwF/YAd/f39/fn5/AX9gA39/fwF/YAR/f39/AX9gAX8AYAJ/fwBgAAACyQEFFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MRdwYXRoX2ZpbGVzdGF0X3NldF90aW1lcwABFndhc2lfc25hcHNob3RfcHJldmlldzEVcGF0aF9jcmVhdGVfZGlyZWN0b3J5AAIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQADFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAQDAwIFBgUDAQABBxMCBm1lbW9yeQIABl9zdGFydAAGCrQCAg4AIAAgAUcEQEEBEAQLC6ICAEEEQQBBgAhBCUEBQsAAQgBBAEEQEABBABAFQQRBAEGACEEJQsCp0zpCgIS42QFBBRABQQAQBUEEQQBBgAhBCUIAQgBBABABQQAQBUEEQQJBgAhBCUIAQgBBABABQRwQBUEEQQBBgAhBCUIAQgBBAxABQRwQBUEEQQBBgAhBCUIAQgBBEBABQRwQBUEEQQBBkAhBC0IAQgBBABABQSwQBUEEQaAIQQMQAkEAEAVBBEEAQaAIQQNCAEIAQQAQAUEfEAVBA0EAQagIQQxCAEIAQQAQAUHMABAFQQFBAEGACEEJQgBCAEEAEAFBzAAQBUHjAEEAQYAIQQlCAEIAQQAQAUEIEAVBAEG4CDYCAEEEQRI2AgBBAUEAQQFBCBADQQAQBQsLVAUAQYAICwl0aW1lcy5iaW4AQZAICwttaXNzaW5nLmJpbgBBoAgLA2RpcgBBqAgLDHJlYWRvbmx5LnR4dABBuAgLEnBhdGgtc2V0LXRpbWVzLW9rCg==",
 );
 
-const REMAINING_PREVIEW1_IMPORTS_WASM = base64ToBytes(
-  "AGFzbQEAAAABUgtgCX9/f39/fn5/fwF/YAd/f39/f39/AX9gBn9/f39/fwF/YAV/f39/fwF/YAR/f39/AX9gAX8Bf2ADf39/AX9gAn9/AX9gAX8AYAJ/fwBgAAACtAMMFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwYXRoX2xpbmsAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDXBhdGhfcmVhZGxpbmsAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDHBhdGhfc3ltbGluawADFndhc2lfc25hcHNob3RfcHJldmlldzELcG9sbF9vbmVvZmYABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCnByb2NfcmFpc2UABRZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxC3NvY2tfYWNjZXB0AAYWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlzb2NrX3JlY3YAAhZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXNvY2tfc2VuZAADFndhc2lfc25hcHNob3RfcHJldmlldzENc29ja19zaHV0ZG93bgAHFndhc2lfc25hcHNob3RfcHJldmlldzEIZmRfd3JpdGUABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAAIAwMCCQoFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQADQrIAgIOACAAIAFHBEBBARALCwu2AgBBBEEAQYAIQQlBAULAAEIAQQBBEBAAQQAQDEEEQQBBgAhBCUEEQZAIQQgQAUE6EAxBBEECQYAIQQlBBEGQCEEIEAFBHBAMQeMAQQBBgAhBCUEEQZAIQQgQAUEIEAxBBEGACEEJQcAIQSBB6AgQAkEcEAxBBEGgCEELQcAIQSBB6AgQAkEsEAxBsAhBBkEEQZAIQQgQA0E6EAxBgAlBwAlBAEHoCBAEQRwQDEGACUHACUEBQegIEARBOhAMQQIQBUEAEAxB4wBBAEHoCBAGQQgQDEEBQQBB6AgQBkE6EAxBAUEAQQBBAEHoCEHsCBAHQToQDEEBQQBBAEEAQegIEAhBOhAMQQFBABAJQRwQDEEBQQMQCUE6EAxBAEGACjYCAEEEQRQ2AgBBAUEAQQFBCBAKQQAQDAsLVQUAQYAICwl0aW1lcy5iaW4AQZAICwhsaW5rLmJpbgBBoAgLC21pc3NpbmcuYmluAEGwCAsGdGFyZ2V0AEGACgsUcHJldmlldzEtaW1wb3J0cy1vawo=",
+const POLL_ONEOFF_WASM = base64ToBytes(
+  "AGFzbQEAAAABJwZgBH9/f38Bf2AJf39/f39+fn9/AX9gAX8AYAJ/fwBgAn5+AGAAAAKvAQUWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQtwb2xsX29uZW9mZgAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAIDBQQCAwQFBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAgKtQUEBwAgABAEAAsOACAAIAFHBEBBARAFCwsOACAAIAFSBEBBARAFCwuMBQBBgAhBgBBBAEGABBAAQRwQBkGACEILNwMAQYgIQQA6AABBkAhBATYCAEGYCEIANwMAQaAIQgA3AwBBqAhBADsBAEGwCEIWNwMAQbgIQQE6AABBwAhBADYCAEHgCEIhNwMAQegIQQI6AABB8AhBATYCAEGQCUIsNwMAQZgJQQE6AABBoAlB4wA2AgBBgAhBgBBBBEGABBAAQQAQBkGABCgCAEEEEAZBgBApAwBCCxAHQYgQLwEAQQAQBkGKEC0AAEEAEAZBoBApAwBCFhAHQagQLwEAQQAQBkGqEC0AAEEBEAZBsBApAwBCAxAHQcAQKQMAQiEQB0HIEC8BAEEAEAZByhAtAABBAhAGQeAQKQMAQiwQB0HoEC8BAEEIEAZB6hAtAABBARAGQQNBAEGAIEEMQQBCAkIAQQBB2AQQAUEAEAZBgAhCNzcDAEGICEEBOgAAQZAIQdgEKAIANgIAQbAIQsIANwMAQbgIQQI6AABBwAhB2AQoAgA2AgBBgAhBgBBBAkGABBAAQQAQBkGABCgCAEECEAZBgBApAwBCNxAHQYgQLwEAQQAQBkGKEC0AAEEBEAZBkBApAwBCCBAHQaAQKQMAQsIAEAdBqBAvAQBBzAAQBkGqEC0AAEECEAZBgANBiCc2AgBBhANBAzYCAEEAQYADQQFBiAMQAkEAEAZBiAMoAgBBAxAGQYAIQs0ANwMAQYgIQQE6AABBkAhBADYCAEGACEGAEEEBQYAEEABBABAGQYAQKQMAQs0AEAdBiBAvAQBBABAGQYoQLQAAQQEQBkGQECkDAEIAEAdBmBAvAQBBARAGQYADQeggNgIAQYQDQQ82AgBBAUGAA0EBQYgDEANBABAGQQAQBAsLKAIAQYAgCwxyZWFkb25seS50eHQAQeggCw9wb2xsLW9uZW9mZi1vawo=",
+);
+
+const UNSUPPORTED_PREVIEW1_IMPORTS_WASM = base64ToBytes(
+  "AGFzbQEAAAABRQpgB39/f39/f38Bf2AGf39/f39/AX9gBX9/f39/AX9gAX8Bf2ADf39/AX9gAn9/AX9gBH9/f38Bf2ABfwBgAn9/AGAAAALsAgoWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwYXRoX2xpbmsAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDXBhdGhfcmVhZGxpbmsAARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxDHBhdGhfc3ltbGluawACFndhc2lfc25hcHNob3RfcHJldmlldzEKcHJvY19yYWlzZQADFndhc2lfc25hcHNob3RfcHJldmlldzELc29ja19hY2NlcHQABBZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXNvY2tfcmVjdgABFndhc2lfc25hcHNob3RfcHJldmlldzEJc29ja19zZW5kAAIWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQ1zb2NrX3NodXRkb3duAAUWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQAGFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAcDBAMHCAkFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQADArmAgMHACAAEAkACw4AIAAgAUcEQEEBEAoLC8wCAEEDQQBBgCBBCEEDQZAgQQYQAEE6EAtBA0ECQYAgQQhBA0GQIEEGEABBHBALQQNBAEGgIEELQQNBkCBBBhAAQSwQC0EDQbAgQQxBiCdBwABB2CcQAUEcEAtBA0GgIEELQYgnQcAAQdgnEAFBLBALQZAgQQZBA0GQIEEGEAJBOhALQZAgQQZBA0HAIEEJEAJBzAAQC0ECEANBABALQQFBAEGABBAEQToQC0HjAEEAQYAEEARBCBALQQFBgANBAUEAQYgEQYwEEAVBOhALQeMAQYADQQFBAEGIBEGMBBAFQQgQC0EBQYADQQFBAEGIBBAGQToQC0HjAEGAA0EBQQBBiAQQBkEIEAtBAUEAEAdBHBALQQFBARAHQToQC0HjAEEBEAdBCBALQYADQeggNgIAQYQDQRQ2AgBBAUGAA0EBQYgDEAhBABALQQAQCQsLZwYAQYAgCwhsaW5rLmJpbgBBkCALBnRhcmdldABBoCALC21pc3NpbmcuYmluAEGwIAsMcmVhZG9ubHkudHh0AEHAIAsJLi4vZXNjYXBlAEHoIAsUcHJldmlldzEtaW1wb3J0cy1vawo=",
 );
 
 const TMP_RENAME_WASM = base64ToBytes(
@@ -1182,13 +1186,47 @@ test("raw WASI executor accepts path timestamp updates", async () => {
   assert.equal(output.stderr, "");
 });
 
-test("raw WASI executor handles remaining Preview1 imports", async () => {
+test("raw WASI executor supports deterministic poll_oneoff readiness", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleExecutor({ worker: false });
   const packageRecord = await loadRawWasiModulePackage({
     artifactKind: "wasi-module",
-    bytes: REMAINING_PREVIEW1_IMPORTS_WASM,
+    bytes: POLL_ONEOFF_WASM,
+    command: "poll-oneoff",
+    files: {
+      "readonly.txt": "filedata",
+    },
+    id: "poll-oneoff",
+  });
+
+  const result = await executor.run(
+    {
+      args: [],
+      command: "poll-oneoff",
+      env: {},
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: encoder.encode("abc"),
+    },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "poll-oneoff-ok\n");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor keeps unsupported Preview1 imports explicit", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: UNSUPPORTED_PREVIEW1_IMPORTS_WASM,
     command: "preview1-imports",
+    files: {
+      "link.bin": "link\n",
+      "readonly.txt": "readonly\n",
+    },
     id: "preview1-imports",
   });
 
@@ -2368,7 +2406,7 @@ test("command worker runs raw WASI modules that set path timestamps", async () =
   });
 });
 
-test("command worker runs raw WASI modules with remaining Preview1 imports", async () => {
+test("command worker runs raw WASI modules with unsupported Preview1 imports", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
     httpTransports: { direct: {} },
@@ -2381,9 +2419,13 @@ test("command worker runs raw WASI modules with remaining Preview1 imports", asy
     package: {
       artifactKind: "wasi-module",
       command: "preview1-imports",
+      files: {
+        "link.bin": "link\n",
+        "readonly.txt": "readonly\n",
+      },
       id: "preview1-imports",
       wasiModule: {
-        bytes: REMAINING_PREVIEW1_IMPORTS_WASM,
+        bytes: UNSUPPORTED_PREVIEW1_IMPORTS_WASM,
       },
     },
   });

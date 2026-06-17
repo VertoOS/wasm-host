@@ -46,6 +46,11 @@ Current scope:
   interrupt, notification opt-out, bounded turn notifications, and structured
   browser capability errors for unsupported methods. It is a protocol fixture
   for browser runtime tests, not the full native app-server session engine.
+- `src/app-server-transport.js` wraps that fixture in a dependency-free
+  loopback socket and JSON-RPC client. It preserves text-frame ordering,
+  response correlation, notification delivery, malformed-frame errors, and
+  close semantics so browser tests can follow the Codex browser demo's
+  app-server message shape without a native WebSocket bridge.
 - `src/secrets.js` owns the current browser secret-provider seam: tests can
   supply host-owned bearer tokens by reference, while command messages and
   terminal output continue to carry only opaque secret references. It also
@@ -143,6 +148,10 @@ Current scope:
   initialization, account status, device login cancellation, thread start,
   mocked turn completion, turn interrupt, unsupported-method errors, malformed
   protocol errors, and turn notification bounds.
+- `test/app-server-transport.test.js` covers the app-server loopback
+  transport and JSON-RPC client, including frame ordering, request correlation,
+  notifications, malformed frames, close behavior, and the same deterministic
+  app-server protocol slice through the transport surface.
 - `test/secrets.test.js` covers the in-memory browser secret provider and fake
   device-flow broker, including external completion, classified denied/expired/
   cancelled errors, logout, and token redaction.
@@ -184,13 +193,14 @@ Current scope:
   request-builder JSON contract, assert a mocked model-turn HTTP bridge
   contract with local Responses SSE deltas, assert a workspace-edit fixture
   persists through the browser workspace store, assert the browser app-server
-  fixture can initialize, report account status, cancel login, start a thread,
-  complete a mocked turn, interrupt a pending turn, and reject unsupported
-  native methods, assert a packaged tool fixture can read the edited file with
-  cwd/env/stdin through the terminal transcript adapter, and drive the terminal
-  UI shell through DOM controls. The terminal shell e2e also applies a package
-  URL source backed by a local data URL, verifies sanitized package metadata,
-  and runs the selected package through the worker smoke executor.
+  fixture through the loopback transport can initialize, report account status,
+  cancel login, start a thread, complete a mocked turn, interrupt a pending
+  turn, and reject unsupported native methods, assert a packaged tool fixture
+  can read the edited file with cwd/env/stdin through the terminal transcript
+  adapter, and drive the terminal UI shell through DOM controls. The terminal
+  shell e2e also applies a package URL source backed by a local data URL,
+  verifies sanitized package metadata, and runs the selected package through
+  the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.

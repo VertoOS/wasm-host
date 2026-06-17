@@ -11,8 +11,8 @@ import {
   CODEX_VERSION_SMOKE_WASM,
   codexVersionSmokeManifest,
 } from "../fixtures/codex-version-smoke-core.js";
+import { createBrowserCodexAppServerJsonRpcClient } from "../src/app-server-transport.js";
 import { fetchCodexArtifactBytes } from "../src/artifact-manifest.js";
-import { createBrowserCodexAppServerRuntime } from "../src/app-server.js";
 import {
   createBrowserTerminalSession,
   createTerminalTranscript,
@@ -106,14 +106,14 @@ export async function runCodexVersionSmoke() {
 }
 
 async function runBrowserAppServerFixture() {
-  const runtime = createBrowserCodexAppServerRuntime({
-    modelResponseText: "mock browser app-server response",
+  const client = createBrowserCodexAppServerJsonRpcClient({
+    runtimeOptions: {
+      modelResponseText: "mock browser app-server response",
+    },
   });
-  const initialize = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "initialize",
-    method: "initialize",
-    params: {
+  await client.ready;
+  try {
+    const initialize = await client.request("initialize", {
       capabilities: {
         experimentalApi: true,
         optOutNotificationMethods: ["thread/started"],
@@ -122,127 +122,116 @@ async function runBrowserAppServerFixture() {
         name: "wasm-host-browser-e2e",
         version: "0.0.0",
       },
-    },
-  });
-  await runtime.handleMessage({ jsonrpc: "2.0", method: "initialized" });
+    });
+    client.notify("initialized");
 
-  const account = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "account",
-    method: "account/read",
-  });
-  const login = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "login",
-    method: "account/login/start",
-    params: { type: "chatgptDeviceCode" },
-  });
-  const cancel = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "cancel-login",
-    method: "account/login/cancel",
-    params: { loginId: login[0].result.loginId },
-  });
-  const thread = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "thread",
-    method: "thread/start",
-    params: { model: "gpt-5.1" },
-  });
-  const threadId = thread[0].result.thread.id;
-  const turn = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "turn",
-    method: "turn/start",
-    params: {
+    const account = await client.request("account/read");
+    const login = await client.request("account/login/start", {
+      type: "chatgptDeviceCode",
+    });
+    const loginCompleted = client.waitForNotification(
+      "account/login/completed",
+    );
+    await client.request("account/login/cancel", { loginId: login.loginId });
+    const cancel = await loginCompleted;
+    const notificationCount = client.notifications.length;
+    const thread = await client.request("thread/start", { model: "gpt-5.1" });
+    const threadId = thread.thread.id;
+    const turnStarted = client.waitForNotification("turn/started");
+    const itemCompleted = client.waitForNotification("item/completed");
+    const turnCompleted = client.waitForNotification("turn/completed");
+    const turn = await client.request("turn/start", {
       clientUserMessageId: null,
       input: [{ type: "text", text: "hello app-server", textElements: [] }],
       threadId,
-    },
-  });
-  const unsupported = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "unsupported",
-    method: "native/process/spawn",
-    params: {},
-  });
-  const interrupt = await runBrowserAppServerInterruptFixture();
+    });
+    const turnNotifications = await Promise.all([
+      turnStarted,
+      itemCompleted,
+      turnCompleted,
+    ]);
+    let unsupportedError = null;
+    try {
+      await client.request("native/process/spawn", {});
+    } catch (error) {
+      unsupportedError = error;
+    }
+    const interrupt = await runBrowserAppServerInterruptFixture();
 
-  assert(
-    initialize[0].result.browserFixture.browserHosted === true,
-    "App-server fixture should initialize as browser-hosted",
-  );
-  assert(
-    account[0].result.requiresOpenaiAuth === true,
-    "App-server fixture should report missing account auth",
-  );
-  assert(
-    login[0].result.type === "chatgptDeviceCode",
-    "App-server fixture should start device login",
-  );
-  assert(
-    cancel[1].method === "account/login/completed",
-    "App-server fixture should emit login cancellation",
-  );
-  assert(
-    thread.length === 1,
-    "App-server fixture should honor notification opt-out",
-  );
-  assert(
-    turn[2].params.item.text === "mock browser app-server response",
-    "App-server fixture should emit mocked assistant item text",
-  );
-  assert(
-    unsupported[0].error.data.kind === "unsupported_capability",
-    "App-server fixture should classify unsupported methods",
-  );
+    assert(
+      initialize.browserFixture.browserHosted === true,
+      "App-server fixture should initialize as browser-hosted",
+    );
+    assert(
+      account.requiresOpenaiAuth === true,
+      "App-server fixture should report missing account auth",
+    );
+    assert(
+      login.type === "chatgptDeviceCode",
+      "App-server fixture should start device login",
+    );
+    assert(
+      cancel.method === "account/login/completed",
+      "App-server fixture should emit login cancellation",
+    );
+    assert(
+      client.notifications.length === notificationCount + 3,
+      "App-server fixture should honor thread notification opt-out",
+    );
+    assert(
+      turnNotifications[1].params.item.text ===
+        "mock browser app-server response",
+      "App-server fixture should emit mocked assistant item text",
+    );
+    assert(
+      unsupportedError?.data?.kind === "unsupported_capability",
+      "App-server fixture should classify unsupported methods",
+    );
 
-  return {
-    accountRequiresAuth: account[0].result.requiresOpenaiAuth,
-    boundedMessages: turn.length,
-    cancelNotification: cancel[1].method,
-    errorKind: unsupported[0].error.data.kind,
-    interruptStatus: interrupt.status,
-    itemText: turn[2].params.item.text,
-    loginType: login[0].result.type,
-    notificationMethods: turn.slice(1).map((message) => message.method),
-    userAgent: initialize[0].result.userAgent,
-    threadId,
-    turnId: turn[0].result.turn.id,
-  };
+    return {
+      accountRequiresAuth: account.requiresOpenaiAuth,
+      boundedMessages: 1 + turnNotifications.length,
+      cancelNotification: cancel.method,
+      errorKind: unsupportedError.data.kind,
+      interruptStatus: interrupt.status,
+      itemText: turnNotifications[1].params.item.text,
+      loginType: login.type,
+      notificationMethods: turnNotifications.map(
+        (notification) => notification.method,
+      ),
+      userAgent: initialize.userAgent,
+      threadId,
+      turnId: turn.turn.id,
+    };
+  } finally {
+    client.close();
+  }
 }
 
 async function runBrowserAppServerInterruptFixture() {
-  const runtime = createBrowserCodexAppServerRuntime({
-    autoCompleteTurns: false,
+  const client = createBrowserCodexAppServerJsonRpcClient({
+    runtimeOptions: {
+      autoCompleteTurns: false,
+    },
   });
-  const [thread] = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "thread",
-    method: "thread/start",
-    params: {},
-  });
-  const [turn] = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "turn",
-    method: "turn/start",
-    params: {
+  await client.ready;
+  try {
+    const thread = await client.request("thread/start", {});
+    const turn = await client.request("turn/start", {
       input: [{ type: "text", text: "wait", textElements: [] }],
-      threadId: thread.result.thread.id,
-    },
-  });
-  const interrupt = await runtime.handleMessage({
-    jsonrpc: "2.0",
-    id: "interrupt",
-    method: "turn/interrupt",
-    params: {
-      threadId: thread.result.thread.id,
-      turnId: turn.result.turn.id,
-    },
-  });
-  return {
-    status: interrupt[1].params.turn.status,
-  };
+      threadId: thread.thread.id,
+    });
+    const completed = client.waitForNotification("turn/completed");
+    await client.request("turn/interrupt", {
+      threadId: thread.thread.id,
+      turnId: turn.turn.id,
+    });
+    return {
+      status: (await completed).params.turn.status,
+    };
+  } finally {
+    client.close();
+  }
 }
 
 async function runBrowserToolFixture(worker, workspaceEdit) {

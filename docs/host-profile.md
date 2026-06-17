@@ -377,9 +377,12 @@ initialize/initialized, `account/read`, device login start/cancel,
 `thread/started`, `turn/started`, `item/completed`, and `turn/completed`
 notifications; honors notification opt-out; and returns structured unsupported
 capability errors for native-only methods. The real-browser e2e harness drives
-this fixture directly to prove the protocol state loop can live in the browser
-host. It is not yet a WebSocket replacement for the Codex browser demo, a
-persistent session store, or the full native app-server engine.
+this fixture through a dependency-free loopback socket and JSON-RPC client, so
+the test path uses ordered text frames, request correlation, notification
+delivery, malformed-frame handling, and close behavior without a native
+WebSocket bridge. It is not yet a real network WebSocket replacement for the
+Codex browser demo, a persistent session store, or the full native app-server
+engine.
 
 The browser profile also has a deterministic packaged tool fixture. The command
 worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,

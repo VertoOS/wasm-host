@@ -187,6 +187,32 @@ const WASIX_UNSUPPORTED_NETWORK_IMPORTS = [
   "sock_set_opt_time",
   "sock_status",
 ];
+const WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS = [
+  "context_create",
+  "context_destroy",
+  "context_switch",
+  "epoll_create",
+  "epoll_ctl",
+  "epoll_wait",
+  "fd_event",
+  "futex_wait",
+  "futex_wake",
+  "futex_wake_all",
+  "stack_checkpoint",
+  "stack_restore",
+  "thread_id",
+  "thread_join",
+  "thread_local_create",
+  "thread_local_destroy",
+  "thread_local_get",
+  "thread_local_set",
+  "thread_parallelism",
+  "thread_signal",
+  "thread_sleep",
+  "thread_spawn",
+  "thread_spawn_v2",
+];
+const WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS = ["thread_exit"];
 let workerRunCounter = 0;
 let workerChildRunCounter = 0;
 const workerChildCommandRuns = new Map();
@@ -3189,6 +3215,12 @@ class WasixRuntime {
     for (const name of WASIX_UNSUPPORTED_NETWORK_IMPORTS) {
       imports[name] = () => this.unsupportedNetworkCapability();
     }
+    for (const name of WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS) {
+      imports[name] = () => this.unsupportedThreadEventCapability();
+    }
+    for (const name of WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS) {
+      imports[name] = () => this.unsupportedThreadExitCapability();
+    }
 
     return imports;
   }
@@ -3227,6 +3259,21 @@ class WasixRuntime {
   unsupportedNetworkCapability() {
     this.host.throwIfAborted();
     return ERRNO_NOTSUP;
+  }
+
+  unsupportedThreadEventCapability() {
+    this.host.throwIfAborted();
+    return ERRNO_NOTSUP;
+  }
+
+  unsupportedThreadExitCapability() {
+    this.host.throwIfAborted();
+    throw new BrowserWasiModuleError(
+      "unsupported",
+      "WASIX thread_exit requires browser thread runtime support",
+      "runtime",
+      { exitCode: 126 },
+    );
   }
 
   readString(ptr, length) {

@@ -383,9 +383,10 @@ delivery, malformed-frame handling, and close behavior without a native
 WebSocket bridge. A small browser session controller sits on top of that
 transport to own initialize, account read, fake login cancellation, thread
 reuse, mocked turn completion, pending turn interrupt, close state, and a
-notification transcript for tests. It is not yet a real network WebSocket
-replacement for the Codex browser demo, a persistent session store, or the full
-native app-server engine.
+notification transcript for tests. The same loopback transport is also exposed
+through an injectable WebSocket-compatible constructor for browser UI-facing
+tests. It is not yet a real network WebSocket replacement for the Codex browser
+demo, a persistent session store, or the full native app-server engine.
 
 The browser profile also has a deterministic packaged tool fixture. The command
 worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,

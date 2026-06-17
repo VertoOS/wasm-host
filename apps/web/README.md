@@ -50,11 +50,12 @@ Current scope:
   atoms to that raw Preview1 runtime. Raw WASI worker execution has an internal
   child-command RPC, and `wasix_32v1.proc_exec` can replace the current raw
   WASI module with a cataloged packaged command without structured-cloning
-  JavaScript functions. Common `wasix_32v1` raw socket/network imports are
-  recognized as deterministic unsupported browser capability gaps. WASIX
-  `proc_spawn`/join/fork/signal, thread/futex/eventfd/context, and raw
-  socket/network semantics remain later async-continuation, worker-thread, or
-  host-bridge runtime layers.
+  JavaScript functions. It also supplies the WASIX TTY state ABI with
+  deterministic non-interactive defaults. Common `wasix_32v1` raw
+  socket/network imports are recognized as deterministic unsupported browser
+  capability gaps. WASIX `proc_spawn`/join/fork/signal,
+  thread/futex/eventfd/context, and raw socket/network semantics remain later
+  async-continuation, worker-thread, or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, and mounts
@@ -196,9 +197,10 @@ Current scope:
   `wasix_32v1.getcwd`/`chdir` are backed by the browser virtual cwd across
   `/workspace`, `/tmp`, and read-only package-root paths. `path_open2`,
   `fd_fdflags_get`/`fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
-  `getpid`, and empty signal-disposition queries are also wired for low-level
-  compatibility. TTY state, clock mutation, dynamic linking, and advanced
-  process variants remain explicit deterministic unsupported capability gaps.
+  `getpid`, empty signal-disposition queries, and non-interactive
+  `tty_get`/`tty_set` state are also wired for low-level compatibility. Clock
+  mutation, dynamic linking, and advanced process variants remain explicit
+  deterministic unsupported capability gaps.
   WASIX thread, futex, eventfd, epoll, stack checkpoint, and context-switching
   imports instantiate with deterministic unsupported capability errors until the
   browser profile has a real worker-thread and async-continuation strategy.
@@ -324,8 +326,9 @@ npm --prefix apps/web run test:e2e
 path. It skips when no browser is available unless
 `WASM_HOST_BROWSER_E2E_REQUIRED=1` is set, which is how CI keeps the browser
 smoke required. This e2e smoke covers the successful page-to-worker version run
-and the first interactive terminal UI shell path. Bash/readline TTY behavior is
-still tracked by #6, and hard termination of non-cooperative Wasm remains #50.
+and the first interactive terminal UI shell path. Full Bash/readline TTY
+behavior is still tracked by #6, and hard termination of non-cooperative Wasm
+remains #50.
 
 This package should eventually own:
 

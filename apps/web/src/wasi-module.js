@@ -248,7 +248,6 @@ const WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS = [
   "thread_spawn_v2",
 ];
 const WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS = ["thread_exit"];
-const WASIX_UNSUPPORTED_TTY_IMPORTS = ["tty_get", "tty_set"];
 const WASIX_UNSUPPORTED_CLOCK_IMPORTS = ["clock_time_set"];
 const WASIX_UNSUPPORTED_DYNAMIC_IMPORTS = [
   "call_dynamic",
@@ -271,6 +270,27 @@ const WASIX_UNSUPPORTED_PROCESS_IMPORTS = [
   "proc_snapshot",
   "proc_spawn2",
 ];
+const WASIX_TTY_STATE_SIZE = 24;
+const WASIX_TTY_COLS_OFFSET = 0;
+const WASIX_TTY_ROWS_OFFSET = 4;
+const WASIX_TTY_WIDTH_OFFSET = 8;
+const WASIX_TTY_HEIGHT_OFFSET = 12;
+const WASIX_TTY_STDIN_OFFSET = 16;
+const WASIX_TTY_STDOUT_OFFSET = 17;
+const WASIX_TTY_STDERR_OFFSET = 18;
+const WASIX_TTY_ECHO_OFFSET = 19;
+const WASIX_TTY_LINE_BUFFERED_OFFSET = 20;
+const DEFAULT_WASIX_TTY_STATE = Object.freeze({
+  cols: 80,
+  rows: 25,
+  width: 800,
+  height: 600,
+  stdinTty: false,
+  stdoutTty: false,
+  stderrTty: false,
+  echo: false,
+  lineBuffered: false,
+});
 let workerRunCounter = 0;
 let workerChildRunCounter = 0;
 const workerChildCommandRuns = new Map();
@@ -1740,6 +1760,12 @@ class WasiPreview1Runtime {
 
   canWriteU32(ptr) {
     return checkedMemoryRange(ptr >>> 0, 4, this.bytes().byteLength) != null;
+  }
+
+  canReadWrite(ptr, byteLength) {
+    return (
+      checkedMemoryRange(ptr >>> 0, byteLength, this.bytes().byteLength) != null
+    );
   }
 
   fdFilestatGet(fd, filestatPtr) {
@@ -3812,6 +3838,8 @@ class WasixRuntime {
       proc_spawn: () => ERRNO_NOTSUP,
       pipe: (readFdPtr, writeFdPtr) =>
         this.host.fdPipe(readFdPtr, writeFdPtr),
+      tty_get: (ttyStatePtr) => this.ttyGet(ttyStatePtr),
+      tty_set: (ttyStatePtr) => this.ttySet(ttyStatePtr),
     };
 
     for (const name of WASIX_UNSUPPORTED_NETWORK_IMPORTS) {
@@ -3822,9 +3850,6 @@ class WasixRuntime {
     }
     for (const name of WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS) {
       imports[name] = () => this.unsupportedThreadExitCapability();
-    }
-    for (const name of WASIX_UNSUPPORTED_TTY_IMPORTS) {
-      imports[name] = () => this.unsupportedUtilityCapability();
     }
     for (const name of WASIX_UNSUPPORTED_CLOCK_IMPORTS) {
       imports[name] = () => this.unsupportedUtilityCapability();
@@ -3837,6 +3862,25 @@ class WasixRuntime {
     }
 
     return imports;
+  }
+
+  ttyGet(ttyStatePtr) {
+    this.host.throwIfAborted();
+    const ptr = ttyStatePtr >>> 0;
+    if (!this.host.canReadWrite(ptr, WASIX_TTY_STATE_SIZE)) {
+      return ERRNO_FAULT;
+    }
+    writeWasixTtyState(this.host, ptr, DEFAULT_WASIX_TTY_STATE);
+    return ERRNO_SUCCESS;
+  }
+
+  ttySet(ttyStatePtr) {
+    this.host.throwIfAborted();
+    const ptr = ttyStatePtr >>> 0;
+    if (!this.host.canReadWrite(ptr, WASIX_TTY_STATE_SIZE)) {
+      return ERRNO_FAULT;
+    }
+    return ERRNO_SUCCESS;
   }
 
   procExec(namePtr, nameLen, argsPtr, argsLen) {
@@ -3986,6 +4030,28 @@ function checkedMemoryRange(start, length, memoryLength) {
     return null;
   }
   return end;
+}
+
+function writeWasixTtyState(host, ptr, state) {
+  host.writeU32(ptr + WASIX_TTY_COLS_OFFSET, state.cols);
+  host.writeU32(ptr + WASIX_TTY_ROWS_OFFSET, state.rows);
+  host.writeU32(ptr + WASIX_TTY_WIDTH_OFFSET, state.width);
+  host.writeU32(ptr + WASIX_TTY_HEIGHT_OFFSET, state.height);
+  host.writeU8(ptr + WASIX_TTY_STDIN_OFFSET, boolByte(state.stdinTty));
+  host.writeU8(ptr + WASIX_TTY_STDOUT_OFFSET, boolByte(state.stdoutTty));
+  host.writeU8(ptr + WASIX_TTY_STDERR_OFFSET, boolByte(state.stderrTty));
+  host.writeU8(ptr + WASIX_TTY_ECHO_OFFSET, boolByte(state.echo));
+  host.writeU8(
+    ptr + WASIX_TTY_LINE_BUFFERED_OFFSET,
+    boolByte(state.lineBuffered),
+  );
+  host.writeU8(ptr + 21, 0);
+  host.writeU8(ptr + 22, 0);
+  host.writeU8(ptr + 23, 0);
+}
+
+function boolByte(value) {
+  return value ? 1 : 0;
 }
 
 function requestsWriteRights(rights) {

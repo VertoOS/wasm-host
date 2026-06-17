@@ -80,11 +80,13 @@ Current scope:
   later process, worker-thread, or host-bridge runtime layers.
 - WebC/WASIX package runs bridge the host-owned browser workspace through
   cloneable snapshots, including snapshots returned from `proc_exec` child
-  commands. That lets Bash/coreutils workflows create, redirect, read, list,
-  remove files, execute persisted shell scripts, and capture Bash command
-  substitution output under `/workspace` without sending live workspace store
-  objects to workers or making raw `wasi-module` package runs first-class
-  workspace owners.
+  commands. The child-command bridge also captures pipe/file-backed fd `0`
+  bytes for packaged child stdin. That lets Bash/coreutils workflows create,
+  redirect, read, list, remove files, execute persisted shell scripts, and
+  capture Bash command substitution output, pipelines, and redirected shell
+  `read` input under `/workspace` without sending live workspace store objects
+  to workers or making raw `wasi-module` package runs first-class workspace
+  owners.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, mounts
@@ -92,7 +94,7 @@ Current scope:
   shims for loaded package-catalog paths so Bash-style PATH checks can see
   cataloged commands. It also passes workspace snapshots into executable atoms
   and imports mutated snapshots from child command results for the current
-  non-interactive Bash/coreutils workspace smoke. Full WASIX process behavior,
+  non-interactive Bash/coreutils workspace and pipeline/read smoke. Full WASIX process behavior,
   broad Bash/git semantics, and non-WASI runners remain later runtime layers.
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
@@ -352,9 +354,9 @@ Current scope:
   methods, assert a packaged tool fixture can read the edited file with
   cwd/env/stdin through the terminal transcript adapter, load the pinned
   `wasmer/bash` and `wasmer/coreutils` WebC artifacts for the passing
-  path-command, workspace-file, workspace-script, and command-substitution
-  Bash/coreutils smoke coverage, and publish named stage summaries for the
-  page-level smoke result.
+  path-command, workspace-file, workspace-script, command-substitution, and
+  pipeline/read Bash/coreutils smoke coverage, and publish named stage
+  summaries for the page-level smoke result.
   The browser e2e also drives
   the terminal UI shell through DOM controls. The terminal shell e2e also
   applies a package URL source backed by a local data URL,

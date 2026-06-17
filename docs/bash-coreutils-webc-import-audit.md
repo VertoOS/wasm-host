@@ -98,11 +98,15 @@ is implementation depth inside grouped browser capability buckets.
 
 ## Current Interpretation
 
-The next PR should not add one syscall at a time. After
-[#194](https://github.com/VertoOS/wasm-host/issues/194) and
-[#195](https://github.com/VertoOS/wasm-host/issues/195), the first Bash smoke
-likely needs the process/catalog group before the broader thread/event,
-dynamic, network, and clock buckets can be classified by actual runtime calls.
+The syscall work should stay grouped by runtime behavior rather than one import
+per PR. After [#194](https://github.com/VertoOS/wasm-host/issues/194) and
+[#195](https://github.com/VertoOS/wasm-host/issues/195), the
+[#196](https://github.com/VertoOS/wasm-host/issues/196) process/catalog slice
+maps replacement-style exec variants onto the browser packaged-command catalog,
+propagates `proc_exit2`, and keeps spawn/fork/join/signal controls
+deterministically unsupported. The first Bash smoke still likely needs the
+broader thread/event, dynamic, network, and clock buckets classified by actual
+runtime calls.
 
 The audit did not find any reason to add first-class MCP, plugin, provider,
 connector, or OAuth modules under `apps/web`. Those remain adapter-package

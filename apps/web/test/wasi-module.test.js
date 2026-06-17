@@ -172,12 +172,36 @@ const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAAKCQEHAANADAALCw==",
 );
 
-const WASIX_PROC_SPAWN_WASM = base64ToBytes(
-  "AGFzbQEAAAABIQRgDX9/f39/f39/f39/f38Bf2AEf39/fwF/YAF/AGAAAAJeAwp3YXNpeF8zMnYxCnByb2Nfc3Bhd24AABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQlwcm9jX2V4aXQAAgMCAQMFAwEAAQcTAgZtZW1vcnkCAAZfc3RhcnQAAwpPAU0BAX9BgAhBBUEAQZAIQRRBAEEAQQBBAEEAQbgIQRBB6AgQACEAIAAEQCAAEAILQfgIQdAINgIAQfwIQQ82AgBBAUH4CEEBQYQJEAEaCwtRBABBgAgLBXNtb2tlAEGQCAsULS1mcm9tLXdhc2l4Ci0tY2hpbGQAQbgICxAvd29ya3NwYWNlL3dhc2l4AEHQCAsPcGFyZW50LXNwYXduZWQK",
+const WASIX_PROCESS_IMPORTS_WASM = base64ToBytes(
+  "AGFzbQEAAAABVgtgAX8Bf2ACf38Bf2AAAX9gA39/fwF/YAN/fn8Bf2ANf39/f39/f39/f39/fwF/YA5/f39/f39/f39/f39/fwF/YAR/f39/AX9gAX8AYAN/f38AYAAAAt4CDQp3YXNpeF8zMnYxB3Byb2NfaWQAAAp3YXNpeF8zMnYxC3Byb2NfcGFyZW50AAEKd2FzaXhfMzJ2MQ1wcm9jX3NuYXBzaG90AAIKd2FzaXhfMzJ2MQlwcm9jX2ZvcmsAAQp3YXNpeF8zMnYxDXByb2NfZm9ya19lbnYAAAp3YXNpeF8zMnYxCXByb2Nfam9pbgADCndhc2l4XzMydjELcHJvY19zaWduYWwAAQp3YXNpeF8zMnYxE3Byb2NfcmFpc2VfaW50ZXJ2YWwABAp3YXNpeF8zMnYxCnByb2Nfc3Bhd24ABQp3YXNpeF8zMnYxC3Byb2Nfc3Bhd24yAAYKd2FzaXhfMzJ2MQ1wcm9jZXNzX3NwYXduAAUWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQAHFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAgDBQQICQkKBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0ABAKrwIEBwAgABAMAAsOACAAIAFHBEAgAhANCwsNACAAKAIAIAEgAhAOC4cCAEEAEABBAEEKEA5BAEEBQQsQD0EBQQQQAUEAQQwQDkEEQQBBDRAPQeMAQQQQAUEIQQ4QDhACQQBBDxAOQQBBCBADQTpBEBAOQQgQBEE6QREQDkEQQQBBIBAFQTpBEhAOQQFBAhAGQTpBExAOQQJCAEEAEAdBOkEUEA5BAEEAQQBBAEEAQQBBAEEBQQFBAUEAQQBBMBAIQTpBFRAOQQBBAEEAQQBBAEEAQQBBAEEAQQBBAEEAQQBBMBAJQTpBFhAOQQBBAEEAQQBBAEEAQQBBAEEAQQBBAEEAQTAQCkE6QRcQDkGAAkGABDYCAEGEAkEZNgIAQQFBgAJBAUGIAhALQQBB2gAQDgsLIAEAQYAECxl3YXNpeC1wcm9jZXNzLWltcG9ydHMtb2sK",
 );
 
 const WASIX_PROC_EXEC_WASM = base64ToBytes(
   "AGFzbQEAAAABCwJgBH9/f38AYAAAAhgBCndhc2l4XzMydjEJcHJvY19leGVjAAADAgEBBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAEKEQEPAEGACEEFQZAIQRQQAAALCyYCAEGACAsFc21va2UAQZAICxQtLWZyb20td2FzaXgKLS1jaGlsZA==",
+);
+
+const WASIX_PROC_EXEC2_WASM = base64ToBytes(
+  "AGFzbQEAAAABEQNgBn9/f39/fwBgAX8AYAAAAjwCCndhc2l4XzMydjEKcHJvY19leGVjMgAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAEDAgECBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAIKGgEYAEGABEEFQZAEQRVBwARBFxAAQeMAEAELC0QDAEGABAsFc21va2UAQZAECxUtLWZyb20tZXhlYzIKLS1jaGlsZAoAQcAECxdGUk9NX0NISUxEPTIKUEFUSD0vYmluCg==",
+);
+
+const WASIX_PROC_EXEC3_WASM = base64ToBytes(
+  "AGFzbQEAAAABFQNgCX9/f39/f39/fwF/YAF/AGAAAAI8Agp3YXNpeF8zMnYxCnByb2NfZXhlYzMAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAABAwIBAgUDAQABBxMCBm1lbW9yeQIABl9zdGFydAACCiIBIABBgARBAkGQBEEVQcAEQQ1BAUHgBEEEEAAaQeMAEAELC0EEAEGABAsCbHMAQZAECxUtLWZyb20tZXhlYzMKLS1jaGlsZAoAQcAECw1GUk9NX0VYRUMzPTEKAEHgBAsEL2Jpbg==",
+);
+
+const WASIX_PROC_EXEC3_DEFAULT_PATH_WASM = base64ToBytes(
+  "AGFzbQEAAAABFQNgCX9/f39/f39/fwF/YAF/AGAAAAI8Agp3YXNpeF8zMnYxCnByb2NfZXhlYzMAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAABAwIBAgUDAQABBxMCBm1lbW9yeQIABl9zdGFydAACCiMBIQEBf0GACEECQZAIQRRBuAhBD0EBQQBBABAAIQAgABABCws4AwBBgAgLAmxzAEGQCAsULS1mcm9tLWRlZmF1bHQtcGF0aAoAQbgICw9GUk9NX0RFRkFVTFQ9MQo=",
+);
+
+const WASIX_PROC_EXEC3_INVALID_ENV_WASM = base64ToBytes(
+  "AGFzbQEAAAABFQNgCX9/f39/f39/fwF/YAF/AGAAAAI8Agp3YXNpeF8zMnYxCnByb2NfZXhlYzMAABZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCXByb2NfZXhpdAABAwIBAgUDAQABBxMCBm1lbW9yeQIABl9zdGFydAACCiIBIAEBf0GACEECQQBBAEGQCEEHQQBBAEEAEAAhACAAEAELCxYCAEGACAsCbHMAQZAICwdCUk9LRU4K",
+);
+
+const WASIX_PROC_EXEC2_INVALID_ENV_WASM = base64ToBytes(
+  "AGFzbQEAAAABEQNgBn9/f39/fwBgAX8AYAAAAjwCCndhc2l4XzMydjEKcHJvY19leGVjMgAAFndhc2lfc25hcHNob3RfcHJldmlldzEJcHJvY19leGl0AAEDAgECBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAIKGQEXAEGACEECQQBBAEGQCEEHEABB4wAQAQsLFgIAQYAICwJscwBBkAgLB0JST0tFTgo=",
+);
+
+const WASIX_PROC_EXIT2_WASM = base64ToBytes(
+  "AGFzbQEAAAABCAJgAX8AYAAAAhkBCndhc2l4XzMydjEKcHJvY19leGl0MgAAAwIBAQUDAQABBxMCBm1lbW9yeQIABl9zdGFydAABCgkBBwBBKhAAAAs=",
 );
 
 const WASIX_NETWORK_IMPORTS_WASM = base64ToBytes(
@@ -201,7 +225,7 @@ const WASIX_CWD_IMPORTS_WASM = base64ToBytes(
 );
 
 const WASIX_UTILITY_IMPORTS_WASM = base64ToBytes(
-  "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",
+  "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",
 );
 
 const WASIX_TTY_IMPORTS_WASM = base64ToBytes(
@@ -1742,19 +1766,207 @@ test("raw WASI executor exposes WASIX proc_exec through child commands", async (
   assert.deepEqual(
     { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
     {
-    args: ["--from-wasix", "--child"],
-    command: "smoke",
-    cwd: "/workspace/parent",
-    env: { FROM_PARENT: "1", PATH: "/bin" },
-    packageId: null,
-    stderr: "inherit",
-    stdin: "parent stdin\n",
-    stdout: "inherit",
+      args: ["--from-wasix", "--child"],
+      command: "smoke",
+      cwd: "/workspace/parent",
+      env: { FROM_PARENT: "1", PATH: "/bin" },
+      packageId: null,
+      stderr: "inherit",
+      stdin: "parent stdin\n",
+      stdout: "inherit",
     },
   );
   assert.equal(output.stdout, "");
   assert.equal(output.stderr, "");
   assert.deepEqual(result, { exitCode: 7 });
+});
+
+test("raw WASI executor maps WASIX proc_exec2 env overlays to child commands", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC2_WASM,
+    command: "parent",
+    id: "parent",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      args: [],
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return { exitCode: 9 };
+        },
+      },
+      command: "parent",
+      cwd: "/workspace/parent",
+      env: { FROM_PARENT: "1", PATH: "/nowhere" },
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: encoder.encode("exec2 stdin\n"),
+    },
+    output,
+  );
+
+  assert.deepEqual(
+    { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
+    {
+      args: ["--from-exec2", "--child"],
+      command: "smoke",
+      cwd: "/workspace/parent",
+      env: { FROM_CHILD: "2", FROM_PARENT: "1", PATH: "/bin" },
+      packageId: null,
+      stderr: "inherit",
+      stdin: "exec2 stdin\n",
+      stdout: "inherit",
+    },
+  );
+  assert.deepEqual(result, { exitCode: 9 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor maps WASIX proc_exec3 PATH search to child commands", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC3_WASM,
+    command: "parent",
+    id: "parent",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      args: [],
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return { exitCode: 11 };
+        },
+      },
+      command: "parent",
+      cwd: "/workspace/parent",
+      env: { FROM_PARENT: "1", PATH: "/nowhere" },
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: encoder.encode("exec3 stdin\n"),
+    },
+    output,
+  );
+
+  assert.deepEqual(
+    { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
+    {
+      args: ["--from-exec3", "--child"],
+      command: "ls",
+      cwd: "/workspace/parent",
+      env: { FROM_EXEC3: "1", FROM_PARENT: "1", PATH: "/bin" },
+      packageId: null,
+      stderr: "inherit",
+      stdin: "exec3 stdin\n",
+      stdout: "inherit",
+    },
+  );
+  assert.deepEqual(result, { exitCode: 11 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor maps WASIX proc_exec3 default PATH search", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC3_DEFAULT_PATH_WASM,
+    command: "parent",
+    id: "parent",
+  });
+  let seenChildRequest = null;
+
+  const result = await executor.run(
+    {
+      args: [],
+      childCommands: {
+        async run(request) {
+          seenChildRequest = request;
+          return { exitCode: 13 };
+        },
+      },
+      command: "parent",
+      cwd: "/workspace/parent",
+      env: { FROM_PARENT: "1", PATH: "/nowhere" },
+      package: packageRecord,
+      signal: new AbortController().signal,
+      stdin: encoder.encode("default path stdin\n"),
+    },
+    output,
+  );
+
+  assert.deepEqual(
+    { ...seenChildRequest, stdin: decoder.decode(seenChildRequest.stdin) },
+    {
+      args: ["--from-default-path"],
+      command: "ls",
+      cwd: "/workspace/parent",
+      env: {
+        FROM_DEFAULT: "1",
+        FROM_PARENT: "1",
+        PATH: "/usr/local/bin:/bin:/usr/bin",
+      },
+      packageId: null,
+      stderr: "inherit",
+      stdin: "default path stdin\n",
+      stdout: "inherit",
+    },
+  );
+  assert.deepEqual(result, { exitCode: 13 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor returns EINVAL for invalid WASIX proc_exec3 env", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC3_INVALID_ENV_WASM,
+    command: "parent",
+    id: "parent",
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "parent" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 28 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor exits EINVAL for invalid WASIX proc_exec2 env", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROC_EXEC2_INVALID_ENV_WASM,
+    command: "parent",
+    id: "parent",
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "parent" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 28 });
+  assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
 });
 
 test("command worker runs WASIX proc_exec through the raw WASI worker bridge", async () => {
@@ -1833,6 +2045,82 @@ test("command worker runs WASIX proc_exec through the raw WASI worker bridge", a
   });
 });
 
+test("command worker resolves WASIX proc_exec3 children through PATH", async () => {
+  const port = recordingPort();
+  const seen = [];
+  const runtime = createBrowserCommandWorkerRuntime({
+    executors: {
+      child: {
+        async run(request, output) {
+          seen.push({
+            args: request.args,
+            command: request.command,
+            cwd: request.cwd,
+            env: request.env,
+            packageId: request.package.id,
+            stdin: await asyncChunksText(request.stdin),
+          });
+          await output.writeStdout("ls stdout\n");
+          await output.writeStderr("ls stderr\n");
+          return { exitCode: 6 };
+        },
+      },
+      "wasi-module": createRawWasiModuleExecutor({
+        createWorker: createNodeWasiWorker,
+      }),
+    },
+    httpTransports: { direct: {} },
+    port,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["ls"], id: "coreutils", type: "child" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    package: {
+      artifactKind: "wasi-module",
+      command: "parent",
+      id: "wasix-parent",
+      wasiModule: { bytes: WASIX_PROC_EXEC3_WASM },
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-wasix-exec3",
+    packageId: "wasix-parent",
+    command: "parent",
+    env: { FROM_PARENT: "1", PATH: "/nowhere" },
+    stdin: "exec3 stdin\n",
+  });
+
+  assert.deepEqual(seen, [
+    {
+      args: ["--from-exec3", "--child"],
+      command: "ls",
+      cwd: "/workspace",
+      env: { FROM_EXEC3: "1", FROM_PARENT: "1", PATH: "/bin" },
+      packageId: "coreutils",
+      stdin: "exec3 stdin\n",
+    },
+  ]);
+  assert.equal(stdoutText(port.messages), "ls stdout\n");
+  assert.equal(stderrText(port.messages), "ls stderr\n");
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-wasix-exec3",
+    result: {
+      cancelled: false,
+      exitCode: 6,
+      failureStage: null,
+      stderrBytes: 10,
+      stdoutBytes: 10,
+      timedOut: false,
+    },
+  });
+});
+
 test("command worker reports WASIX proc_exec catalog misses", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
@@ -1905,23 +2193,43 @@ test("raw WASI executor reports missing WASIX proc_exec bridge explicitly", asyn
   );
 });
 
-test("raw WASI executor keeps unsupported WASIX proc_spawn explicit", async () => {
+test("raw WASI executor propagates WASIX proc_exit2 status", async () => {
   const output = recordingOutput();
   const executor = createRawWasiModuleExecutor({ worker: false });
   const packageRecord = await loadRawWasiModulePackage({
     artifactKind: "wasi-module",
-    bytes: WASIX_PROC_SPAWN_WASM,
-    command: "spawn-parent",
-    id: "spawn-parent",
+    bytes: WASIX_PROC_EXIT2_WASM,
+    command: "exit-parent",
+    id: "exit-parent",
   });
 
   const result = await executor.run(
-    { ...baseRunRequest(packageRecord), command: "spawn-parent" },
+    { ...baseRunRequest(packageRecord), command: "exit-parent" },
     output,
   );
 
-  assert.deepEqual(result, { exitCode: 58 });
+  assert.deepEqual(result, { exitCode: 42 });
   assert.equal(output.stdout, "");
+  assert.equal(output.stderr, "");
+});
+
+test("raw WASI executor keeps unsupported WASIX process controls explicit", async () => {
+  const output = recordingOutput();
+  const executor = createRawWasiModuleExecutor({ worker: false });
+  const packageRecord = await loadRawWasiModulePackage({
+    artifactKind: "wasi-module",
+    bytes: WASIX_PROCESS_IMPORTS_WASM,
+    command: "process-smoke",
+    id: "process-smoke",
+  });
+
+  const result = await executor.run(
+    { ...baseRunRequest(packageRecord), command: "process-smoke" },
+    output,
+  );
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(output.stdout, "wasix-process-imports-ok\n");
   assert.equal(output.stderr, "");
 });
 

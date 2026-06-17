@@ -48,12 +48,14 @@ Current scope:
   executor supports the interim raw WASI preview1 `codex --version` smoke; and
   the `webc-package`/`webc-wasix` executor boundary delegates WASI-runner WebC
   atoms to that raw Preview1 runtime. Raw WASI worker execution has an internal
-  child-command RPC, and `wasix_32v1.proc_exec` can replace the current raw
-  WASI module with a cataloged packaged command without structured-cloning
-  JavaScript functions. It also supplies the WASIX TTY state ABI with
+  child-command RPC, and `wasix_32v1.proc_exec`/`proc_exec2`/`proc_exec3` can
+  replace the current raw WASI module with a cataloged packaged command while
+  preserving cwd/stdin/stdout/stderr and applying WASIX env/PATH overlays.
+  `proc_exit2`, `proc_parent`, and `proc_snapshot` provide deterministic
+  single-process browser results. It also supplies the WASIX TTY state ABI with
   deterministic non-interactive defaults. Common `wasix_32v1` raw
   socket/network imports are recognized as deterministic unsupported browser
-  capability gaps. WASIX `proc_spawn`/join/fork/signal,
+  capability gaps. WASIX `proc_spawn`/join/fork/signal/raise-interval,
   thread/futex/eventfd/context, and raw socket/network semantics remain later
   async-continuation, worker-thread, or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
@@ -190,10 +192,13 @@ Current scope:
   The separate `wasi.thread-spawn` namespace is also present so
   pthread-shaped WebC atoms instantiate, but it returns deterministic negative
   `NOTSUP` until a browser worker-thread runtime exists.
-  `wasix_32v1.proc_exec` maps to that child-command bridge with cwd/env/stdin
-  and inherited stdout/stderr. Process spawn, join, fork, and signal imports
-  return deterministic unsupported capability errors until the runtime has an
-  async continuation strategy for blocking process waits.
+  `wasix_32v1.proc_exec`/`proc_exec2`/`proc_exec3` map to that child-command
+  bridge with cwd/env/stdin, PATH-aware catalog lookup, and inherited
+  stdout/stderr. `proc_exit2` maps to normal WASI exit status propagation, while
+  `proc_parent` and `proc_snapshot` expose deterministic single-process browser
+  state. Process spawn, join, fork, signal, and raise-interval imports return
+  deterministic unsupported capability errors until the runtime has an async
+  continuation strategy for blocking process waits.
   `wasix_32v1.getcwd`/`chdir` are backed by the browser virtual cwd across
   `/workspace`, `/tmp`, and read-only package-root paths. `path_open2`,
   `fd_fdflags_get`/`fd_fdflags_set`, `fd_dup`, `fd_dup2`, `fd_pipe`, `pipe`,
@@ -308,8 +313,8 @@ Current scope:
   scratch path rename behavior, injected workspace-store reads and persisted
   workspace mutations, WASIX namespace mirroring for supported Preview1 calls,
   WASIX cwd/fd utility import coverage, fd duplication and pipe behavior,
-  explicit WASIX process, thread/event, and network unsupported capability
-  behavior,
+  WASIX process/catalog bridge behavior plus explicit process, thread/event,
+  and network unsupported capability behavior,
   stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle
   integration, and the local Codex version-smoke artifact when it is present.
 

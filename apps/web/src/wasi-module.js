@@ -13,6 +13,7 @@ const WASI_IMPORT_MODULE = "wasi_snapshot_preview1";
 const WASI_THREAD_IMPORT_MODULE = "wasi";
 const WASI_THREAD_SPAWN_IMPORT = "thread-spawn";
 const WASIX_IMPORT_MODULE = "wasix_32v1";
+const DEFAULT_WASIX_PROC_SEARCH_PATH = "/usr/local/bin:/bin:/usr/bin";
 const WASM_IMPORT_SECTION_ID = 2;
 const WASM_IMPORT_KIND_FUNCTION = 0;
 const WASM_IMPORT_KIND_TABLE = 1;
@@ -262,12 +263,8 @@ const WASIX_UNSUPPORTED_DYNAMIC_IMPORTS = [
 ];
 const WASIX_UNSUPPORTED_PROCESS_IMPORTS = [
   "process_spawn",
-  "proc_exec2",
-  "proc_exec3",
-  "proc_exit2",
   "proc_fork_env",
   "proc_raise_interval",
-  "proc_snapshot",
   "proc_spawn2",
 ];
 const WASIX_TTY_STATE_SIZE = 24;
@@ -3830,12 +3827,38 @@ class WasixRuntime {
         this.procSignalsSizesGet(signalCountPtr),
       proc_exec: (namePtr, nameLen, argsPtr, argsLen) =>
         this.procExec(namePtr, nameLen, argsPtr, argsLen),
+      proc_exec2: (namePtr, nameLen, argsPtr, argsLen, envPtr, envLen) =>
+        this.procExec2(namePtr, nameLen, argsPtr, argsLen, envPtr, envLen),
+      proc_exec3: (
+        namePtr,
+        nameLen,
+        argsPtr,
+        argsLen,
+        envPtr,
+        envLen,
+        searchPath,
+        pathPtr,
+        pathLen,
+      ) =>
+        this.procExec3(
+          namePtr,
+          nameLen,
+          argsPtr,
+          argsLen,
+          envPtr,
+          envLen,
+          searchPath,
+          pathPtr,
+          pathLen,
+        ),
+      proc_exit2: (code) => this.procExit2(code),
       proc_fork: (_copyMemory, _pidPtr) => ERRNO_NOTSUP,
       proc_id: (pidPtr) => this.procId(pidPtr),
       proc_join: (_pidPtr, _flags, _statusPtr) => ERRNO_NOTSUP,
-      proc_parent: (_pidPtr) => ERRNO_NOTSUP,
+      proc_parent: (pid, parentPidPtr) => this.procParent(pid, parentPidPtr),
       proc_signal: (_pid, _signal) => ERRNO_NOTSUP,
       proc_spawn: () => ERRNO_NOTSUP,
+      proc_snapshot: () => this.procSnapshot(),
       pipe: (readFdPtr, writeFdPtr) =>
         this.host.fdPipe(readFdPtr, writeFdPtr),
       tty_get: (ttyStatePtr) => this.ttyGet(ttyStatePtr),
@@ -3884,6 +3907,49 @@ class WasixRuntime {
   }
 
   procExec(namePtr, nameLen, argsPtr, argsLen) {
+    this.throwProcExec(
+      namePtr,
+      nameLen,
+      argsPtr,
+      argsLen,
+      this.host.envObject,
+    );
+  }
+
+  procExec2(namePtr, nameLen, argsPtr, argsLen, envPtr, envLen) {
+    const env = this.wasixEnv(envPtr, envLen);
+    if (env == null) {
+      throw new WasiProcExit(ERRNO_INVAL);
+    }
+    this.throwProcExec(namePtr, nameLen, argsPtr, argsLen, env);
+  }
+
+  procExec3(
+    namePtr,
+    nameLen,
+    argsPtr,
+    argsLen,
+    envPtr,
+    envLen,
+    searchPath,
+    pathPtr,
+    pathLen,
+  ) {
+    const env = this.wasixEnv(envPtr, envLen);
+    if (env == null) {
+      return ERRNO_INVAL;
+    }
+    if (searchPath) {
+      env.PATH =
+        pathPtr !== 0 && pathLen !== 0
+          ? this.readString(pathPtr, pathLen)
+          : DEFAULT_WASIX_PROC_SEARCH_PATH;
+    }
+    this.throwProcExec(namePtr, nameLen, argsPtr, argsLen, env);
+    return ERRNO_SUCCESS;
+  }
+
+  throwProcExec(namePtr, nameLen, argsPtr, argsLen, env) {
     this.host.throwIfAborted();
     const command = this.readString(namePtr, nameLen).trim();
     if (!command) {
@@ -3900,7 +3966,7 @@ class WasixRuntime {
       args: wasixLineList(this.readString(argsPtr, argsLen)),
       command,
       cwd: this.host.cwd,
-      env: this.host.envObject,
+      env,
       packageId: null,
       stderr,
       stdin: this.host.remainingStdinBytes(),
@@ -3908,9 +3974,43 @@ class WasixRuntime {
     });
   }
 
+  wasixEnv(envPtr, envLen) {
+    const env = { ...this.host.envObject };
+    if (envPtr === 0 || envLen === 0) {
+      return env;
+    }
+    for (const entry of wasixLineList(this.readString(envPtr, envLen))) {
+      const separator = entry.indexOf("=");
+      if (separator < 0) {
+        return null;
+      }
+      env[entry.slice(0, separator)] = entry.slice(separator + 1);
+    }
+    return env;
+  }
+
+  procExit2(code) {
+    this.host.throwIfAborted();
+    throw new WasiProcExit(code);
+  }
+
   procId(pidPtr) {
     this.host.throwIfAborted();
     this.host.writeU32(pidPtr, 1);
+    return ERRNO_SUCCESS;
+  }
+
+  procParent(pid, parentPidPtr) {
+    this.host.throwIfAborted();
+    if ((pid >>> 0) !== 1) {
+      return ERRNO_BADF;
+    }
+    this.host.writeU32(parentPidPtr, 0);
+    return ERRNO_SUCCESS;
+  }
+
+  procSnapshot() {
+    this.host.throwIfAborted();
     return ERRNO_SUCCESS;
   }
 
@@ -3960,7 +4060,7 @@ function wasixLineList(value) {
   if (!text) {
     return [];
   }
-  return text.split("\n").filter((item) => item.length > 0);
+  return text.split(/[\r\n]/).filter((item) => item.length > 0);
 }
 
 function isSupportedClock(clockId) {

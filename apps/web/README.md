@@ -178,6 +178,9 @@ Current scope:
   clock/stdin/stdout/file readiness snapshots without blocking the worker.
   Worker-backed raw WASI runs can use an internal child-command RPC to ask the
   host-side command worker to resolve and run cataloged packaged commands.
+  Supported Preview1 imports are also mirrored through `wasix_32v1` for
+  WASIX/WebC modules whose 32-bit import ABI matches the current browser
+  handlers.
   `wasix_32v1.proc_exec` maps to that child-command bridge with cwd/env/stdin
   and inherited stdout/stderr. Process spawn, join, fork, and signal imports
   return deterministic unsupported capability errors until the runtime has an
@@ -284,7 +287,8 @@ Current scope:
   seek/tell/advice/pread/pwrite behavior, descriptor renumbering, volatile
   scratch-file allocation/truncate/sync and directory create/remove operations,
   scratch path rename behavior, injected workspace-store reads and persisted
-  workspace mutations,
+  workspace mutations, WASIX namespace mirroring for supported Preview1 calls,
+  explicit WASIX process and network unsupported capability behavior,
   stdout/stderr capture, `proc_exit` status mapping, command worker lifecycle
   integration, and the local Codex version-smoke artifact when it is present.
 

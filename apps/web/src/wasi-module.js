@@ -3175,6 +3175,7 @@ class WasixRuntime {
 
   imports() {
     const imports = {
+      ...this.host.imports(),
       proc_exec: (namePtr, nameLen, argsPtr, argsLen) =>
         this.procExec(namePtr, nameLen, argsPtr, argsLen),
       proc_fork: (_copyMemory, _pidPtr) => ERRNO_NOTSUP,

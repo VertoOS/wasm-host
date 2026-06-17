@@ -303,9 +303,11 @@ WASIX process spawning, and Bash/coreutils execution are later browser
 runtime layers. Raw WASI execution exposes a narrow `wasix_32v1.proc_exec`
 adapter that escapes the synchronous WebAssembly import frame, then awaits the
 existing child-command bridge so the current module can be replaced by a
-cataloged packaged command. `proc_spawn`, join, fork, and signal imports still
-return deterministic unsupported capability errors because blocking process
-handles need a later async-safe continuation strategy. Common `wasix_32v1`
+cataloged packaged command. Supported Preview1 imports are also mirrored
+through `wasix_32v1` when the 32-bit import ABI matches the current browser
+handlers. `proc_spawn`, join, fork, and signal imports still return
+deterministic unsupported capability errors because blocking process handles
+need a later async-safe continuation strategy. Common `wasix_32v1`
 socket/network imports are also recognized as browser network capability gaps:
 they instantiate and return deterministic `NOTSUP` instead of becoming
 first-class raw socket support. Browser-safe networking belongs on explicit
@@ -352,12 +354,13 @@ package-file fixtures:
 `path_remove_directory`, `path_symlink`, `path_unlink_file`, `poll_oneoff`,
 `proc_exit`, `proc_raise`, `random_get`, `sched_yield`, `sock_accept`,
 `sock_recv`, `sock_send`, and `sock_shutdown`.
-The same raw runner exposes a narrow `wasix_32v1` namespace for `proc_exec`,
-process imports that currently return deterministic unsupported capability
-errors, and common raw socket/network imports such as `sock_open`,
-`sock_connect`, `sock_recv_from`, `sock_send_to`, option helpers, multicast
-helpers, `port_addr_list`, `port_route_list`, and `resolve`, all of which
-return deterministic `NOTSUP` in the browser profile.
+The same raw runner exposes a narrow `wasix_32v1` namespace that mirrors those
+supported Preview1 calls, adds `proc_exec`, keeps process imports as
+deterministic unsupported capability errors, and recognizes common raw
+socket/network imports such as `sock_open`, `sock_connect`, `sock_recv_from`,
+`sock_send_to`, option helpers, multicast helpers, `port_addr_list`,
+`port_route_list`, and `resolve`, all of which return deterministic `NOTSUP` in
+the browser profile.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, can optionally back `/workspace` with an injected browser workspace

@@ -66,6 +66,43 @@ export function webcCommandManifest() {
   };
 }
 
+export function webcWasiCommandManifest(options = {}) {
+  const command = options.command ?? "codex";
+  const atom = options.atom ?? `${command}-atom`;
+  const execName = options.execName ?? command;
+  return {
+    package: {
+      wapm: {
+        name: options.packageName ?? "codex/browser-smoke",
+        version: options.packageVersion ?? "0.0.0",
+      },
+    },
+    atoms: {
+      [atom]: {
+        kind: "https://webc.org/kind/wasm",
+      },
+    },
+    commands: {
+      [command]: {
+        annotations: {
+          atom: {
+            name: atom,
+          },
+          wasi: {
+            atom,
+            cwd: options.cwd,
+            env: options.env,
+            exec_name: execName,
+            main_args: options.mainArgs,
+          },
+        },
+        runner: "https://webc.org/runner/wasi",
+      },
+    },
+    entrypoint: command,
+  };
+}
+
 export function webcV2Bytes(manifest, options = {}) {
   const manifestBytes = cborEncode(manifest);
   const sections = [

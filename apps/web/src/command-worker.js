@@ -49,7 +49,15 @@ export class BrowserCommandWorkerRuntime {
       options.defaultHttpTransport ?? DEFAULT_HTTP_TRANSPORT;
     this.httpTransports =
       options.httpTransports ?? createDefaultHttpTransports(options);
-    const webcWasixExecutor = createWebcWasixExecutor(options.webcWasix);
+    this.packageLoader =
+      options.packageLoader ??
+      createBrowserPackageLoader(options.packageLoaderOptions ?? options);
+    const webcWasixOptions = {
+      ...(options.webcWasix ?? {}),
+      cache: options.webcWasix?.cache ?? this.packageLoader.cache,
+      rawWasi: options.webcWasix?.rawWasi ?? options.wasiModule,
+    };
+    const webcWasixExecutor = createWebcWasixExecutor(webcWasixOptions);
     this.executors = options.executors ?? {
       "codex-browser": createCodexBrowserRequestBuilderExecutor(
         options.codexBrowser,
@@ -63,9 +71,6 @@ export class BrowserCommandWorkerRuntime {
       [WEBC_PACKAGE_TYPE]: webcWasixExecutor,
       [WEBC_WASIX_EXECUTOR_TYPE]: webcWasixExecutor,
     };
-    this.packageLoader =
-      options.packageLoader ??
-      createBrowserPackageLoader(options.packageLoaderOptions ?? options);
     this.packages = new Map();
     this.packageLoads = new Map();
     this.workspaceStore =

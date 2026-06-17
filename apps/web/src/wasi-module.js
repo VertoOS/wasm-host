@@ -161,6 +161,32 @@ const NANOS_PER_MILLI = 1_000_000n;
 const CLOCK_RESOLUTION_NANOS = NANOS_PER_MILLI;
 const WASI_ADVICE_NOREUSE = 5;
 const RANDOM_GET_CHUNK_SIZE = 65_536;
+const WASIX_UNSUPPORTED_NETWORK_IMPORTS = [
+  "port_addr_list",
+  "port_route_list",
+  "resolve",
+  "sock_accept_v2",
+  "sock_addr_local",
+  "sock_addr_peer",
+  "sock_bind",
+  "sock_connect",
+  "sock_get_opt_flag",
+  "sock_get_opt_size",
+  "sock_get_opt_time",
+  "sock_join_multicast_v4",
+  "sock_join_multicast_v6",
+  "sock_leave_multicast_v4",
+  "sock_leave_multicast_v6",
+  "sock_listen",
+  "sock_open",
+  "sock_recv_from",
+  "sock_send_file",
+  "sock_send_to",
+  "sock_set_opt_flag",
+  "sock_set_opt_size",
+  "sock_set_opt_time",
+  "sock_status",
+];
 let workerRunCounter = 0;
 let workerChildRunCounter = 0;
 const workerChildCommandRuns = new Map();
@@ -713,7 +739,7 @@ class WasiPreview1Runtime {
     this.getInstance = options.getInstance;
     this.memory = null;
     this.output = options.output;
-    this.processes = new WasixProcessRuntime(this);
+    this.wasix = new WasixRuntime(this);
     this.workspace = options.workspace;
     this.files = this.workspace.files;
     this.packageRoot = this.workspace.packageRoot ?? readOnlyPackageRootMount();
@@ -739,7 +765,7 @@ class WasiPreview1Runtime {
     const imports = {
       [WASI_IMPORT_MODULE]: this.imports(),
     };
-    imports[WASIX_IMPORT_MODULE] = this.processes.imports();
+    imports[WASIX_IMPORT_MODULE] = this.wasix.imports();
     return imports;
   }
 
@@ -3142,13 +3168,13 @@ class WasiPreview1Runtime {
   }
 }
 
-class WasixProcessRuntime {
+class WasixRuntime {
   constructor(host) {
     this.host = host;
   }
 
   imports() {
-    return {
+    const imports = {
       proc_exec: (namePtr, nameLen, argsPtr, argsLen) =>
         this.procExec(namePtr, nameLen, argsPtr, argsLen),
       proc_fork: (_copyMemory, _pidPtr) => ERRNO_NOTSUP,
@@ -3158,6 +3184,12 @@ class WasixProcessRuntime {
       proc_signal: (_pid, _signal) => ERRNO_NOTSUP,
       proc_spawn: () => ERRNO_NOTSUP,
     };
+
+    for (const name of WASIX_UNSUPPORTED_NETWORK_IMPORTS) {
+      imports[name] = () => this.unsupportedNetworkCapability();
+    }
+
+    return imports;
   }
 
   procExec(namePtr, nameLen, argsPtr, argsLen) {
@@ -3189,6 +3221,11 @@ class WasixProcessRuntime {
     this.host.throwIfAborted();
     this.host.writeU32(pidPtr, 1);
     return ERRNO_SUCCESS;
+  }
+
+  unsupportedNetworkCapability() {
+    this.host.throwIfAborted();
+    return ERRNO_NOTSUP;
   }
 
   readString(ptr, length) {

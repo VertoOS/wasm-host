@@ -49,8 +49,10 @@ Current scope:
   atoms to that raw Preview1 runtime. Raw WASI worker execution has an internal
   child-command RPC, and `wasix_32v1.proc_exec` can replace the current raw
   WASI module with a cataloged packaged command without structured-cloning
-  JavaScript functions. WASIX `proc_spawn`/join/fork/signal semantics remain a
-  later async-continuation runtime layer.
+  JavaScript functions. Common `wasix_32v1` raw socket/network imports are
+  recognized as deterministic unsupported browser capability gaps. WASIX
+  `proc_spawn`/join/fork/signal and raw socket/network semantics remain later
+  async-continuation or host-bridge runtime layers.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, and mounts
@@ -180,6 +182,10 @@ Current scope:
   and inherited stdout/stderr. Process spawn, join, fork, and signal imports
   return deterministic unsupported capability errors until the runtime has an
   async continuation strategy for blocking process waits.
+  Common `wasix_32v1` raw socket/network imports also instantiate and return
+  deterministic unsupported capability errors so browser networking can stay on
+  explicit HTTP, WebSocket, gateway, or tool-adapter bridges instead of becoming
+  first-class raw WASIX socket support.
   Eight shallow Preview1 handlers remain for link/symlink/readlink,
   `proc_raise`, and sockets; they stay wired with deterministic browser-safe
   error/no-op behavior so modules can instantiate without implying symlink,

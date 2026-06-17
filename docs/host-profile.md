@@ -305,7 +305,12 @@ adapter that escapes the synchronous WebAssembly import frame, then awaits the
 existing child-command bridge so the current module can be replaced by a
 cataloged packaged command. `proc_spawn`, join, fork, and signal imports still
 return deterministic unsupported capability errors because blocking process
-handles need a later async-safe continuation strategy.
+handles need a later async-safe continuation strategy. Common `wasix_32v1`
+socket/network imports are also recognized as browser network capability gaps:
+they instantiate and return deterministic `NOTSUP` instead of becoming
+first-class raw socket support. Browser-safe networking belongs on explicit
+HTTP, WebSocket, gateway, or tool-adapter packages above this low-level import
+surface.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory
@@ -347,6 +352,12 @@ package-file fixtures:
 `path_remove_directory`, `path_symlink`, `path_unlink_file`, `poll_oneoff`,
 `proc_exit`, `proc_raise`, `random_get`, `sched_yield`, `sock_accept`,
 `sock_recv`, `sock_send`, and `sock_shutdown`.
+The same raw runner exposes a narrow `wasix_32v1` namespace for `proc_exec`,
+process imports that currently return deterministic unsupported capability
+errors, and common raw socket/network imports such as `sock_open`,
+`sock_connect`, `sock_recv_from`, `sock_send_to`, option helpers, multicast
+helpers, `port_addr_list`, `port_route_list`, and `resolve`, all of which
+return deterministic `NOTSUP` in the browser profile.
 This runner captures stdout, stderr, and exit status for the interim browser
 smoke path, can expose explicit package files through a read-only `/workspace`
 preopen, can optionally back `/workspace` with an injected browser workspace
@@ -358,12 +369,12 @@ rights-reduction/renumber/rename, fd/path set-times/truncate/sync/unlink
 fixtures. `poll_oneoff` reports deterministic immediate clock and fd readiness
 snapshots without blocking the browser worker. Eight shallow handlers remain:
 link/symlink/readlink stay unsupported until the filesystem model has link
-metadata, `proc_raise` is a deterministic signal no-op, and socket imports stay
-unsupported native/browser capability boundaries. Live workspace stores stay on
-the main-thread executor path; worker runs can carry cloneable workspace
-snapshots but not IndexedDB-backed store instances. It is not a general WASIX
-runtime and does not itself provide sockets, threads, or WebC metadata
-execution.
+metadata, `proc_raise` is a deterministic signal no-op, and Preview1 plus WASIX
+socket imports stay unsupported native/browser capability boundaries. Live
+workspace stores stay on the main-thread executor path; worker runs can carry
+cloneable workspace snapshots but not IndexedDB-backed store instances. It is
+not a general WASIX runtime and does not itself provide sockets, threads, or
+WebC metadata execution.
 
 The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex

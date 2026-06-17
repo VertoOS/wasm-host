@@ -13,7 +13,7 @@ small executor with `run(request, output)`. The request shape mirrors the browse
 command runtime fields that matter for the spike:
 
 - package name/version or package bytes
-- command, args, cwd, env, and stdin
+- command, args, cwd, env, stdin, and SDK `uses`
 - stdout/stderr output writers
 - `/workspace` snapshot mount and writeback
 
@@ -29,25 +29,31 @@ with the browser command worker outside this package.
 `Command.run()`, `Directory`, `cwd`, `env`, `stdin`, mounted directories, and
 `wait()` results with `code`, `stdout`, and `stderr`.
 
-The SDK still has runtime requirements and open validation gaps before it should
-replace or compete with `apps/web/src/webc-wasix.js`:
+The SDK still has runtime blockers before it should replace or compete with
+`apps/web/src/webc-wasix.js`:
 
 - Browser pages must be cross-origin isolated for `SharedArrayBuffer`:
   `Cross-Origin-Opener-Policy: same-origin` and
   `Cross-Origin-Embedder-Policy: require-corp`.
-- Registry-backed packages are the natural SDK path. `fromFile()` and
-  `fromWasm()` provide byte-loading APIs, but pinned WebC artifact/cache
-  integration still needs an end-to-end proof.
+- The real-browser proof confirms COOP/COEP and `SharedArrayBuffer` setup works,
+  and the SDK module can load and initialize in Chromium. The optional CDN
+  inline-Wasm module import currently fails with `ReferenceError: buf is not
+  defined`, so the proof falls back to the SDK default initialization path.
+- Registry-backed `wasmer/coreutils@1.0.25` command execution currently exits
+  `45` with empty stdout/stderr for `echo SDK_COREUTILS_OK`.
+- Pinned `wasmer/bash@1.0.25` WebC bytes can be fetched, verified by SHA-256,
+  and passed to `Wasmer.fromFile()`, but `bash --version` also exits `45` with
+  empty stdout/stderr, so the pinned WebC byte path is not runnable yet.
 - A local Node probe against `@wasmer/sdk/node` could enumerate
   `wasmer/coreutils@1.0.25` commands, but `Command.run().wait()` did not settle
   for `true`, `false`, or `echo` within 5 seconds in this environment. Treat
   Node as API discovery only until that is understood.
-- The real browser Bash/coreutils parity smoke remains a follow-up before any
-  production wiring: https://github.com/VertoOS/wasm-host/issues/228
+- Follow-up: https://github.com/VertoOS/wasm-host/issues/230
 
 ## Validation
 
 ```sh
 npm --prefix packages/wasmer-sdk-adapter run check
 npm --prefix packages/wasmer-sdk-adapter test
+npm --prefix packages/wasmer-sdk-adapter run test:e2e
 ```

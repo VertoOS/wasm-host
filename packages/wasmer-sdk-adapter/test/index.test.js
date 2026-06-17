@@ -21,6 +21,7 @@ test("normalizes run requests without importing the real SDK", () => {
     env: { PATH: "/bin:/usr/bin" },
     package: { name: "wasmer/bash", version: "1.0.25" },
     stdin: "input",
+    uses: ["wasmer/coreutils@1.0.25"],
     workspaceSnapshot: [
       { path: "/notes", type: "directory" },
       { contents: "hello", path: "/notes/input.txt" },
@@ -34,6 +35,7 @@ test("normalizes run requests without importing the real SDK", () => {
   assert.equal(request.package.name, "wasmer/bash");
   assert.equal(request.package.version, "1.0.25");
   assert.equal(request.stdin, "input");
+  assert.deepEqual(request.uses, ["wasmer/coreutils@1.0.25"]);
   assert.equal(request.workspaceMountPath, "/workspace");
   assert.equal(request.workspaceSnapshot[0].type, "directory");
   assert.equal(decoder.decode(request.workspaceSnapshot[1].bytes), "hello");
@@ -96,6 +98,7 @@ test("executor maps command request to SDK package run and returns result", asyn
       env: { PATH: "/bin:/usr/bin" },
       package: { name: "wasmer/bash", version: "1.0.25" },
       stdin: "",
+      uses: ["wasmer/coreutils@1.0.25"],
       workspaceSnapshot: [{ contents: "alpha", path: "/input.txt" }],
     },
     { stderr, stdout },
@@ -108,6 +111,7 @@ test("executor maps command request to SDK package run and returns result", asyn
   assert.equal(sdk.lastRun.options.cwd, "/workspace");
   assert.equal(sdk.lastRun.options.env.PATH, "/bin:/usr/bin");
   assert.equal(sdk.lastRun.options.stdin, "");
+  assert.deepEqual(sdk.lastRun.options.uses, ["wasmer/coreutils@1.0.25"]);
   assert.equal(decoder.decode(stdout.bytes()), "CAT_STATUS:1\n");
   assert.equal(decoder.decode(stderr.bytes()), "missing\n");
   assert.deepEqual(result.diagnostics, [

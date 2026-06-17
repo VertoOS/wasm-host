@@ -48,6 +48,7 @@ export function createWasmerSdkCommandExecutor(options = {}) {
         env: normalized.env,
         mount,
         stdin: normalized.stdin,
+        uses: normalized.uses,
       });
       const result = normalizeWasmerRunResult(await instance.wait());
       await writeOutput(output.stdout, result.stdoutBytes);
@@ -122,6 +123,7 @@ export function normalizeWasmerRunRequest(request = {}) {
     mount: objectParam(value.mount ?? {}, "mount must be an object"),
     package: packageRequest,
     stdin: optionalBytesOrString(value.stdin),
+    uses: stringArray(value.uses ?? []),
     workspaceMountPath: optionalAbsolutePath(
       value.workspaceMountPath ?? DEFAULT_MOUNT_PATH,
       "workspaceMountPath",

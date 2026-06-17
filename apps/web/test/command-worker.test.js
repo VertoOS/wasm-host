@@ -131,6 +131,284 @@ test("BrowserCommandWorkerRuntime loads and runs a command", async () => {
   ]);
 });
 
+test("BrowserCommandWorkerRuntime preserves default package runs without packageId", async () => {
+  const port = recordingPort();
+  const seen = [];
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    executors: {
+      test: {
+        async run(request, output) {
+          seen.push({
+            command: request.command,
+            packageId: request.package.id,
+          });
+          await output.writeStdout("default package\n");
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-default",
+    package: {
+      commands: ["run-default"],
+      type: "test",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-default",
+    command: "run-default",
+  });
+
+  assert.deepEqual(seen, [{ command: "run-default", packageId: "default" }]);
+  assert.deepEqual(
+    port.messages.find(
+      (message) =>
+        message.type === "command.started" && message.id === "run-default",
+    ),
+    {
+      type: "command.started",
+      id: "run-default",
+      packageId: "default",
+      command: "run-default",
+      args: [],
+      cwd: "/workspace",
+    },
+  );
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-default")),
+    "default package\n",
+  );
+});
+
+test("BrowserCommandWorkerRuntime catalogs loaded commands and resolves PATH runs", async () => {
+  const port = recordingPort();
+  const seen = [];
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    executors: {
+      test: {
+        async run(request, output) {
+          seen.push({
+            command: request.command,
+            packageId: request.package.id,
+          });
+          await output.writeStdout(`${request.package.id}:${request.command}\n`);
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-bash",
+    package: {
+      commands: ["bash"],
+      id: "bash-pkg",
+      type: "test",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-coreutils",
+    package: {
+      commands: ["ls", "env"],
+      id: "coreutils-pkg",
+      type: "test",
+    },
+  });
+  await runtime.handleMessage({ type: "command.catalog", id: "catalog-1" });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-bash",
+    packageId: null,
+    command: "/bin/bash",
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-ls",
+    packageId: null,
+    command: "ls",
+    env: { PATH: "/does-not-exist:/usr/bin" },
+  });
+
+  const catalog = port.messages.find(
+    (message) => message.type === "command.catalog",
+  );
+  assert.equal(catalog.id, "catalog-1");
+  assert.equal(catalog.defaultPath, "/bin:/usr/bin");
+  assert(catalog.entries.some(catalogEntry("/bin/bash", "bash-pkg", "bash")));
+  assert(catalog.entries.some(catalogEntry("/usr/bin/ls", "coreutils-pkg", "ls")));
+  assert(
+    catalog.entries.some(catalogEntry("/usr/bin/env", "coreutils-pkg", "env")),
+  );
+  assert.deepEqual(seen, [
+    { command: "bash", packageId: "bash-pkg" },
+    { command: "ls", packageId: "coreutils-pkg" },
+  ]);
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-bash")) +
+      chunksText(stdoutChunks(port.messages, "run-ls")),
+    "bash-pkg:bash\ncoreutils-pkg:ls\n",
+  );
+});
+
+test("BrowserCommandWorkerRuntime reports catalog misses for explicit PATH runs", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    executors: {
+      test: {
+        async run() {
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    package: { commands: ["ls"], id: "coreutils-pkg", type: "test" },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-missing-path",
+    packageId: null,
+    command: "ls",
+    env: { PATH: "" },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-nul-command",
+    packageId: null,
+    command: "ls\0",
+  });
+
+  assert.deepEqual(
+    port.messages.find(
+      (message) =>
+        message.type === "command.error" &&
+        message.id === "run-missing-path",
+    ),
+    {
+      type: "command.error",
+      id: "run-missing-path",
+      error: {
+        kind: "command_not_found",
+        message: "browser command not found in package catalog: ls",
+        stage: "command_resolution",
+      },
+      result: {
+        cancelled: false,
+        exitCode: 127,
+        failureStage: "command_resolution",
+        stderrBytes: 0,
+        stdoutBytes: 0,
+        timedOut: false,
+      },
+    },
+  );
+  assert.deepEqual(
+    port.messages.find(
+      (message) =>
+        message.type === "command.error" && message.id === "run-nul-command",
+    ),
+    {
+      type: "command.error",
+      id: "run-nul-command",
+      error: {
+        kind: "invalid_request",
+        message: "browser command fields must not contain NUL bytes",
+        stage: "command_resolution",
+      },
+      result: {
+        cancelled: false,
+        exitCode: null,
+        failureStage: "command_resolution",
+        stderrBytes: 0,
+        stdoutBytes: 0,
+        timedOut: false,
+      },
+    },
+  );
+});
+
+test("BrowserCommandWorkerRuntime rejects command catalog collisions", async () => {
+  const port = recordingPort();
+  const seen = [];
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    executors: {
+      test: {
+        async run(request, output) {
+          seen.push({
+            command: request.command,
+            packageId: request.package.id,
+          });
+          await output.writeStdout(`${request.package.id}:${request.command}\n`);
+          return { exitCode: 0 };
+        },
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-coreutils-a",
+    package: { commands: ["ls"], id: "coreutils-a", type: "test" },
+  });
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-coreutils-b",
+    package: { commands: ["ls"], id: "coreutils-b", type: "test" },
+  });
+  await runtime.handleMessage({
+    type: "command.catalog",
+    id: "catalog-after-collision",
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-ls-after-collision",
+    packageId: null,
+    command: "ls",
+  });
+
+  const loaded = port.messages.filter(
+    (message) => message.type === "command.loaded",
+  );
+  const error = port.messages.find((message) => message.type === "command.error");
+  const catalog = port.messages.find(
+    (message) =>
+      message.type === "command.catalog" &&
+      message.id === "catalog-after-collision",
+  );
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].packageId, "coreutils-a");
+  assert.equal(error.id, "load-coreutils-b");
+  assert.equal(error.error.kind, "command_catalog_collision");
+  assert.equal(error.error.stage, "package_load");
+  assert.match(error.error.message, /\/bin\/ls/);
+  assert(catalog.entries.some(catalogEntry("/bin/ls", "coreutils-a", "ls")));
+  assert.equal(
+    catalog.entries.some(catalogEntry("/bin/ls", "coreutils-b", "ls")),
+    false,
+  );
+  assert.deepEqual(seen, [{ command: "ls", packageId: "coreutils-a" }]);
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-ls-after-collision")),
+    "coreutils-a:ls\n",
+  );
+});
+
 test("BrowserCommandWorkerRuntime streams stdin messages", async () => {
   const port = recordingPort();
   let stdin = null;
@@ -1982,6 +2260,13 @@ function webcPackageForRun(metadata) {
     },
     type: "webc-package",
   };
+}
+
+function catalogEntry(path, packageId, command) {
+  return (entry) =>
+    entry.path === path &&
+    entry.packageId === packageId &&
+    entry.command === command;
 }
 
 function base64ToBytes(value) {

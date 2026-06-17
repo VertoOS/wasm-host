@@ -12,6 +12,7 @@ const WASIX_IMPORT_MODULE = "wasix_32v1";
 
 const ERRNO_SUCCESS = 0;
 const ERRNO_ACCESS = 2;
+const ERRNO_AGAIN = 6;
 const ERRNO_BADF = 8;
 const ERRNO_EXIST = 20;
 const ERRNO_FAULT = 21;
@@ -22,6 +23,7 @@ const ERRNO_NOTDIR = 54;
 const ERRNO_NOTEMPTY = 55;
 const ERRNO_NOTSUP = 58;
 const ERRNO_OVERFLOW = 61;
+const ERRNO_PIPE = 64;
 const ERRNO_RANGE = 68;
 const ERRNO_NOTCAPABLE = 76;
 const STDIN_FD = 0;
@@ -158,12 +160,17 @@ const WASI_WRITE_RIGHTS =
   WASI_RIGHT_FD_FILESTAT_SET_TIMES |
   WASI_RIGHT_PATH_REMOVE_DIRECTORY |
   WASI_RIGHT_PATH_UNLINK_FILE;
+const WASI_PIPE_BASE_RIGHTS =
+  WASI_RIGHT_FD_FDSTAT_SET_FLAGS | WASI_RIGHT_FD_FILESTAT_GET;
+const WASI_PIPE_READ_RIGHTS = WASI_PIPE_BASE_RIGHTS | WASI_RIGHT_FD_READ;
+const WASI_PIPE_WRITE_RIGHTS = WASI_PIPE_BASE_RIGHTS | WASI_RIGHT_FD_WRITE;
 const WORKSPACE_PREOPEN_PATH = "/workspace";
 const TMP_PREOPEN_PATH = "/tmp";
 const NANOS_PER_MILLI = 1_000_000n;
 const CLOCK_RESOLUTION_NANOS = NANOS_PER_MILLI;
 const WASI_ADVICE_NOREUSE = 5;
 const RANDOM_GET_CHUNK_SIZE = 65_536;
+const PIPE_BUFFER_LIMIT = 1024 * 1024;
 const WASIX_UNSUPPORTED_NETWORK_IMPORTS = [
   "port_addr_add",
   "port_addr_clear",
@@ -228,12 +235,6 @@ const WASIX_UNSUPPORTED_THREAD_EVENT_IMPORTS = [
   "thread_spawn_v2",
 ];
 const WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS = ["thread_exit"];
-const WASIX_UNSUPPORTED_FD_PIPE_IMPORTS = [
-  "fd_dup",
-  "fd_dup2",
-  "fd_pipe",
-  "pipe",
-];
 const WASIX_UNSUPPORTED_TTY_IMPORTS = ["tty_get", "tty_set"];
 const WASIX_UNSUPPORTED_CLOCK_IMPORTS = ["clock_time_set"];
 const WASIX_UNSUPPORTED_DYNAMIC_IMPORTS = [
@@ -1084,6 +1085,12 @@ class WasiPreview1Runtime {
   fdWrite(fd, iovsPtr, iovsLen, nwrittenPtr) {
     this.throwIfAborted();
     const file = this.openFiles.get(fd);
+    if (isOpenPipe(file)) {
+      return this.fdWritePipe(file, iovsPtr, iovsLen, nwrittenPtr);
+    }
+    if (isOpenStdio(file)) {
+      return this.fdWriteStdio(file, iovsPtr, iovsLen, nwrittenPtr);
+    }
     if (fd !== STDOUT_FD && fd !== STDERR_FD && !file) {
       this.writeU32(nwrittenPtr, 0);
       return ERRNO_BADF;
@@ -1111,6 +1118,57 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
+  fdWriteStdio(file, iovsPtr, iovsLen, nwrittenPtr) {
+    if (file.stdioFd !== STDOUT_FD && file.stdioFd !== STDERR_FD) {
+      this.writeU32(nwrittenPtr, 0);
+      return ERRNO_BADF;
+    }
+    if ((file.rights & WASI_RIGHT_FD_WRITE) === 0n) {
+      this.writeU32(nwrittenPtr, 0);
+      return ERRNO_NOTCAPABLE;
+    }
+
+    const { chunks, total } = this.readIovChunks(iovsPtr, iovsLen);
+    this.writeU32(nwrittenPtr, total);
+    for (const chunk of chunks) {
+      if (file.stdioFd === STDOUT_FD) {
+        void this.output.writeStdout(chunk);
+      } else {
+        void this.output.writeStderr(chunk);
+      }
+    }
+    return ERRNO_SUCCESS;
+  }
+
+  fdWritePipe(file, iovsPtr, iovsLen, nwrittenPtr) {
+    this.writeU32(nwrittenPtr, 0);
+    if (file.direction !== "write") {
+      return ERRNO_BADF;
+    }
+    if ((file.rights & WASI_RIGHT_FD_WRITE) === 0n) {
+      return ERRNO_NOTCAPABLE;
+    }
+    if (file.pipe.readers <= 0) {
+      return ERRNO_PIPE;
+    }
+
+    const { chunks, total } = this.readIovChunks(iovsPtr, iovsLen);
+    if (file.pipe.bytes.byteLength + total > PIPE_BUFFER_LIMIT) {
+      return ERRNO_AGAIN;
+    }
+
+    const next = new Uint8Array(file.pipe.bytes.byteLength + total);
+    next.set(file.pipe.bytes);
+    let offset = file.pipe.bytes.byteLength;
+    for (const chunk of chunks) {
+      next.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    file.pipe.bytes = next;
+    this.writeU32(nwrittenPtr, total);
+    return ERRNO_SUCCESS;
+  }
+
   fdPwrite(fd, iovsPtr, iovsLen, offset, nwrittenPtr) {
     this.throwIfAborted();
     const file = this.openFiles.get(fd);
@@ -1122,6 +1180,9 @@ class WasiPreview1Runtime {
       isOpenDirectory(file)
     ) {
       return ERRNO_ISDIR;
+    }
+    if (isOpenPipe(file) || isOpenStdio(file)) {
+      return ERRNO_BADF;
     }
     if (!file) {
       return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
@@ -1161,6 +1222,12 @@ class WasiPreview1Runtime {
   fdRead(fd, iovsPtr, iovsLen, nreadPtr) {
     this.throwIfAborted();
     const file = this.openFiles.get(fd);
+    if (isOpenPipe(file)) {
+      return this.fdReadPipe(file, iovsPtr, iovsLen, nreadPtr);
+    }
+    if (isOpenStdio(file)) {
+      return this.fdReadStdio(file, iovsPtr, iovsLen, nreadPtr);
+    }
     if (
       fd === WORKSPACE_FD ||
       fd === TMP_FD ||
@@ -1187,6 +1254,43 @@ class WasiPreview1Runtime {
     return ERRNO_SUCCESS;
   }
 
+  fdReadStdio(file, iovsPtr, iovsLen, nreadPtr) {
+    this.writeU32(nreadPtr, 0);
+    if (file.stdioFd !== STDIN_FD) {
+      return ERRNO_BADF;
+    }
+    if ((file.rights & WASI_RIGHT_FD_READ) === 0n) {
+      return ERRNO_NOTCAPABLE;
+    }
+    const total = this.readIntoIovs(
+      this.stdin,
+      this.stdinOffset,
+      iovsPtr,
+      iovsLen,
+    );
+    this.stdinOffset += total;
+    this.writeU32(nreadPtr, total);
+    return ERRNO_SUCCESS;
+  }
+
+  fdReadPipe(file, iovsPtr, iovsLen, nreadPtr) {
+    this.writeU32(nreadPtr, 0);
+    if (file.direction !== "read") {
+      return ERRNO_BADF;
+    }
+    if ((file.rights & WASI_RIGHT_FD_READ) === 0n) {
+      return ERRNO_NOTCAPABLE;
+    }
+    if (file.pipe.bytes.byteLength === 0) {
+      return file.pipe.writers > 0 ? ERRNO_AGAIN : ERRNO_SUCCESS;
+    }
+
+    const total = this.readIntoIovs(file.pipe.bytes, 0, iovsPtr, iovsLen);
+    file.pipe.bytes = file.pipe.bytes.slice(total);
+    this.writeU32(nreadPtr, total);
+    return ERRNO_SUCCESS;
+  }
+
   fdPread(fd, iovsPtr, iovsLen, offset, nreadPtr) {
     this.throwIfAborted();
     const file = this.openFiles.get(fd);
@@ -1198,6 +1302,9 @@ class WasiPreview1Runtime {
       isOpenDirectory(file)
     ) {
       return ERRNO_ISDIR;
+    }
+    if (isOpenPipe(file) || isOpenStdio(file)) {
+      return ERRNO_BADF;
     }
     if (!file) {
       return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
@@ -1306,7 +1413,7 @@ class WasiPreview1Runtime {
   fdSeek(fd, offset, whence, newOffsetPtr) {
     this.throwIfAborted();
     const file = this.openFiles.get(fd);
-    if (!file) {
+    if (!file || isOpenPipe(file) || isOpenStdio(file)) {
       return this.fdStat(fd) ? ERRNO_ACCESS : ERRNO_BADF;
     }
 
@@ -1322,7 +1429,7 @@ class WasiPreview1Runtime {
   fdTell(fd, offsetPtr) {
     this.throwIfAborted();
     const file = this.openFiles.get(fd);
-    if (!file) {
+    if (!file || isOpenPipe(file) || isOpenStdio(file)) {
       return this.fdStat(fd) ? ERRNO_ACCESS : ERRNO_BADF;
     }
 
@@ -1404,7 +1511,10 @@ class WasiPreview1Runtime {
 
   fdClose(fd) {
     this.throwIfAborted();
-    if (this.openFiles.delete(fd)) {
+    const file = this.openFiles.get(fd);
+    if (file) {
+      this.closeOpenFile(file);
+      this.openFiles.delete(fd);
       this.fdFlagsExt.delete(fd);
       return ERRNO_SUCCESS;
     }
@@ -1424,6 +1534,10 @@ class WasiPreview1Runtime {
       return ERRNO_SUCCESS;
     }
 
+    const replaced = this.openFiles.get(to);
+    if (replaced) {
+      this.closeOpenFile(replaced);
+    }
     this.openFiles.delete(fd);
     this.openFiles.set(to, file);
     const fdFlagsExt = this.fdFlagsExt.get(fd);
@@ -1436,6 +1550,163 @@ class WasiPreview1Runtime {
       this.nextFileFd = to + 1;
     }
     return ERRNO_SUCCESS;
+  }
+
+  fdDup(fd, retFdPtr) {
+    return this.duplicateFd(fd, FIRST_FILE_FD, 0, retFdPtr);
+  }
+
+  fdDup2(fd, minResultFd, cloexec, retFdPtr) {
+    const fdFlagsExt =
+      Number(cloexec) === 1 ? WASIX_FDFLAGSEXT_CLOEXEC : 0;
+    return this.duplicateFd(fd, minResultFd, fdFlagsExt, retFdPtr);
+  }
+
+  duplicateFd(fd, minResultFd, fdFlagsExt, retFdPtr) {
+    this.throwIfAborted();
+    if (!this.canWriteU32(retFdPtr)) {
+      return ERRNO_FAULT;
+    }
+    const file = this.duplicateOpenFileForFd(fd);
+    if (!file) {
+      return ERRNO_BADF;
+    }
+    const newFd = this.allocateDynamicFileFd(minResultFd);
+    this.retainOpenFile(file);
+    this.openFiles.set(newFd, file);
+    if (fdFlagsExt === 0) {
+      this.fdFlagsExt.delete(newFd);
+    } else {
+      this.fdFlagsExt.set(newFd, fdFlagsExt);
+    }
+    this.writeU32(retFdPtr, newFd);
+    return ERRNO_SUCCESS;
+  }
+
+  duplicateOpenFileForFd(fd) {
+    const file = this.openFiles.get(fd);
+    if (file) {
+      return duplicateOpenFileDescriptor(file);
+    }
+    const stat = this.fdStat(fd);
+    if (!stat) {
+      return null;
+    }
+    const stdioRightsValue = stdioRights(fd);
+    if (stdioRightsValue != null) {
+      return {
+        fdflags: 0,
+        kind: "stdio",
+        rights: stdioRightsValue,
+        stdioFd: fd,
+      };
+    }
+    if (fd === WORKSPACE_FD) {
+      return {
+        preopenPath: WORKSPACE_PREOPEN_PATH,
+        fdflags: 0,
+        inheriting: stat.inheriting,
+        kind: "directory",
+        mount: "workspace",
+        offset: 0,
+        path: "",
+        rights: stat.rights,
+      };
+    }
+    if (fd === TMP_FD) {
+      return {
+        preopenPath: TMP_PREOPEN_PATH,
+        fdflags: 0,
+        inheriting: stat.inheriting,
+        kind: "directory",
+        mount: "scratch",
+        offset: 0,
+        path: "",
+        rights: stat.rights,
+      };
+    }
+    if (fd === this.packageRootFd) {
+      return {
+        preopenPath: PACKAGE_ROOT_PREOPEN_PATH,
+        fdflags: 0,
+        inheriting: stat.inheriting,
+        kind: "directory",
+        mount: "package-root",
+        offset: 0,
+        path: "",
+        rights: stat.rights,
+      };
+    }
+    return null;
+  }
+
+  fdPipe(readFdPtr, writeFdPtr) {
+    this.throwIfAborted();
+    if (!this.canWriteU32(readFdPtr) || !this.canWriteU32(writeFdPtr)) {
+      return ERRNO_FAULT;
+    }
+    const pipe = {
+      bytes: new Uint8Array(),
+      readers: 1,
+      writers: 1,
+    };
+    const readFd = this.allocateDynamicFileFd(FIRST_FILE_FD);
+    this.openFiles.set(readFd, {
+      direction: "read",
+      fdflags: 0,
+      kind: "pipe",
+      pipe,
+      rights: WASI_PIPE_READ_RIGHTS,
+    });
+    const writeFd = this.allocateDynamicFileFd(readFd + 1);
+    this.openFiles.set(writeFd, {
+      direction: "write",
+      fdflags: 0,
+      kind: "pipe",
+      pipe,
+      rights: WASI_PIPE_WRITE_RIGHTS,
+      writable: true,
+    });
+    this.writeU32(readFdPtr, readFd);
+    this.writeU32(writeFdPtr, writeFd);
+    return ERRNO_SUCCESS;
+  }
+
+  allocateDynamicFileFd(minResultFd = FIRST_FILE_FD) {
+    let fd = Math.max(FIRST_FILE_FD, Number(minResultFd) >>> 0);
+    while (this.fdStat(fd)) {
+      fd += 1;
+    }
+    if (fd >= this.nextFileFd) {
+      this.nextFileFd = fd + 1;
+    }
+    return fd;
+  }
+
+  retainOpenFile(file) {
+    if (!isOpenPipe(file)) {
+      return;
+    }
+    if (file.direction === "read") {
+      file.pipe.readers += 1;
+    } else {
+      file.pipe.writers += 1;
+    }
+  }
+
+  closeOpenFile(file) {
+    if (!isOpenPipe(file)) {
+      return;
+    }
+    if (file.direction === "read") {
+      file.pipe.readers = Math.max(0, file.pipe.readers - 1);
+    } else {
+      file.pipe.writers = Math.max(0, file.pipe.writers - 1);
+    }
+  }
+
+  canWriteU32(ptr) {
+    return checkedMemoryRange(ptr >>> 0, 4, this.bytes().byteLength) != null;
   }
 
   fdFilestatGet(fd, filestatPtr) {
@@ -1894,7 +2165,8 @@ class WasiPreview1Runtime {
         openedFdPtr,
       );
     }
-    if (fd !== WORKSPACE_FD) {
+    const readOnlyWorkspaceBase = this.workspaceBasePath(fd);
+    if (readOnlyWorkspaceBase == null) {
       return this.fdStat(fd) ? ERRNO_NOTCAPABLE : ERRNO_BADF;
     }
     if (
@@ -1909,11 +2181,18 @@ class WasiPreview1Runtime {
     ) {
       return ERRNO_NOTCAPABLE;
     }
-    const path = normalizeWasiPath(this.readString(pathPtr, pathLen));
-    if (!path) {
+    const path = resolveScratchPath(
+      readOnlyWorkspaceBase,
+      this.readString(pathPtr, pathLen),
+      { lookup: true },
+    );
+    if (path.errno != null) {
+      return path.errno;
+    }
+    if (!path.value) {
       return ERRNO_NOTCAPABLE;
     }
-    const file = this.files.get(path);
+    const file = this.files.get(path.value);
     if (!file) {
       return ERRNO_NOENT;
     }
@@ -1921,7 +2200,7 @@ class WasiPreview1Runtime {
     this.nextFileFd += 1;
     this.openFiles.set(openedFd, {
       offset: 0,
-      path,
+      path: path.value,
       record: file,
       rights: WASI_REGULAR_FILE_RIGHTS,
       fdflags: 0,
@@ -3051,6 +3330,17 @@ class WasiPreview1Runtime {
     }
     const file = this.openFiles.get(fd);
     if (file) {
+      if (isOpenStdio(file) || isOpenPipe(file)) {
+        return {
+          filetype: WASI_FILETYPE_CHARACTER_DEVICE,
+          inheriting: 0n,
+          rights: file.rights,
+          size:
+            isOpenPipe(file) && file.direction === "read"
+              ? file.pipe.bytes.byteLength
+              : 0,
+        };
+      }
       if (isOpenDirectory(file)) {
         return {
           filetype: WASI_FILETYPE_DIRECTORY,
@@ -3106,6 +3396,10 @@ class WasiPreview1Runtime {
   preopenPath(fd) {
     if (fd === this.packageRootFd) {
       return PACKAGE_ROOT_PREOPEN_PATH;
+    }
+    const file = this.openFiles.get(fd);
+    if (isOpenDirectory(file) && file.preopenPath) {
+      return file.preopenPath;
     }
     return preopenPath(fd);
   }
@@ -3302,6 +3596,37 @@ class WasiPreview1Runtime {
         nbytes: BigInt(remaining),
       };
     }
+    if (isOpenStdio(file)) {
+      if (file.stdioFd !== STDIN_FD) {
+        return { error: ERRNO_BADF };
+      }
+      if ((file.rights & WASI_RIGHT_FD_READ) === 0n) {
+        return { error: ERRNO_NOTCAPABLE };
+      }
+      const remaining = Math.max(0, this.stdin.byteLength - this.stdinOffset);
+      return {
+        error: ERRNO_SUCCESS,
+        flags: remaining === 0 ? WASI_EVENT_FD_READWRITE_HANGUP : 0,
+        nbytes: BigInt(remaining),
+      };
+    }
+    if (isOpenPipe(file)) {
+      if (file.direction !== "read") {
+        return { error: ERRNO_BADF };
+      }
+      if ((file.rights & WASI_RIGHT_FD_READ) === 0n) {
+        return { error: ERRNO_NOTCAPABLE };
+      }
+      const remaining = file.pipe.bytes.byteLength;
+      return {
+        error: ERRNO_SUCCESS,
+        flags:
+          remaining === 0 && file.pipe.writers === 0
+            ? WASI_EVENT_FD_READWRITE_HANGUP
+            : 0,
+        nbytes: BigInt(remaining),
+      };
+    }
     if (
       fd === WORKSPACE_FD ||
       fd === TMP_FD ||
@@ -3328,6 +3653,25 @@ class WasiPreview1Runtime {
     const file = this.openFiles.get(fd);
     if (fd === STDOUT_FD || fd === STDERR_FD) {
       return { error: ERRNO_SUCCESS };
+    }
+    if (isOpenStdio(file)) {
+      if (file.stdioFd !== STDOUT_FD && file.stdioFd !== STDERR_FD) {
+        return { error: ERRNO_BADF };
+      }
+      return (file.rights & WASI_RIGHT_FD_WRITE) !== 0n
+        ? { error: ERRNO_SUCCESS }
+        : { error: ERRNO_NOTCAPABLE };
+    }
+    if (isOpenPipe(file)) {
+      if (file.direction !== "write") {
+        return { error: ERRNO_BADF };
+      }
+      if ((file.rights & WASI_RIGHT_FD_WRITE) === 0n) {
+        return { error: ERRNO_NOTCAPABLE };
+      }
+      return file.pipe.readers > 0
+        ? { error: ERRNO_SUCCESS }
+        : { error: ERRNO_PIPE };
     }
     if (!file) {
       return { error: ERRNO_BADF };
@@ -3388,9 +3732,14 @@ class WasixRuntime {
     const imports = {
       ...this.host.imports(),
       chdir: (pathPtr, pathLen) => this.host.chdir(pathPtr, pathLen),
+      fd_dup: (fd, retFdPtr) => this.host.fdDup(fd, retFdPtr),
+      fd_dup2: (fd, minResultFd, cloexec, retFdPtr) =>
+        this.host.fdDup2(fd, minResultFd, cloexec, retFdPtr),
       fd_fdflags_get: (fd, flagsPtr) =>
         this.host.fdFdflagsGet(fd, flagsPtr),
       fd_fdflags_set: (fd, flags) => this.host.fdFdflagsSet(fd, flags),
+      fd_pipe: (readFdPtr, writeFdPtr) =>
+        this.host.fdPipe(readFdPtr, writeFdPtr),
       getcwd: (pathPtr, pathLenPtr) => this.host.getcwd(pathPtr, pathLenPtr),
       getpid: (pidPtr) => this.procId(pidPtr),
       path_open2: (
@@ -3428,6 +3777,8 @@ class WasixRuntime {
       proc_parent: (_pidPtr) => ERRNO_NOTSUP,
       proc_signal: (_pid, _signal) => ERRNO_NOTSUP,
       proc_spawn: () => ERRNO_NOTSUP,
+      pipe: (readFdPtr, writeFdPtr) =>
+        this.host.fdPipe(readFdPtr, writeFdPtr),
     };
 
     for (const name of WASIX_UNSUPPORTED_NETWORK_IMPORTS) {
@@ -3438,9 +3789,6 @@ class WasixRuntime {
     }
     for (const name of WASIX_UNSUPPORTED_THREAD_EXIT_IMPORTS) {
       imports[name] = () => this.unsupportedThreadExitCapability();
-    }
-    for (const name of WASIX_UNSUPPORTED_FD_PIPE_IMPORTS) {
-      imports[name] = () => this.unsupportedUtilityCapability();
     }
     for (const name of WASIX_UNSUPPORTED_TTY_IMPORTS) {
       imports[name] = () => this.unsupportedUtilityCapability();
@@ -3639,8 +3987,55 @@ function canAllocateFile(file) {
   return file.writable && (file.rights & WASI_RIGHT_FD_ALLOCATE) !== 0n;
 }
 
+function duplicateOpenFileDescriptor(file) {
+  const descriptor = { ...file };
+  if (hasOpenFileOffset(file)) {
+    attachOpenFileOffset(descriptor, openFileOffsetRef(file));
+  }
+  return descriptor;
+}
+
+function hasOpenFileOffset(file) {
+  return Object.prototype.hasOwnProperty.call(file, "offset");
+}
+
+function openFileOffsetRef(file) {
+  if (file.offsetRef) {
+    return file.offsetRef;
+  }
+  const offsetRef = { value: Number(file.offset ?? 0) };
+  attachOpenFileOffset(file, offsetRef);
+  return offsetRef;
+}
+
+function attachOpenFileOffset(file, offsetRef) {
+  Object.defineProperty(file, "offsetRef", {
+    configurable: true,
+    value: offsetRef,
+    writable: true,
+  });
+  Object.defineProperty(file, "offset", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return this.offsetRef.value;
+    },
+    set(value) {
+      this.offsetRef.value = Number(value);
+    },
+  });
+}
+
 function isOpenDirectory(file) {
   return file?.kind === "directory";
+}
+
+function isOpenStdio(file) {
+  return file?.kind === "stdio";
+}
+
+function isOpenPipe(file) {
+  return file?.kind === "pipe";
 }
 
 function isOpenScratchDirectory(file) {

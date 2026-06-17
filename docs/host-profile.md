@@ -367,8 +367,19 @@ expected text, writes the file back, and verifies the persisted edit across the
 real browser page/worker boundary. The browser profile also has a deterministic
 fake device-flow auth broker for start/status, host-side completion,
 cancellation, and logout tests. It is intentionally not modeled as raw WASI and
-does not imply real provider credentials, refresh, full Codex CLI, app-server,
-tool, or MCP support.
+does not imply real provider credentials, refresh, full Codex CLI, real
+app-server, tool, or MCP support.
+
+The browser profile also has a deterministic app-server JSON-RPC fixture in
+`apps/web/src/app-server.js`. It accepts browser-owned app-server messages for
+initialize/initialized, `account/read`, device login start/cancel,
+`thread/start`, `turn/start`, and `turn/interrupt`; emits bounded
+`thread/started`, `turn/started`, `item/completed`, and `turn/completed`
+notifications; honors notification opt-out; and returns structured unsupported
+capability errors for native-only methods. The real-browser e2e harness drives
+this fixture directly to prove the protocol state loop can live in the browser
+host. It is not yet a WebSocket replacement for the Codex browser demo, a
+persistent session store, or the full native app-server engine.
 
 The browser profile also has a deterministic packaged tool fixture. The command
 worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,

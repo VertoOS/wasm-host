@@ -12,6 +12,7 @@ import {
   codexVersionSmokeManifest,
 } from "../fixtures/codex-version-smoke-core.js";
 import { fetchCodexArtifactBytes } from "../src/artifact-manifest.js";
+import { createBrowserCodexAppServerRuntime } from "../src/app-server.js";
 import {
   createBrowserTerminalSession,
   createTerminalTranscript,
@@ -78,8 +79,10 @@ export async function runCodexVersionSmoke() {
     const modelTurn = await runCodexBrowserModelTurn(worker);
     const workspaceEdit = await runCodexBrowserWorkspaceEdit(worker);
     const toolFixture = await runBrowserToolFixture(worker, workspaceEdit);
+    const appServer = await runBrowserAppServerFixture();
 
     return {
+      appServer,
       artifactKind: load.loaded.artifactKind,
       artifactUrl,
       exitCode: result.exitCode,
@@ -100,6 +103,146 @@ export async function runCodexVersionSmoke() {
   } finally {
     worker.terminate();
   }
+}
+
+async function runBrowserAppServerFixture() {
+  const runtime = createBrowserCodexAppServerRuntime({
+    modelResponseText: "mock browser app-server response",
+  });
+  const initialize = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "initialize",
+    method: "initialize",
+    params: {
+      capabilities: {
+        experimentalApi: true,
+        optOutNotificationMethods: ["thread/started"],
+      },
+      clientInfo: {
+        name: "wasm-host-browser-e2e",
+        version: "0.0.0",
+      },
+    },
+  });
+  await runtime.handleMessage({ jsonrpc: "2.0", method: "initialized" });
+
+  const account = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "account",
+    method: "account/read",
+  });
+  const login = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "login",
+    method: "account/login/start",
+    params: { type: "chatgptDeviceCode" },
+  });
+  const cancel = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "cancel-login",
+    method: "account/login/cancel",
+    params: { loginId: login[0].result.loginId },
+  });
+  const thread = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "thread",
+    method: "thread/start",
+    params: { model: "gpt-5.1" },
+  });
+  const threadId = thread[0].result.thread.id;
+  const turn = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "turn",
+    method: "turn/start",
+    params: {
+      clientUserMessageId: null,
+      input: [{ type: "text", text: "hello app-server", textElements: [] }],
+      threadId,
+    },
+  });
+  const unsupported = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "unsupported",
+    method: "native/process/spawn",
+    params: {},
+  });
+  const interrupt = await runBrowserAppServerInterruptFixture();
+
+  assert(
+    initialize[0].result.browserFixture.browserHosted === true,
+    "App-server fixture should initialize as browser-hosted",
+  );
+  assert(
+    account[0].result.requiresOpenaiAuth === true,
+    "App-server fixture should report missing account auth",
+  );
+  assert(
+    login[0].result.type === "chatgptDeviceCode",
+    "App-server fixture should start device login",
+  );
+  assert(
+    cancel[1].method === "account/login/completed",
+    "App-server fixture should emit login cancellation",
+  );
+  assert(
+    thread.length === 1,
+    "App-server fixture should honor notification opt-out",
+  );
+  assert(
+    turn[2].params.item.text === "mock browser app-server response",
+    "App-server fixture should emit mocked assistant item text",
+  );
+  assert(
+    unsupported[0].error.data.kind === "unsupported_capability",
+    "App-server fixture should classify unsupported methods",
+  );
+
+  return {
+    accountRequiresAuth: account[0].result.requiresOpenaiAuth,
+    boundedMessages: turn.length,
+    cancelNotification: cancel[1].method,
+    errorKind: unsupported[0].error.data.kind,
+    interruptStatus: interrupt.status,
+    itemText: turn[2].params.item.text,
+    loginType: login[0].result.type,
+    notificationMethods: turn.slice(1).map((message) => message.method),
+    userAgent: initialize[0].result.userAgent,
+    threadId,
+    turnId: turn[0].result.turn.id,
+  };
+}
+
+async function runBrowserAppServerInterruptFixture() {
+  const runtime = createBrowserCodexAppServerRuntime({
+    autoCompleteTurns: false,
+  });
+  const [thread] = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "thread",
+    method: "thread/start",
+    params: {},
+  });
+  const [turn] = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "turn",
+    method: "turn/start",
+    params: {
+      input: [{ type: "text", text: "wait", textElements: [] }],
+      threadId: thread.result.thread.id,
+    },
+  });
+  const interrupt = await runtime.handleMessage({
+    jsonrpc: "2.0",
+    id: "interrupt",
+    method: "turn/interrupt",
+    params: {
+      threadId: thread.result.thread.id,
+      turnId: turn.result.turn.id,
+    },
+  });
+  return {
+    status: interrupt[1].params.turn.status,
+  };
 }
 
 async function runBrowserToolFixture(worker, workspaceEdit) {

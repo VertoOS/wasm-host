@@ -85,6 +85,23 @@ async function runCodexVersionSmokePage(page) {
     exitCode: 124,
     timedOut: true,
   });
+  assert.deepEqual(status.result.appServer, {
+    accountRequiresAuth: true,
+    boundedMessages: 4,
+    cancelNotification: "account/login/completed",
+    errorKind: "unsupported_capability",
+    interruptStatus: "interrupted",
+    itemText: "mock browser app-server response",
+    loginType: "chatgptDeviceCode",
+    notificationMethods: [
+      "turn/started",
+      "item/completed",
+      "turn/completed",
+    ],
+    threadId: "browser-thread-1",
+    turnId: "browser-turn-1",
+    userAgent: "wasm-host-browser-app-server/0.0.0",
+  });
   assert.deepEqual(status.result.httpBridge, {
     exitCode: 0,
     stderr: "",
@@ -162,6 +179,7 @@ async function runCodexVersionSmokePage(page) {
     `PASS browser Codex version smoke e2e: ${status.result.stdout.trim()}`,
     `PASS browser Codex model-turn e2e: ${status.result.modelTurn.stdout.trim()}`,
     `PASS browser Codex request-builder e2e: ${status.result.requestBuilder.model}`,
+    `PASS browser app-server fixture e2e: ${status.result.appServer.threadId}`,
     `PASS browser Codex workspace-edit e2e: ${status.result.workspaceEdit.path}`,
     `PASS browser tool fixture e2e: ${status.result.toolFixture.cwd}`,
   ].join("\n");

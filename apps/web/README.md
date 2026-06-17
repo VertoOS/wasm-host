@@ -38,7 +38,14 @@ Current scope:
   time. The same executor has a deterministic `workspace-edit` fixture that
   reads a file from the host-owned browser workspace store, replaces expected
   text, writes the file back, and reports the edit result through stdout. This
-  is not full CLI, device-flow auth, app-server, tool, or MCP execution.
+  is not full CLI, real device-flow auth, real app-server, tool, or MCP
+  execution.
+- `src/app-server.js` implements a deterministic browser-owned JSON-RPC
+  app-server fixture. It supports initialize/initialized, account read, device
+  login start/cancel, thread start, mocked turn start/completion, turn
+  interrupt, notification opt-out, bounded turn notifications, and structured
+  browser capability errors for unsupported methods. It is a protocol fixture
+  for browser runtime tests, not the full native app-server session engine.
 - `src/secrets.js` owns the current browser secret-provider seam: tests can
   supply host-owned bearer tokens by reference, while command messages and
   terminal output continue to carry only opaque secret references. It also
@@ -132,6 +139,10 @@ Current scope:
   and gateway transports, mocked Responses SSE text-delta decoding, host-owned
   bearer secret injection/redaction, export validation, and command error
   shaping.
+- `test/app-server.test.js` covers the browser app-server fixture's JSON-RPC
+  initialization, account status, device login cancellation, thread start,
+  mocked turn completion, turn interrupt, unsupported-method errors, malformed
+  protocol errors, and turn notification bounds.
 - `test/secrets.test.js` covers the in-memory browser secret provider and fake
   device-flow broker, including external completion, classified denied/expired/
   cancelled errors, logout, and token redaction.
@@ -172,12 +183,14 @@ Current scope:
   `codex --version` stdout/stderr/exit contract, assert the Codex browser
   request-builder JSON contract, assert a mocked model-turn HTTP bridge
   contract with local Responses SSE deltas, assert a workspace-edit fixture
-  persists through the browser workspace store, assert a packaged tool fixture
-  can read the edited file with cwd/env/stdin through the terminal transcript
-  adapter, and drive the terminal UI shell through DOM controls. The terminal
-  shell e2e also applies a package URL source backed by a local data URL,
-  verifies sanitized package metadata, and runs the selected package through
-  the worker smoke executor.
+  persists through the browser workspace store, assert the browser app-server
+  fixture can initialize, report account status, cancel login, start a thread,
+  complete a mocked turn, interrupt a pending turn, and reject unsupported
+  native methods, assert a packaged tool fixture can read the edited file with
+  cwd/env/stdin through the terminal transcript adapter, and drive the terminal
+  UI shell through DOM controls. The terminal shell e2e also applies a package
+  URL source backed by a local data URL, verifies sanitized package metadata,
+  and runs the selected package through the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.

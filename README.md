@@ -53,6 +53,10 @@ until the boundaries are stable enough to split.
 - The browser adapter package has a first browser workspace store with
   canonical `/workspace` paths, in-memory operations, snapshot import/export,
   and IndexedDB-backed snapshot persistence when browser storage is available.
+- The browser adapter package has a deterministic browser-owned app-server
+  JSON-RPC fixture for initialize, account read, device login cancel, thread
+  start, mocked turn completion, turn interrupt, and structured unsupported
+  capability errors.
   The raw WASI executor can mount an injected store for writable `/workspace`
   fixture runs and flush mutations back as snapshots after the module exits.
 - The browser adapter package can consume the interim Codex artifact manifest

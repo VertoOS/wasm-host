@@ -13,6 +13,7 @@ import {
   webcCommandManifest,
   webcV2Bytes,
   webcV3Bytes,
+  webcWasiCommandManifest,
 } from "../fixtures/webc-metadata-fixture.js";
 import { createBrowserCommandWorkerRuntime } from "../src/command-worker.js";
 import {
@@ -359,46 +360,43 @@ test("command lifecycle worker loads WebC metadata commands through BrowserPacka
     type: "command.load",
     id: "load-discovered-webc",
     package: {
-      bytes: webcV2Bytes(webcCommandManifest()),
+      bytes: executableWebcBytes(),
       id: "discovered-webc",
-      source: { kind: "bytes", label: "bash.webc" },
+      source: { kind: "bytes", label: "codex.webc" },
     },
   });
   await runtime.handleMessage({
     type: "command.run",
     id: "run-discovered-webc",
     packageId: "discovered-webc",
-    command: "bash",
+    command: "codex",
+    args: ["--version"],
   });
 
   const loaded = port.messages.find(
     (message) => message.id === "load-discovered-webc",
   );
   assert.equal(loaded.artifactKind, "webc-package");
-  assert.equal(loaded.entrypoint, "bash");
-  assert.deepEqual(loaded.commands, ["bash", "ls"]);
+  assert.equal(loaded.entrypoint, "codex");
+  assert.deepEqual(loaded.commands, ["codex"]);
   assert.deepEqual(port.messages.find((message) => message.id === "run-discovered-webc"), {
-    args: [],
-    command: "bash",
+    args: ["--version"],
+    command: "codex",
     cwd: "/workspace",
     id: "run-discovered-webc",
     packageId: "discovered-webc",
     type: "command.started",
   });
+  assert.equal(chunksText(stdoutChunks(port.messages)), CODEX_VERSION_SMOKE_STDOUT);
   assert.deepEqual(port.messages.at(-1), {
-    type: "command.error",
+    type: "command.complete",
     id: "run-discovered-webc",
-    error: {
-      kind: "webc_wasix_runtime_unimplemented",
-      message: "browser WebC/WASIX runtime execution is not implemented yet",
-      stage: "runtime",
-    },
     result: {
       cancelled: false,
-      exitCode: 126,
-      failureStage: "runtime",
+      exitCode: 0,
+      failureStage: null,
       stderrBytes: 0,
-      stdoutBytes: 0,
+      stdoutBytes: CODEX_VERSION_SMOKE_STDOUT.length,
       timedOut: false,
     },
   });
@@ -846,6 +844,15 @@ test("package helpers detect formats and expose deterministic browser cache keys
 
 function webcBytes(suffix) {
   return concatBytes(new Uint8Array([0x00, 0x77, 0x65, 0x62, 0x63]), suffix);
+}
+
+function executableWebcBytes() {
+  return webcV2Bytes(webcWasiCommandManifest(), {
+    atoms: {
+      "codex-atom": CODEX_VERSION_SMOKE_WASM,
+    },
+    volumes: {},
+  });
 }
 
 async function sha256Hex(bytes) {

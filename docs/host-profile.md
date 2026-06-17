@@ -284,10 +284,12 @@ entrypoints, artifact kind, source metadata, content hash, and cache metadata
 into a `command.load` package shape for the command lifecycle runtime while
 caching extracted atom bytes as module artifacts. This is the package
 input/cache boundary plus the first dispatch boundary:
-`apps/web/src/webc-wasix.js` now receives loaded WebC commands and returns a
-structured unimplemented WebC/WASIX runtime error instead of falling through to
-unsupported package routing. Compiled module cache persistence, filesystem
-mounts, and actual WebC/Wasm execution are later browser runtime layers.
+`apps/web/src/webc-wasix.js` now receives loaded WebC commands, resolves WASI
+command atom metadata, reads cached atom bytes, and delegates executable atoms
+to the browser raw WASI Preview1 runtime. Unsupported runners and missing atom
+artifacts still fail with structured errors. Compiled module cache persistence,
+WebC volume filesystem mounts, package catalog/PATH resolution, WASIX process
+spawning, and Bash/coreutils execution are later browser runtime layers.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory

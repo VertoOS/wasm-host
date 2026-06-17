@@ -6,7 +6,16 @@ import {
   BrowserCommandWorkerRuntime,
   createBrowserCommandWorkerRuntime,
 } from "../src/command-worker.js";
+import {
+  CODEX_VERSION_SMOKE_STDOUT,
+  CODEX_VERSION_SMOKE_WASM,
+} from "../fixtures/codex-version-smoke-core.js";
+import {
+  webcV2Bytes,
+  webcWasiCommandManifest,
+} from "../fixtures/webc-metadata-fixture.js";
 import { HttpBridgeError } from "../src/http.js";
+import { createWebcWasixExecutor } from "../src/webc-wasix.js";
 import { createMemoryBrowserWorkspaceStore } from "../src/workspace.js";
 
 const encoder = new TextEncoder();
@@ -407,7 +416,7 @@ test("BrowserCommandWorkerRuntime runs the built-in HTTP smoke executor", async 
   });
 });
 
-test("BrowserCommandWorkerRuntime routes WebC packages to the WASIX executor boundary", async () => {
+test("BrowserCommandWorkerRuntime runs extracted WebC atoms through WASI", async () => {
   const port = recordingPort();
   const runtime = createBrowserCommandWorkerRuntime({
     httpTransports: { direct: {} },
@@ -418,57 +427,154 @@ test("BrowserCommandWorkerRuntime routes WebC packages to the WASIX executor bou
     type: "command.load",
     id: "load-webc",
     package: {
-      bytes: webcBytes("bash"),
-      commands: ["bash"],
-      id: "bash-webc",
+      bytes: executableWebcBytes(),
+      id: "codex-webc",
     },
   });
   await runtime.handleMessage({
     type: "command.run",
     id: "run-webc",
-    packageId: "bash-webc",
-    command: "bash",
-    args: ["-lc", "pwd; ls /workspace; echo BASH_BROWSER_OK"],
+    packageId: "codex-webc",
+    command: "codex",
+    args: ["--version"],
     cwd: "/workspace",
   });
 
   const loaded = port.messages.find((message) => message.id === "load-webc");
   assert.equal(loaded.artifactKind, "webc-package");
   assert.equal(loaded.packageType, "webc-package");
-  assert.deepEqual(loaded.commands, ["bash"]);
+  assert.deepEqual(loaded.commands, ["codex"]);
   assert.match(loaded.contentSha256, /^[a-f0-9]{64}$/);
   assert.deepEqual(
     port.messages.find((message) => message.id === "run-webc"),
     {
       type: "command.started",
       id: "run-webc",
-      packageId: "bash-webc",
-      command: "bash",
-      args: ["-lc", "pwd; ls /workspace; echo BASH_BROWSER_OK"],
+      packageId: "codex-webc",
+      command: "codex",
+      args: ["--version"],
       cwd: "/workspace",
     },
   );
-  assert.deepEqual(port.messages.slice(-3), [
-    { type: "command.stdout.close", id: "run-webc" },
-    { type: "command.stderr.close", id: "run-webc" },
-    {
-      type: "command.error",
-      id: "run-webc",
-      error: {
-        kind: "webc_wasix_runtime_unimplemented",
-        message: "browser WebC/WASIX runtime execution is not implemented yet",
-        stage: "runtime",
-      },
-      result: {
-        cancelled: false,
-        exitCode: 126,
-        failureStage: "runtime",
-        stderrBytes: 0,
-        stdoutBytes: 0,
-        timedOut: false,
+  assert.equal(
+    chunksText(stdoutChunks(port.messages, "run-webc")),
+    CODEX_VERSION_SMOKE_STDOUT,
+  );
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.complete",
+    id: "run-webc",
+    result: {
+      cancelled: false,
+      exitCode: 0,
+      failureStage: null,
+      stderrBytes: 0,
+      stdoutBytes: CODEX_VERSION_SMOKE_STDOUT.length,
+      timedOut: false,
+    },
+  });
+});
+
+test("WebC WASIX executor maps command metadata into raw WASI requests", async () => {
+  let delegated = null;
+  const executor = createWebcWasixExecutor({
+    cache: {
+      async getModuleArtifact(key) {
+        assert.equal(key, "cache://codex-atom");
+        return CODEX_VERSION_SMOKE_WASM;
       },
     },
-  ]);
+    rawWasiExecutor: {
+      async run(request) {
+        delegated = request;
+        return { exitCode: 0 };
+      },
+    },
+  });
+
+  const result = await executor.run({
+    args: ["--user"],
+    command: "codex",
+    cwd: "/workspace/request",
+    env: { EXTRA: "1", FROM_WEB: "override" },
+    package: webcPackageForRun({
+      commandMetadata: {
+        codex: {
+          atom: "codex-atom",
+          cwd: "/workspace/webc",
+          env: ["FROM_WEB=metadata", "ONLY_WEB=1"],
+          execName: "codex-real",
+          mainArgs: ["--manifest"],
+          runner: "https://webc.org/runner/wasi",
+        },
+      },
+      webcArtifacts: {
+        atoms: {
+          "codex-atom": {
+            cacheKey: "cache://codex-atom",
+          },
+        },
+      },
+    }),
+    signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(result, { exitCode: 0 });
+  assert.equal(delegated.command, "codex-real");
+  assert.deepEqual(delegated.args, ["--manifest", "--user"]);
+  assert.equal(delegated.cwd, "/workspace/webc");
+  assert.deepEqual(delegated.env, {
+    EXTRA: "1",
+    FROM_WEB: "override",
+    ONLY_WEB: "1",
+  });
+  assert.equal(delegated.package.artifactKind, "wasi-module");
+  assert.deepEqual(delegated.package.commands, ["codex-real"]);
+});
+
+test("WebC WASIX executor reports missing cached atom bytes", async () => {
+  const executor = createWebcWasixExecutor({
+    cache: {
+      async getModuleArtifact() {
+        return null;
+      },
+    },
+    rawWasiExecutor: {
+      async run() {
+        throw new Error("raw WASI executor should not run without atom bytes");
+      },
+    },
+  });
+
+  await assert.rejects(
+    executor.run({
+      args: [],
+      command: "codex",
+      cwd: "/workspace",
+      env: {},
+      package: webcPackageForRun({
+        commandMetadata: {
+          codex: {
+            atom: "codex-atom",
+            runner: "https://webc.org/runner/wasi",
+          },
+        },
+        webcArtifacts: {
+          atoms: {
+            "codex-atom": {
+              cacheKey: "cache://missing",
+            },
+          },
+        },
+      }),
+      signal: new AbortController().signal,
+    }),
+    (error) => {
+      assert.equal(error.kind, "webc_wasix_atom_cache_missing");
+      assert.equal(error.stage, "package_load");
+      assert.match(error.message, /cache:\/\/missing/);
+      return true;
+    },
+  );
 });
 
 test("BrowserCommandWorkerRuntime accepts explicit webc-wasix packages", async () => {
@@ -513,14 +619,14 @@ test("BrowserCommandWorkerRuntime accepts explicit webc-wasix packages", async (
     type: "command.error",
     id: "run-explicit-webc-wasix",
     error: {
-      kind: "webc_wasix_runtime_unimplemented",
-      message: "browser WebC/WASIX runtime execution is not implemented yet",
-      stage: "runtime",
+      kind: "webc_wasix_atom_metadata_missing",
+      message: "browser WebC command metadata is missing for sh",
+      stage: "command_resolution",
     },
     result: {
       cancelled: false,
       exitCode: 126,
-      failureStage: "runtime",
+      failureStage: "command_resolution",
       stderrBytes: 0,
       stdoutBytes: 0,
       timedOut: false,
@@ -1674,6 +1780,28 @@ function webcBytes(suffix) {
   bytes.set([0x00, 0x77, 0x65, 0x62, 0x63]);
   bytes.set(payload, 5);
   return bytes;
+}
+
+function executableWebcBytes() {
+  return webcV2Bytes(webcWasiCommandManifest(), {
+    atoms: {
+      "codex-atom": CODEX_VERSION_SMOKE_WASM,
+    },
+    volumes: {},
+  });
+}
+
+function webcPackageForRun(metadata) {
+  return {
+    artifactKind: "webc-package",
+    commands: Object.keys(metadata.commandMetadata ?? {}),
+    id: "codex-webc",
+    metadata: {
+      packageName: "codex/browser-smoke",
+      ...metadata,
+    },
+    type: "webc-package",
+  };
 }
 
 function deferred() {

@@ -21,9 +21,11 @@ Current scope:
   messages, terminal resize messages, stdout/stderr chunk and close events,
   timeout/cancellation result shaping, and pluggable HTTP bridge transport
   selection. Its built-in `smoke` executor is a lifecycle fixture only; the
-  `wasi-module` executor supports the interim raw WASI preview1
-  `codex --version` smoke, while real WebC package execution still depends on
-  package loading and runtime wiring.
+  built-in `browser-tool-fixture` executor proves packaged tool command
+  dispatch with cwd/env/stdin and host-owned workspace reads; the `wasi-module`
+  executor supports the interim raw WASI preview1 `codex --version` smoke,
+  while real WebC package execution still depends on package loading and
+  runtime wiring.
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
   artifact. It validates the expected exports, calls `codex_version` and
@@ -53,7 +55,8 @@ Current scope:
   later runtime layers. The raw WASI fixture executor can consume an injected
   store as a writable `/workspace` mount by snapshotting before `_start` and
   flushing the mutated snapshot after exit, and the `codex-browser`
-  `workspace-edit` fixture can read/write the host-owned store directly.
+  `workspace-edit` fixture can read/write the host-owned store directly. The
+  `browser-tool-fixture` executor can inspect the same store directly.
 - `src/terminal.js` implements a dependency-free terminal/stdio session adapter
   that attaches to a worker-style command port, starts a command with open
   stdin by default, writes stdout/stderr to a sink, closes output streams
@@ -139,8 +142,8 @@ Current scope:
   command lifecycle success, startup failure, stdin, cancellation, timeout,
   duplicate-run rejection, terminal resize, explicit stream close, HTTP
   transport selection, the smoke command, the Codex `codex --version` contract,
-  and the Codex browser request-builder contract across a real worker message
-  boundary.
+  the browser tool fixture, and the Codex browser request-builder contract
+  across a real worker message boundary.
 - `test/terminal.test.js` covers the terminal/stdio adapter's message ordering,
   stdout/stderr transcript capture, stdin forwarding, terminal resize,
   cancellation, stream close, and exit/error reporting.
@@ -168,10 +171,11 @@ Current scope:
   `codex --version` stdout/stderr/exit contract, assert the Codex browser
   request-builder JSON contract, assert a mocked model-turn HTTP bridge
   contract with local Responses SSE deltas, assert a workspace-edit fixture
-  persists through the browser workspace store, and drive the terminal UI shell
-  through DOM controls. The terminal shell e2e also applies a package URL
-  source backed by a local data URL, verifies sanitized package metadata, and
-  runs the selected package through the worker smoke executor.
+  persists through the browser workspace store, assert a packaged tool fixture
+  can read the edited file with cwd/env/stdin, and drive the terminal UI shell
+  through DOM controls. The terminal shell e2e also applies a package URL source
+  backed by a local data URL, verifies sanitized package metadata, and runs the
+  selected package through the worker smoke executor.
 - `test/package-loader.test.js` covers explicit-byte and Fetch-backed package
   loading, fake WebC/Wasm fixtures, cache path derivation, sha256 pinning, clean
   package errors, and handoff into the command lifecycle worker.

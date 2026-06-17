@@ -7,6 +7,7 @@ import {
   createBrowserCommandWorkerRuntime,
 } from "../src/command-worker.js";
 import { HttpBridgeError } from "../src/http.js";
+import { createMemoryBrowserWorkspaceStore } from "../src/workspace.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -215,7 +216,7 @@ test("BrowserCommandWorkerRuntime exposes an HTTP bridge client to executors", a
   assert.equal(port.messages.at(-1).type, "command.complete");
 });
 
-test("BrowserCommandWorkerRuntime injects workspace stores only for codex-browser packages", async () => {
+test("BrowserCommandWorkerRuntime injects workspace stores only for workspace-backed packages", async () => {
   const port = recordingPort();
   const workspaceStore = { readFile() {}, writeFile() {} };
   const seen = {};
@@ -227,6 +228,12 @@ test("BrowserCommandWorkerRuntime injects workspace stores only for codex-browse
       "codex-browser": {
         async run(request) {
           seen.codexBrowser = request.workspaceStore;
+          return { exitCode: 0 };
+        },
+      },
+      "browser-tool-fixture": {
+        async run(request) {
+          seen.browserToolFixture = request.workspaceStore;
           return { exitCode: 0 };
         },
       },
@@ -254,10 +261,25 @@ test("BrowserCommandWorkerRuntime injects workspace stores only for codex-browse
     package: { commands: ["run-test"], id: "test-pkg", type: "test" },
   });
   await runtime.handleMessage({
+    type: "command.load",
+    id: "load-browser-tool-fixture",
+    package: {
+      commands: ["tool-inspect"],
+      id: "browser-tool-fixture",
+      type: "browser-tool-fixture",
+    },
+  });
+  await runtime.handleMessage({
     type: "command.run",
     id: "run-codex-browser",
     packageId: "codex-browser",
     command: "workspace-edit",
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-browser-tool-fixture",
+    packageId: "browser-tool-fixture",
+    command: "tool-inspect",
   });
   await runtime.handleMessage({
     type: "command.run",
@@ -267,6 +289,7 @@ test("BrowserCommandWorkerRuntime injects workspace stores only for codex-browse
   });
 
   assert.equal(seen.codexBrowser, workspaceStore);
+  assert.equal(seen.browserToolFixture, workspaceStore);
   assert.equal(seen.test, undefined);
 });
 
@@ -379,6 +402,202 @@ test("BrowserCommandWorkerRuntime runs the built-in HTTP smoke executor", async 
       failureStage: null,
       stderrBytes: 0,
       stdoutBytes: 11,
+      timedOut: false,
+    },
+  });
+});
+
+test("BrowserCommandWorkerRuntime runs browser tool fixtures with workspace input", async () => {
+  const port = recordingPort();
+  const workspaceStore = createMemoryBrowserWorkspaceStore();
+  await workspaceStore.createDirectory("/workspace/tools", { recursive: true });
+  await workspaceStore.writeFile("/workspace/tools/input.txt", "tool file\n");
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    workspaceStore,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-tool-fixture",
+    package: {
+      bytes: webcBytes("tool-fixture"),
+      commands: ["tool-inspect"],
+      executorType: "browser-tool-fixture",
+      id: "tool-fixture",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-tool-fixture",
+    packageId: "tool-fixture",
+    command: "tool-inspect",
+    args: ["/workspace/tools/input.txt", "--unused"],
+    cwd: "/workspace/tools",
+    env: {
+      BROWSER_TOOL_MODE: "unit",
+      SECRET_SHOULD_NOT_ECHO: "nope",
+    },
+    stdinChunks: ["stdin ", "payload\n"],
+  });
+
+  const stdout = chunksText(stdoutChunks(port.messages, "run-tool-fixture"));
+  const stderr = chunksText(stderrChunks(port.messages, "run-tool-fixture"));
+  assert.deepEqual(JSON.parse(stdout), {
+    args: ["/workspace/tools/input.txt", "--unused"],
+    command: "tool-inspect",
+    cwd: "/workspace/tools",
+    env: { BROWSER_TOOL_MODE: "unit" },
+    stdin: "stdin payload\n",
+    workspace: {
+      bytes: 10,
+      path: "/workspace/tools/input.txt",
+      text: "tool file\n",
+    },
+  });
+  assert.equal(stderr, "browser-tool-fixture: inspected workspace\n");
+  assert.equal(port.messages.at(-1).type, "command.complete");
+  assert.equal(port.messages.at(-1).result.exitCode, 0);
+  const loadMessage = port.messages.find(
+    (message) => message.id === "load-tool-fixture",
+  );
+  assert(loadMessage);
+  assert.equal(loadMessage.artifactKind, "webc-package");
+  assert.equal(loadMessage.entrypoint, "tool-inspect");
+  assert.equal(loadMessage.packageType, "browser-tool-fixture");
+  assert.equal(loadMessage.cache.backend, "indexeddb");
+  assert.match(loadMessage.contentSha256, /^[a-f0-9]{64}$/);
+  assert.equal(stdout.includes("SECRET_SHOULD_NOT_ECHO"), false);
+  assert.equal(stdout.includes("nope"), false);
+});
+
+test("BrowserCommandWorkerRuntime rejects browser tool fixtures without workspace stores", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    workspaceStore: null,
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-tool-fixture",
+    package: {
+      commands: ["tool-inspect"],
+      id: "tool-fixture",
+      type: "browser-tool-fixture",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-tool-fixture",
+    packageId: "tool-fixture",
+    command: "tool-inspect",
+  });
+
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-tool-fixture",
+    error: {
+      kind: "unsupported_package",
+      message: "browser tool fixture requires a workspace store",
+      stage: "startup",
+    },
+    result: {
+      cancelled: false,
+      exitCode: null,
+      failureStage: "startup",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
+test("BrowserCommandWorkerRuntime rejects unsupported browser tool fixture commands", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    workspaceStore: createMemoryBrowserWorkspaceStore(),
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-tool-fixture",
+    package: {
+      commands: ["other-tool"],
+      id: "tool-fixture",
+      type: "browser-tool-fixture",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-tool-fixture",
+    packageId: "tool-fixture",
+    command: "other-tool",
+  });
+
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-tool-fixture",
+    error: {
+      kind: "command_not_found",
+      message: "unsupported browser tool fixture command: other-tool",
+      stage: "command_resolution",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 127,
+      failureStage: "command_resolution",
+      stderrBytes: 0,
+      stdoutBytes: 0,
+      timedOut: false,
+    },
+  });
+});
+
+test("BrowserCommandWorkerRuntime reports missing browser tool fixture workspace files", async () => {
+  const port = recordingPort();
+  const runtime = createBrowserCommandWorkerRuntime({
+    httpTransports: { direct: {} },
+    port,
+    workspaceStore: createMemoryBrowserWorkspaceStore(),
+  });
+
+  await runtime.handleMessage({
+    type: "command.load",
+    id: "load-tool-fixture",
+    package: {
+      commands: ["tool-inspect"],
+      id: "tool-fixture",
+      type: "browser-tool-fixture",
+    },
+  });
+  await runtime.handleMessage({
+    type: "command.run",
+    id: "run-tool-fixture",
+    packageId: "tool-fixture",
+    command: "tool-inspect",
+    args: ["/workspace/tools/missing.txt"],
+  });
+
+  assert.deepEqual(port.messages.at(-1), {
+    type: "command.error",
+    id: "run-tool-fixture",
+    error: {
+      kind: "not_found",
+      message:
+        "browser tool fixture workspace read failed: workspace file is unavailable",
+      stage: "workspace",
+    },
+    result: {
+      cancelled: false,
+      exitCode: 1,
+      failureStage: "workspace",
+      stderrBytes: 0,
+      stdoutBytes: 0,
       timedOut: false,
     },
   });
@@ -1326,6 +1545,14 @@ function packageRecord(id) {
     sha256: "a".repeat(64),
     source: { kind: "bytes", label: "test" },
   };
+}
+
+function webcBytes(suffix) {
+  const payload = encoder.encode(suffix);
+  const bytes = new Uint8Array(5 + payload.byteLength);
+  bytes.set([0x00, 0x77, 0x65, 0x62, 0x63]);
+  bytes.set(payload, 5);
+  return bytes;
 }
 
 function deferred() {

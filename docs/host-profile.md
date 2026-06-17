@@ -236,9 +236,12 @@ messages for streamed input. It emits `command.loaded`, `command.started`,
 Completion payloads mirror the native runner shape at the browser message
 boundary: exit code, stdout/stderr byte counts, failure stage, cancellation
 state, and timeout state. The first built-in `smoke` executor is only a
-lifecycle fixture for worker-boundary tests; real WebC package loading,
-filesystem wiring, and interactive terminal UI integration remain separate
-browser adapter layers.
+lifecycle fixture for worker-boundary tests. The deterministic
+`browser-tool-fixture` executor is the first packaged tool-command fixture: it
+receives cwd, filtered env, stdin, timeout/cancel signals, reads a host-owned
+browser workspace file, and emits JSON through stdout plus a fixed stderr line.
+It proves the command-worker tool boundary only; real Bash, git, and arbitrary
+tool packages remain separate browser adapter layers.
 
 The first browser terminal/stdio adapter lives in `apps/web/src/terminal.js`.
 It is dependency-free and intentionally shaped for a later xterm.js surface: a
@@ -286,7 +289,8 @@ persists one whole-workspace snapshot per workspace id in IndexedDB when
 available. Memory storage is the fallback. This is the first workspace state
 boundary only: raw WASI fixture runs can mount an injected store by snapshotting
 before `_start` and flushing mutations after exit, and the `codex-browser`
-`workspace-edit` fixture can read/write the host-owned store directly.
+`workspace-edit` fixture and `browser-tool-fixture` executor can use the
+host-owned store directly.
 OPFS-backed large-file storage, user-granted directories, app-server
 integration, and full Codex file-edit turn wiring remain later browser runtime
 layers.
@@ -363,6 +367,14 @@ fake device-flow auth broker for start/status, host-side completion,
 cancellation, and logout tests. It is intentionally not modeled as raw WASI and
 does not imply real provider credentials, refresh, full Codex CLI, app-server,
 tool, or MCP support.
+
+The browser profile also has a deterministic packaged tool fixture. The command
+worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,
+filtered env, stdin, timeout, and cancellation through the normal run message,
+and lets the executor read a host-owned `/workspace` file. The fixture is
+covered by unit tests and the real-browser e2e harness after the workspace-edit
+path, so it proves a tool command can observe persisted browser workspace state.
+It is not Bash, git, WASIX process spawning, or arbitrary uploaded JavaScript.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,
 hard termination of non-cooperative Wasm, or final WebC/WASIX package

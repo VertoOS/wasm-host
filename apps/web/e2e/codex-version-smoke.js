@@ -23,6 +23,9 @@ const NON_COOPERATIVE_LOOP_WASM = base64ToBytes(
   "AGFzbQEAAAABBAFgAAADAgEABQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAAKCQEHAANADAALCw==",
 );
 const HTTP_BRIDGE_SMOKE_STDOUT = "HTTP_BRIDGE_OK\n";
+const BROWSER_TOOL_FIXTURE_STDERR =
+  "browser-tool-fixture: inspected workspace\n";
+const BROWSER_TOOL_FIXTURE_WEBC = webcBytes("browser-tool-fixture");
 
 export async function runCodexVersionSmoke() {
   const manifest = await codexVersionSmokeManifest();
@@ -74,6 +77,7 @@ export async function runCodexVersionSmoke() {
     const requestBuilder = await runCodexBrowserRequestBuilder(worker);
     const modelTurn = await runCodexBrowserModelTurn(worker);
     const workspaceEdit = await runCodexBrowserWorkspaceEdit(worker);
+    const toolFixture = await runBrowserToolFixture(worker, workspaceEdit);
 
     return {
       artifactKind: load.loaded.artifactKind,
@@ -86,6 +90,7 @@ export async function runCodexVersionSmoke() {
       stderr,
       stdout,
       stdoutBytes: result.stdoutBytes,
+      toolFixture,
       workspaceEdit,
       workerEntrypoint: new URL(
         "../src/command-worker-entry.js",
@@ -95,6 +100,77 @@ export async function runCodexVersionSmoke() {
   } finally {
     worker.terminate();
   }
+}
+
+async function runBrowserToolFixture(worker, workspaceEdit) {
+  const load = await dispatchAndCollect(worker, {
+    type: "command.load",
+    id: "load-browser-tool-fixture",
+    package: {
+      bytes: BROWSER_TOOL_FIXTURE_WEBC,
+      commands: ["tool-inspect"],
+      executorType: "browser-tool-fixture",
+      id: "browser-tool-fixture",
+    },
+  });
+  assert(
+    load.loaded.artifactKind === "webc-package",
+    "Browser tool fixture should load as fake WebC package bytes",
+  );
+  assert(
+    load.loaded.packageType === "browser-tool-fixture",
+    "Browser tool fixture package should use the built-in executor",
+  );
+  const run = await dispatchAndCollect(worker, {
+    type: "command.run",
+    id: "run-browser-tool-fixture",
+    packageId: "browser-tool-fixture",
+    command: "tool-inspect",
+    args: [workspaceEdit.path],
+    cwd: "/workspace/notes",
+    env: { BROWSER_TOOL_MODE: "e2e" },
+    stdinChunks: ["browser ", "stdin\n"],
+    timeoutMs: 5000,
+  });
+  const stdout = chunksText(run.stdout);
+  const stderr = chunksText(run.stderr);
+  const payload = JSON.parse(stdout);
+
+  assert(
+    payload.workspace.path === workspaceEdit.path,
+    "Browser tool fixture should report the workspace path",
+  );
+  assert(
+    payload.workspace.text === workspaceEdit.edited,
+    "Browser tool fixture should read the edited workspace file",
+  );
+  assert(
+    payload.stdin === "browser stdin\n",
+    "Browser tool fixture should consume stdin",
+  );
+  assert(
+    payload.cwd === "/workspace/notes",
+    "Browser tool fixture should receive cwd",
+  );
+  assert(
+    payload.env?.BROWSER_TOOL_MODE === "e2e",
+    "Browser tool fixture should receive filtered env",
+  );
+  assert(
+    stderr === BROWSER_TOOL_FIXTURE_STDERR,
+    "Browser tool fixture stderr should match",
+  );
+  return {
+    args: payload.args,
+    cwd: payload.cwd,
+    exitCode: run.complete.result.exitCode,
+    mode: payload.env.BROWSER_TOOL_MODE,
+    path: payload.workspace.path,
+    stderr,
+    stdin: payload.stdin,
+    stdoutBytes: run.complete.result.stdoutBytes,
+    workspaceText: payload.workspace.text,
+  };
 }
 
 async function runCodexBrowserWorkspaceEdit(worker) {
@@ -368,5 +444,13 @@ function base64ToBytes(value) {
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);
   }
+  return bytes;
+}
+
+function webcBytes(suffix) {
+  const payload = new TextEncoder().encode(suffix);
+  const bytes = new Uint8Array(5 + payload.byteLength);
+  bytes.set([0x00, 0x77, 0x65, 0x62, 0x63]);
+  bytes.set(payload, 5);
   return bytes;
 }

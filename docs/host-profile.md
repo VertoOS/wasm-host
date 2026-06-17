@@ -340,12 +340,15 @@ volatile in-memory `/tmp` scratch preopen for narrow directory
 create/list/rename/remove and file
 advise/allocate/create/write/positioned-write/readback/positioned-read/stat,
 rights-reduction/renumber/rename, fd/path set-times/truncate/sync/unlink
-fixtures. Link/symlink/readlink, `poll_oneoff`, `proc_raise`, and socket
-imports are present only as deterministic browser-safe unsupported/no-op
-handlers. Live workspace stores stay on the main-thread executor path; worker
-runs can carry cloneable workspace snapshots but not IndexedDB-backed store
-instances. It is not a general WASIX runtime and does not itself provide
-sockets, threads, or WebC metadata execution.
+fixtures. `poll_oneoff` reports deterministic immediate clock and fd readiness
+snapshots without blocking the browser worker. Eight shallow handlers remain:
+link/symlink/readlink stay unsupported until the filesystem model has link
+metadata, `proc_raise` is a deterministic signal no-op, and socket imports stay
+unsupported native/browser capability boundaries. Live workspace stores stay on
+the main-thread executor path; worker runs can carry cloneable workspace
+snapshots but not IndexedDB-backed store instances. It is not a general WASIX
+runtime and does not itself provide sockets, threads, or WebC metadata
+execution.
 
 The automated Codex browser smoke path runs this contract across
 `apps/web/src/command-worker-entry.js`: tests build a normalized Codex

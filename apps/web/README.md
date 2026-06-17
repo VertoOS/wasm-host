@@ -161,12 +161,14 @@ Current scope:
   `path_create_directory`, write, positioned write, readback, positioned read,
   stat, `fd_allocate`, `fd_advise`, `fd_filestat_set_times`,
   truncate/sync, directory listing, `path_rename`, and `path_remove_directory` /
-  `path_unlink_file`. Remaining Preview1 imports for link/symlink/readlink,
-  `poll_oneoff`, `proc_raise`, and sockets are wired with deterministic
-  browser-safe error/no-op behavior so modules can instantiate without implying
-  symlink, signal, or socket support. It captures stdout/stderr and exit status
-  for the interim browser smoke; it is not an interactive TTY/readline,
-  persistent filesystem, networking, WASIX, or WebC runtime.
+  `path_unlink_file`. `poll_oneoff` reports deterministic immediate
+  clock/stdin/stdout/file readiness snapshots without blocking the worker.
+  Eight shallow Preview1 handlers remain for link/symlink/readlink,
+  `proc_raise`, and sockets; they stay wired with deterministic browser-safe
+  error/no-op behavior so modules can instantiate without implying symlink,
+  signal, or socket support. It captures stdout/stderr and exit status for the
+  interim browser smoke; it is not an interactive TTY/readline, persistent
+  filesystem, networking, WASIX, or WebC runtime.
 - `test/http.test.js` and `test/http-worker.test.js` run deterministic
   Fetch/gateway/worker/stream/error tests with Node's built-in test runner and
   no external network.

@@ -7,8 +7,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check src/index.js && node --check test/index.test.js",
-    "test": "node --test"
+    "check": "node --check src/index.js && node --check test/index.test.js && node --check e2e/browser-parity.js && node --check e2e/browser-parity-runner.js",
+    "test": "node --test",
+    "test:e2e": "node e2e/browser-parity-runner.js"
   },
   "peerDependencies": {
     "@wasmer/sdk": "^0.10.0"

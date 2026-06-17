@@ -521,8 +521,12 @@ would own WASIX syscall, subprocess, thread, registry, and `Directory` mount
 internals; wasm-host still owns the command contract, workspace persistence,
 artifact pinning, hashing, cache policy, and any browser command-worker wiring.
 The current finding is that `@wasmer/sdk@0.10.0` exposes the required API shape
-but still needs a real-browser Bash/coreutils parity proof before it can replace
-or compete with the hand-built `webc-wasix` runtime.
+and can be imported in a COOP/COEP Chromium proof with `SharedArrayBuffer`
+available, but it does not yet pass the Bash/coreutils contract. Registry
+`wasmer/coreutils@1.0.25` `echo` and pinned `wasmer/bash@1.0.25` WebC bytes
+through `Wasmer.fromFile()` both exit `45` with empty stdout/stderr in the
+browser proof, so the SDK path cannot replace or compete with the hand-built
+`webc-wasix` runtime until that blocker is resolved.
 
 The browser profile also has a deterministic packaged tool fixture. The command
 worker loads a `browser-tool-fixture` package, runs `tool-inspect` or the

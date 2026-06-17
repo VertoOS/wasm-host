@@ -63,7 +63,8 @@ Current scope:
   table for pipe-backed captures. In both paths the child can finish through
   `proc_exit2` or the existing `proc_exec*` child-command bridge, the parent
   resumes with the child pid, and completed child exit codes can be reaped
-  through `proc_join`. Modules that expose asyncify controls but not explicit
+  through `proc_join` using the Wasmer-compatible `JoinStatus::ExitNormal`
+  layout. Modules that expose asyncify controls but not explicit
   stack bounds can use a host-owned high-memory asyncify buffer fallback when
   memory is large enough. It also supplies the WASIX TTY state ABI
   with
@@ -84,9 +85,10 @@ Current scope:
   bytes for packaged child stdin. That lets Bash/coreutils workflows create,
   redirect, read, list, remove files, execute persisted shell scripts, and
   capture Bash command substitution output, pipelines, and redirected shell
-  `read` input under `/workspace` without sending live workspace store objects
-  to workers or making raw `wasi-module` package runs first-class workspace
-  owners.
+  `read` input under `/workspace`. The same smoke now proves a failing packaged
+  `cat` returns non-zero status to Bash while redirected child stderr stays in a
+  workspace file, without sending live workspace store objects to workers or
+  making raw `wasi-module` package runs first-class workspace owners.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, mounts
@@ -94,8 +96,9 @@ Current scope:
   shims for loaded package-catalog paths so Bash-style PATH checks can see
   cataloged commands. It also passes workspace snapshots into executable atoms
   and imports mutated snapshots from child command results for the current
-  non-interactive Bash/coreutils workspace and pipeline/read smoke. Full WASIX process behavior,
-  broad Bash/git semantics, and non-WASI runners remain later runtime layers.
+  non-interactive Bash/coreutils workspace, pipeline/read, and status/stderr
+  smoke. Full WASIX process behavior, broad Bash/git semantics, and non-WASI
+  runners remain later runtime layers.
 - `src/codex-browser.js` implements the narrow custom-export executor for the
   Codex repo's `codex-browser` `wasm32-unknown-unknown` request-builder
   artifact. It validates the expected exports, calls `codex_version` and
@@ -231,7 +234,8 @@ Current scope:
   stdout/stderr. `proc_exit2` maps to normal WASI exit status propagation, while
   `proc_parent` and `proc_snapshot` expose deterministic browser process state.
   No-child `proc_join` returns the WASIX no-child status, and completed forked
-  children can be reaped with `JoinStatus::ExitNormal`. Asyncify-capable raw
+  children can be reaped with `JoinStatus::ExitNormal`, encoded with the
+  `u16` normal exit code at the Wasmer ABI union offset. Asyncify-capable raw
   WASI modules can use a bounded `proc_fork(copy_memory=false)` vfork path that
   resumes the child first, then resumes the parent after child `proc_exit2` or
   `proc_exec*`. They can also use a serialized
@@ -355,8 +359,9 @@ Current scope:
   cwd/env/stdin through the terminal transcript adapter, load the pinned
   `wasmer/bash` and `wasmer/coreutils` WebC artifacts for the passing
   path-command, workspace-file, workspace-script, command-substitution, and
-  pipeline/read Bash/coreutils smoke coverage, and publish named stage
-  summaries for the page-level smoke result.
+  pipeline/read Bash/coreutils smoke coverage, plus a status/stderr stage that
+  verifies failed packaged command status and redirected stderr, and publish
+  named stage summaries for the page-level smoke result.
   The browser e2e also drives
   the terminal UI shell through DOM controls. The terminal shell e2e also
   applies a package URL source backed by a local data URL,

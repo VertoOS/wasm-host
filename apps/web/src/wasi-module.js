@@ -189,7 +189,9 @@ const RANDOM_GET_CHUNK_SIZE = 65_536;
 const PIPE_BUFFER_LIMIT = 1024 * 1024;
 const WASIX_STACK_SNAPSHOT_SIZE = 24;
 const WASIX_OPTION_PID_SIZE = 8;
-const WASIX_JOIN_STATUS_SIZE = 8;
+// repr(C) JoinStatus: u8 tag, 1 byte padding, then a 4-byte union.
+// ExitNormal's active union arm is Errno (u16) at offset 2.
+const WASIX_JOIN_STATUS_SIZE = 6;
 const WASIX_OPTION_TAG_NONE = 0;
 const WASIX_OPTION_TAG_SOME = 1;
 const WASIX_JOIN_STATUS_NOTHING = 0;
@@ -5854,14 +5856,14 @@ function writeWasixJoinStatusNothing(host, ptr) {
   host.writeU8(ptr, WASIX_JOIN_STATUS_NOTHING);
   host.writeU8(ptr + 1, 0);
   host.writeU16(ptr + 2, 0);
-  host.writeU32(ptr + 4, 0);
+  host.writeU16(ptr + 4, 0);
 }
 
 function writeWasixJoinStatusExitNormal(host, ptr, exitCode) {
   host.writeU8(ptr, WASIX_JOIN_STATUS_EXIT_NORMAL);
   host.writeU8(ptr + 1, 0);
-  host.writeU16(ptr + 2, 0);
-  host.writeU32(ptr + 4, exitCode);
+  host.writeU16(ptr + 2, Number(exitCode) & 0xffff);
+  host.writeU16(ptr + 4, 0);
 }
 
 function boolByte(value) {

@@ -46,9 +46,10 @@ Current scope:
   terminal transcript capture, and host-owned workspace reads; the `wasi-module`
   executor supports the interim raw WASI preview1 `codex --version` smoke; and
   the `webc-package`/`webc-wasix` executor boundary delegates WASI-runner WebC
-  atoms to that raw Preview1 runtime. The raw WASI worker request shape still
-  cannot carry JavaScript child-command functions across structured clone; true
-  WASIX process imports need a later worker-safe protocol.
+  atoms to that raw Preview1 runtime. Raw WASI worker execution has an internal
+  child-command RPC so future WASIX process import handlers can request cataloged
+  packaged commands without structured-cloning JavaScript functions; synchronous
+  WASIX process import semantics remain a later runtime layer.
 - `src/webc-wasix.js` owns the initial browser WebC/WASIX execution boundary.
   It validates command dispatch for WebC packages, maps WebC WASI-runner command
   metadata into raw WASI module requests, resolves cached atom bytes, and mounts
@@ -172,6 +173,8 @@ Current scope:
   truncate/sync, directory listing, `path_rename`, and `path_remove_directory` /
   `path_unlink_file`. `poll_oneoff` reports deterministic immediate
   clock/stdin/stdout/file readiness snapshots without blocking the worker.
+  Worker-backed raw WASI runs can use an internal child-command RPC to ask the
+  host-side command worker to resolve and run cataloged packaged commands.
   Eight shallow Preview1 handlers remain for link/symlink/readlink,
   `proc_raise`, and sockets; they stay wired with deterministic browser-safe
   error/no-op behavior so modules can instantiate without implying symlink,

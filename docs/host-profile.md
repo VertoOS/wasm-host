@@ -299,10 +299,11 @@ command atom metadata, reads cached atom bytes, and delegates executable atoms
 to the browser raw WASI Preview1 runtime with read-only package-root files from
 extracted WebC volume spans. Unsupported runners and missing atom artifacts
 still fail with structured errors. Compiled module cache persistence, package
-WASIX process import plumbing, and Bash/coreutils execution are later browser
-runtime layers. In particular, raw WASI worker execution cannot receive the
-JavaScript child-command helper through structured clone; a worker-safe command
-bridge protocol remains future work.
+WASIX process import semantics, and Bash/coreutils execution are later browser
+runtime layers. Raw WASI worker execution uses an internal child-command RPC so
+worker-side runtime code can request cataloged packaged commands without
+structured-cloning JavaScript functions, but synchronous WASIX process import
+handlers still need a later async-safe integration strategy.
 
 The initial browser workspace store lives in `apps/web/src/workspace.js`. It
 keeps host-visible paths canonical under `/workspace`, supports in-memory
@@ -430,6 +431,8 @@ workspace-edit path. The e2e run now uses `createBrowserTerminalSession`,
 writes stdin through the terminal adapter, sends EOF, and asserts transcript
 stdout, stderr, stream close ordering, and exit status, so it proves a tool
 command can observe persisted browser workspace state through terminal stdio.
+Worker-backed raw WASI fixtures can also exercise the internal child-command
+RPC to resolve cataloged packaged commands through the host-side command worker.
 It is not Bash, git, native process spawning, or arbitrary uploaded JavaScript.
 
 These smoke paths intentionally do not provide interactive terminal UI behavior,

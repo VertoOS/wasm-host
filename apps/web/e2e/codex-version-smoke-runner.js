@@ -44,6 +44,33 @@ const CODEX_VERSION_SMOKE_STAGE_NAMES = [
   "app-server",
   "tool-fixture",
 ];
+const BASH_WORKSPACE_SCRIPT_CREATE_COMMAND = [
+  "set -eu",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "rm -rf issue-219-script",
+  "mkdir issue-219-script",
+  [
+    "printf '%s\\n'",
+    "'set -eu'",
+    "'cd /workspace'",
+    "'printf \"SCRIPT_ARG:%s\\\\n\" \"$1\"'",
+    "'printf \"SCRIPT_PWD:\"'",
+    "'pwd'",
+    "'printf \"from-script\\\\n\" > issue-219-script/output.txt'",
+    "'cat issue-219-script/output.txt'",
+    "'ls issue-219-script'",
+  ].join(" ") + " > issue-219-script/run.sh",
+  "printf 'ISSUE_219_SCRIPT_READY\\n'",
+].join("; ");
+const BASH_WORKSPACE_SCRIPT_RUN_COMMAND = [
+  "set -eu",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "bash /workspace/issue-219-script/run.sh browser-arg",
+  "rm -rf issue-219-script",
+  "printf 'ISSUE_219_SCRIPT_DONE\\n'",
+].join("; ");
 
 async function runBrowserE2e() {
   const skip = skipReason();
@@ -258,10 +285,14 @@ async function runBashCoreutilsSmokePage(page) {
     [
       ["path-command", "passed"],
       ["workspace-files", "passed"],
+      ["workspace-script-create", "passed"],
+      ["workspace-script-run", "passed"],
     ],
   );
   assert.equal(status.result.stages[0].exitCode, 0);
   assert.equal(status.result.stages[1].exitCode, 0);
+  assert.equal(status.result.stages[2].exitCode, 0);
+  assert.equal(status.result.stages[3].exitCode, 0);
   assert.equal(
     status.result.workspaceWorkflow.stdout,
     "alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n",
@@ -269,6 +300,28 @@ async function runBashCoreutilsSmokePage(page) {
   assert.equal(status.result.workspaceWorkflow.stderr, "");
   assert.equal(status.result.workspaceWorkflow.result.exitCode, 0);
   assert.equal(status.result.workspaceWorkflow.result.failureStage, null);
+  assert.equal(
+    status.result.workspaceScript.create.stdout,
+    "ISSUE_219_SCRIPT_READY\n",
+  );
+  assert.equal(status.result.workspaceScript.create.stderr, "");
+  assert.equal(status.result.workspaceScript.create.result.exitCode, 0);
+  assert.equal(status.result.workspaceScript.create.result.failureStage, null);
+  assert.equal(
+    status.result.workspaceScript.run.stdout,
+    [
+      "SCRIPT_ARG:browser-arg",
+      "SCRIPT_PWD:/workspace",
+      "from-script",
+      "output.txt",
+      "run.sh",
+      "ISSUE_219_SCRIPT_DONE",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(status.result.workspaceScript.run.stderr, "");
+  assert.equal(status.result.workspaceScript.run.result.exitCode, 0);
+  assert.equal(status.result.workspaceScript.run.result.failureStage, null);
   assert.equal(
     status.result.artifacts.bash.sha256,
     "059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1",
@@ -299,6 +352,16 @@ async function runBashCoreutilsSmokePage(page) {
       "rm -r issue-215-smoke",
       "printf 'ISSUE_215_WORKSPACE_OK\\n'",
     ].join("; "),
+  ]);
+  assert.deepEqual(status.result.workspaceScript.create.targetCommand, [
+    "bash",
+    "-lc",
+    BASH_WORKSPACE_SCRIPT_CREATE_COMMAND,
+  ]);
+  assert.deepEqual(status.result.workspaceScript.run.targetCommand, [
+    "bash",
+    "-lc",
+    BASH_WORKSPACE_SCRIPT_RUN_COMMAND,
   ]);
   const diagnostics = status.result.diagnostics.map((entry) => [
     entry.group,
@@ -339,9 +402,50 @@ async function runBashCoreutilsSmokePage(page) {
       ([group, name]) => group === "process" && name === "proc_join",
     ),
   );
+  const scriptCreateDiagnostics =
+    status.result.workspaceScript.create.diagnostics.map((entry) => [
+      entry.group,
+      entry.name,
+    ]);
+  assert.ok(
+    !scriptCreateDiagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_fork",
+    ),
+  );
+  assert.ok(
+    !scriptCreateDiagnostics.some(
+      ([group, name]) => group === "thread-event" && name === "stack_restore",
+    ),
+  );
+  assert.ok(
+    !scriptCreateDiagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_join",
+    ),
+  );
+  const scriptRunDiagnostics =
+    status.result.workspaceScript.run.diagnostics.map((entry) => [
+      entry.group,
+      entry.name,
+    ]);
+  assert.ok(
+    !scriptRunDiagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_fork",
+    ),
+  );
+  assert.ok(
+    !scriptRunDiagnostics.some(
+      ([group, name]) => group === "thread-event" && name === "stack_restore",
+    ),
+  );
+  assert.ok(
+    !scriptRunDiagnostics.some(
+      ([group, name]) => group === "process" && name === "proc_join",
+    ),
+  );
   return [
     "PASS browser Bash/coreutils WebC e2e",
     "PASS browser Bash/coreutils workspace e2e",
+    "PASS browser Bash/coreutils workspace script e2e",
   ].join("\n");
 }
 

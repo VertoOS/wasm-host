@@ -16,9 +16,44 @@ const WORKSPACE_SHELL_SCRIPT = [
   "rm -r issue-215-smoke",
   "printf 'ISSUE_215_WORKSPACE_OK\\n'",
 ].join("; ");
+const SCRIPT_CREATE_SHELL_SCRIPT = [
+  "set -eu",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "rm -rf issue-219-script",
+  "mkdir issue-219-script",
+  [
+    "printf '%s\\n'",
+    "'set -eu'",
+    "'cd /workspace'",
+    "'printf \"SCRIPT_ARG:%s\\\\n\" \"$1\"'",
+    "'printf \"SCRIPT_PWD:\"'",
+    "'pwd'",
+    "'printf \"from-script\\\\n\" > issue-219-script/output.txt'",
+    "'cat issue-219-script/output.txt'",
+    "'ls issue-219-script'",
+  ].join(" ") + " > issue-219-script/run.sh",
+  "printf 'ISSUE_219_SCRIPT_READY\\n'",
+].join("; ");
+const SCRIPT_RUN_SHELL_SCRIPT = [
+  "set -eu",
+  "export LC_ALL=C",
+  "cd /workspace",
+  "bash /workspace/issue-219-script/run.sh browser-arg",
+  "rm -rf issue-219-script",
+  "printf 'ISSUE_219_SCRIPT_DONE\\n'",
+].join("; ");
 const PATH_EXPECTED_STDOUT = "/workspace\nBASH_BROWSER_OK\n";
 const WORKSPACE_EXPECTED_STDOUT =
   "alpha\nbeta\ninput.txt\nISSUE_215_WORKSPACE_OK\n";
+const SCRIPT_CREATE_EXPECTED_STDOUT = "ISSUE_219_SCRIPT_READY\n";
+const SCRIPT_RUN_EXPECTED_STDOUT =
+  "SCRIPT_ARG:browser-arg\n" +
+  "SCRIPT_PWD:/workspace\n" +
+  "from-script\n" +
+  "output.txt\n" +
+  "run.sh\n" +
+  "ISSUE_219_SCRIPT_DONE\n";
 
 const BASH_ARTIFACT = {
   name: "wasmer/bash",
@@ -139,6 +174,58 @@ export async function runBashCoreutilsSmoke() {
       "Bash should reach the workspace marker",
     );
 
+    const scriptCreateRun = await dispatchAndCollect(
+      worker,
+      {
+        type: "command.run",
+        id: "run-bash-coreutils-script-create",
+        packageId: "bash",
+        command: "bash",
+        args: ["-lc", SCRIPT_CREATE_SHELL_SCRIPT],
+        diagnostics: { unsupportedWasixCalls: true },
+        env: { PATH: "/bin:/usr/bin" },
+        timeoutMs: 30000,
+      },
+    );
+    assert(scriptCreateRun.complete, "script create command should complete");
+
+    const scriptCreateStdout = chunksText(scriptCreateRun.stdout);
+    const scriptCreateStderr = chunksText(scriptCreateRun.stderr);
+    const scriptCreateDiagnostics =
+      scriptCreateRun.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
+
+    assertEqual(scriptCreateStdout, SCRIPT_CREATE_EXPECTED_STDOUT);
+    assertEqual(scriptCreateStderr, "");
+    assertEqual(scriptCreateRun.complete.result?.exitCode, 0);
+    assertEqual(scriptCreateRun.complete.result?.failureStage, null);
+    assertNoUnexpectedProcessDiagnostics(scriptCreateDiagnostics);
+
+    const scriptRun = await dispatchAndCollect(
+      worker,
+      {
+        type: "command.run",
+        id: "run-bash-coreutils-script-run",
+        packageId: "bash",
+        command: "bash",
+        args: ["-lc", SCRIPT_RUN_SHELL_SCRIPT],
+        diagnostics: { unsupportedWasixCalls: true },
+        env: { PATH: "/bin:/usr/bin" },
+        timeoutMs: 30000,
+      },
+    );
+    assert(scriptRun.complete, "workspace script command should complete");
+
+    const scriptRunStdout = chunksText(scriptRun.stdout);
+    const scriptRunStderr = chunksText(scriptRun.stderr);
+    const scriptRunDiagnostics =
+      scriptRun.complete.result?.diagnostics?.unsupportedWasixCalls ?? [];
+
+    assertEqual(scriptRunStdout, SCRIPT_RUN_EXPECTED_STDOUT);
+    assertEqual(scriptRunStderr, "");
+    assertEqual(scriptRun.complete.result?.exitCode, 0);
+    assertEqual(scriptRun.complete.result?.failureStage, null);
+    assertNoUnexpectedProcessDiagnostics(scriptRunDiagnostics);
+
     return {
       artifacts: {
         bash: BASH_ARTIFACT,
@@ -165,6 +252,18 @@ export async function runBashCoreutilsSmoke() {
           status: "passed",
           stdoutBytes: byteLength(workspaceStdout),
         },
+        {
+          exitCode: scriptCreateRun.complete.result?.exitCode,
+          name: "workspace-script-create",
+          status: "passed",
+          stdoutBytes: byteLength(scriptCreateStdout),
+        },
+        {
+          exitCode: scriptRun.complete.result?.exitCode,
+          name: "workspace-script-run",
+          status: "passed",
+          stdoutBytes: byteLength(scriptRunStdout),
+        },
       ],
       stderr: pathStderr,
       stdout: pathStdout,
@@ -175,6 +274,22 @@ export async function runBashCoreutilsSmoke() {
         stderr: workspaceStderr,
         stdout: workspaceStdout,
         targetCommand: ["bash", "-lc", WORKSPACE_SHELL_SCRIPT],
+      },
+      workspaceScript: {
+        create: {
+          diagnostics: scriptCreateDiagnostics,
+          result: scriptCreateRun.complete.result,
+          stderr: scriptCreateStderr,
+          stdout: scriptCreateStdout,
+          targetCommand: ["bash", "-lc", SCRIPT_CREATE_SHELL_SCRIPT],
+        },
+        run: {
+          diagnostics: scriptRunDiagnostics,
+          result: scriptRun.complete.result,
+          stderr: scriptRunStderr,
+          stdout: scriptRunStdout,
+          targetCommand: ["bash", "-lc", SCRIPT_RUN_SHELL_SCRIPT],
+        },
       },
     };
   } finally {
@@ -290,6 +405,19 @@ function diagnosticCount(diagnostics, group, name) {
     (item) => item.group === group && item.name === name,
   );
   return entry?.count ?? 0;
+}
+
+function assertNoUnexpectedProcessDiagnostics(diagnostics) {
+  assertEqual(diagnosticCount(diagnostics, "process", "proc_fork"), 0);
+  assertEqual(diagnosticCount(diagnostics, "process", "proc_join"), 0);
+  assertEqual(
+    diagnosticCount(diagnostics, "thread-event", "stack_restore"),
+    0,
+  );
+  assertEqual(
+    diagnosticCount(diagnostics, "thread-event", "stack_checkpoint"),
+    0,
+  );
 }
 
 function byteLength(value) {

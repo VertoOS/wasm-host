@@ -388,6 +388,13 @@ through an injectable WebSocket-compatible constructor for browser UI-facing
 tests. It is not yet a real network WebSocket replacement for the Codex browser
 demo, a persistent session store, or the full native app-server engine.
 
+The browser profile also has a deterministic MCP/tool transport fixture for
+browser-owned tools. The fixture can list and call a loopback tool, enforce
+bounded tool result sizes, and reject native-only stdio or local-process MCP
+server configs with structured browser capability errors. It is not the full
+MCP SDK, plugin package runtime, OAuth/login integration, or an HTTP/WebSocket
+gateway transport yet.
+
 The browser profile also has a deterministic packaged tool fixture. The command
 worker loads a `browser-tool-fixture` package, runs `tool-inspect`, passes cwd,
 filtered env, stdin, timeout, and cancellation through the normal run message,
